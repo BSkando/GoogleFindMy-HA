@@ -1,4 +1,5 @@
 # Google Find My Device - Home Assistant Integration
+<img width="512" height="512" alt="icon@2x" src="https://github.com/user-attachments/assets/e0660442-c327-440a-99be-02785dc2daa0" />
 
 A comprehensive Home Assistant custom integration for Google's Find My Device network, enabling real-time tracking and control of Find My devices directly within Home Assistant.
 
