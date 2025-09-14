@@ -234,7 +234,9 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 "location_poll_interval": user_input.get("location_poll_interval", 300),
                 "device_poll_delay": user_input.get("device_poll_delay", 5),
                 "min_accuracy_threshold": user_input.get("min_accuracy_threshold", 100),
-                "movement_threshold": user_input.get("movement_threshold", 50)
+                "movement_threshold": user_input.get("movement_threshold", 50),
+                "filter_google_home_semantic": user_input.get("filter_google_home_semantic", False),
+                "google_home_semantic_keywords": [kw.strip() for kw in user_input.get("google_home_semantic_keywords", "Speaker,Hub,Display,Chromecast,Google Home,Nest").split(",") if kw.strip()]
             })
             
             self.hass.config_entries.async_update_entry(
@@ -247,6 +249,11 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         # Get current settings
         current_tracked = self.config_entry.data.get("tracked_devices", [])
         current_interval = self.config_entry.data.get("location_poll_interval", 300)
+        current_delay = self.config_entry.data.get("device_poll_delay", 5)
+        current_accuracy = self.config_entry.data.get("min_accuracy_threshold", 100)
+        current_movement = self.config_entry.data.get("movement_threshold", 50)
+        current_filter_semantic = self.config_entry.data.get("filter_google_home_semantic", False)
+        current_semantic_keywords = ",".join(self.config_entry.data.get("google_home_semantic_keywords", ["Speaker", "Hub", "Display", "Chromecast", "Google Home", "Nest"]))
         
         # Get available devices
         try:
@@ -294,14 +301,16 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             vol.Optional("movement_threshold", default=self.config_entry.data.get("movement_threshold", 50)): vol.All(
                 vol.Coerce(int),
                 vol.Range(min=10, max=200)
-            )
+            ),
+            vol.Optional("filter_google_home_semantic", default=current_filter_semantic): bool,
+            vol.Optional("google_home_semantic_keywords", default=current_semantic_keywords): str
         })
 
         return self.async_show_form(
             step_id="init",
             data_schema=options_schema,
             description_placeholders={
-                "info": "Modify tracking settings:\n• Location poll interval: How often to poll for locations (60-3600 seconds)\n• Device poll delay: Delay between device polls (1-60 seconds)\n• Min accuracy threshold: Ignore locations worse than this (25-500 meters)\n• Staleness threshold: Mark location as stale after this time (0.5-24 hours)\n\nThese settings help filter poor location data and identify stale information."
+                "info": "Modify tracking settings:\n• Location poll interval: How often to poll for locations (60-3600 seconds)\n• Device poll delay: Delay between device polls (1-60 seconds)\n• Min accuracy threshold: Ignore locations worse than this (25-500 meters)\n• Movement threshold: Minimum movement to register location change (10-200 meters)\n• Filter Google Home semantic: Ignore semantic locations matching Google Home devices\n• Google Home keywords: Comma-separated keywords to identify Google Home devices in semantic locations\n\nThese settings help filter poor location data and remove unwanted Google Home device locations."
             }
         )
 

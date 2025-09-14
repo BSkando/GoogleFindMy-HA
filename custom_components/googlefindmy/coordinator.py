@@ -111,9 +111,18 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
                             accuracy = location_data.get('accuracy')
                             semantic = location_data.get('semantic_name')
                             
-                            # Get accuracy threshold from config
+                            # Get configuration settings
                             config_data = self.hass.data.get(DOMAIN, {}).get("config_data", {})
                             min_accuracy_threshold = config_data.get("min_accuracy_threshold", 100)
+                            filter_google_home = config_data.get("filter_google_home_semantic", False)
+                            google_home_keywords = config_data.get("google_home_semantic_keywords", ["Speaker", "Hub", "Display", "Chromecast", "Google Home", "Nest"])
+                            
+                            # Filter out Google Home semantic locations if enabled
+                            if filter_google_home and semantic:
+                                is_google_home_location = any(keyword.strip().lower() in semantic.lower() for keyword in google_home_keywords if keyword.strip())
+                                if is_google_home_location:
+                                    _LOGGER.debug(f"Filtering out Google Home semantic location for {device_name}: '{semantic}' matches Google Home keywords")
+                                    semantic = None  # Clear the semantic location, fall back to GPS coordinates
                             
                             # Validate coordinates and accuracy threshold
                             if lat is not None and lon is not None or semantic:
@@ -124,6 +133,8 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
                                     
                                     # Store current location and get best from recorder history
                                     self._device_location_data[device_id] = location_data.copy()
+                                    # Update with filtered semantic location
+                                    self._device_location_data[device_id]['semantic_name'] = semantic
                                     self._device_location_data[device_id]["last_updated"] = current_time
                                     
                                     
@@ -147,7 +158,7 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
                                             'latitude': location_data.get('latitude'),
                                             'longitude': location_data.get('longitude'),
                                             'accuracy': location_data.get('accuracy'),
-                                            'semantic_name' : location_data.get('semantic_name'),
+                                            'semantic_name' : semantic,  # Use filtered semantic location
                                             'is_own_report': location_data.get('is_own_report', False),
                                             'altitude': location_data.get('altitude')
                                         }

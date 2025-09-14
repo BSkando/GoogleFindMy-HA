@@ -121,7 +121,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Store config data for device tracker to use
     hass.data[DOMAIN]["config_data"] = {
         "min_accuracy_threshold": min_accuracy_threshold,
-        "movement_threshold": movement_threshold
+        "movement_threshold": movement_threshold,
+        "filter_google_home_semantic": entry.data.get("filter_google_home_semantic", False),
+        "google_home_semantic_keywords": entry.data.get("google_home_semantic_keywords", ["Speaker", "Hub", "Display", "Chromecast", "Google Home", "Nest"])
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -148,7 +150,9 @@ async def async_update_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     # Update config data for device tracker
     hass.data[DOMAIN]["config_data"] = {
         "min_accuracy_threshold": entry.data.get("min_accuracy_threshold", 100),
-        "movement_threshold": entry.data.get("movement_threshold", 50)
+        "movement_threshold": entry.data.get("movement_threshold", 50),
+        "filter_google_home_semantic": entry.data.get("filter_google_home_semantic", False),
+        "google_home_semantic_keywords": entry.data.get("google_home_semantic_keywords", ["Speaker", "Hub", "Display", "Chromecast", "Google Home", "Nest"])
     }
     
     # Reset polling state to apply changes immediately  
