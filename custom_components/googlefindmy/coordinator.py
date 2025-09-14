@@ -118,24 +118,39 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
                             google_home_keywords = config_data.get("google_home_semantic_keywords", ["Speaker", "Hub", "Display", "Chromecast", "Google Home", "Nest"])
                             
                             # Filter out Google Home semantic locations if enabled
+                            original_semantic = semantic
                             if filter_google_home and semantic:
                                 is_google_home_location = any(keyword.strip().lower() in semantic.lower() for keyword in google_home_keywords if keyword.strip())
                                 if is_google_home_location:
                                     _LOGGER.debug(f"Filtering out Google Home semantic location for {device_name}: '{semantic}' matches Google Home keywords")
                                     semantic = None  # Clear the semantic location, fall back to GPS coordinates
-                            
-                            # Validate coordinates and accuracy threshold
-                            if lat is not None and lon is not None or semantic:
-                                if accuracy is not None and accuracy > min_accuracy_threshold:
-                                    _LOGGER.debug(f"Filtering out location for {device_name}: accuracy {accuracy}m exceeds threshold {min_accuracy_threshold}m")
-                                else:
-                                    # Location received successfully
-                                    
-                                    # Store current location and get best from recorder history
+
+                            # Always try to process location data - even if current data is filtered/missing,
+                            # we can still fall back to historical GPS coordinates
+                            should_process = (lat is not None and lon is not None) or semantic or original_semantic
+
+                            if should_process:
+                                # Check if current GPS data should be filtered out due to poor accuracy
+                                current_gps_filtered = accuracy is not None and accuracy > min_accuracy_threshold
+                                if current_gps_filtered:
+                                    _LOGGER.debug(f"Filtering out current GPS location for {device_name}: accuracy {accuracy}m exceeds threshold {min_accuracy_threshold}m")
+
+                                # Process location data if we have good current data OR if we filtered a semantic location
+                                # (in the latter case, we want to fall back to historical GPS data)
+                                if not current_gps_filtered or original_semantic != semantic:
+                                    # Location received successfully or we need to fall back to historical data
+
+                                    # Store current location data (even if GPS is filtered, we may use historical data)
                                     self._device_location_data[device_id] = location_data.copy()
                                     # Update with filtered semantic location
                                     self._device_location_data[device_id]['semantic_name'] = semantic
                                     self._device_location_data[device_id]["last_updated"] = current_time
+
+                                    # If current GPS was filtered out, clear it so we rely on historical data
+                                    if current_gps_filtered:
+                                        self._device_location_data[device_id]['latitude'] = None
+                                        self._device_location_data[device_id]['longitude'] = None
+                                        self._device_location_data[device_id]['accuracy'] = None
                                     
                                     
                                     # Get recorder history and combine with current data for better location selection
@@ -152,17 +167,18 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
                                             _LOGGER.debug(f"No history for {entity_id_by_unique}, trying {entity_id_by_name}")
                                             historical_locations = await self.location_recorder.get_location_history(entity_id_by_name, hours=24)
                                         
-                                        # Add current Google API location to historical data
-                                        current_location_entry = {
-                                            'timestamp': location_data.get('last_seen', current_time),
-                                            'latitude': location_data.get('latitude'),
-                                            'longitude': location_data.get('longitude'),
-                                            'accuracy': location_data.get('accuracy'),
-                                            'semantic_name' : semantic,  # Use filtered semantic location
-                                            'is_own_report': location_data.get('is_own_report', False),
-                                            'altitude': location_data.get('altitude')
-                                        }
-                                        historical_locations.insert(0, current_location_entry)
+                                        # Add current Google API location to historical data (only if not filtered)
+                                        if not current_gps_filtered:
+                                            current_location_entry = {
+                                                'timestamp': location_data.get('last_seen', current_time),
+                                                'latitude': location_data.get('latitude'),
+                                                'longitude': location_data.get('longitude'),
+                                                'accuracy': location_data.get('accuracy'),
+                                                'semantic_name' : semantic,  # Use filtered semantic location
+                                                'is_own_report': location_data.get('is_own_report', False),
+                                                'altitude': location_data.get('altitude')
+                                            }
+                                            historical_locations.insert(0, current_location_entry)
                                         
                                         # Select best location from all data (current + 24hrs of history)
                                         best_location = self.location_recorder.get_best_location(historical_locations)
