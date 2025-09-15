@@ -5,7 +5,6 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 import time
-from math import radians, cos, sin, asin, sqrt
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -13,24 +12,15 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .const import DOMAIN, UPDATE_INTERVAL
 from .api import GoogleFindMyAPI
 from .location_recorder import LocationRecorder
+from .google_home_filter import GoogleHomeFilter
 
 _LOGGER = logging.getLogger(__name__)
-
-def haversine(lon1, lat1, lon2, lat2):
-    """Calculate the great circle distance between two points on the earth."""
-    lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
-    dlon = lon2 - lon1
-    dlat = lat2 - lat1
-    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
-    c = 2 * asin(sqrt(a))
-    r = 6371000  # Radius of earth in meters
-    return c * r
 
 
 class GoogleFindMyCoordinator(DataUpdateCoordinator):
     """Class to manage fetching Google Find My Device data."""
 
-    def __init__(self, hass: HomeAssistant, oauth_token: str = None, google_email: str = None, secrets_data: dict = None, tracked_devices: list = None, location_poll_interval: int = 300, device_poll_delay: int = 5, min_poll_interval: int = 60) -> None:
+    def __init__(self, hass: HomeAssistant, oauth_token: str = None, google_email: str = None, secrets_data: dict = None, tracked_devices: list = None, location_poll_interval: int = 300, device_poll_delay: int = 5, min_poll_interval: int = 60, config_data: dict = None) -> None:
         """Initialize."""
         if secrets_data:
             self.api = GoogleFindMyAPI(secrets_data=secrets_data)
@@ -42,25 +32,17 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
         self.device_poll_delay = device_poll_delay
         self.min_poll_interval = min_poll_interval  # Minimum 1 minute between polls
         
-        # Location data cache with size limits
+        # Location data cache
         self._device_location_data = {}  # Store latest location data for each device
         self._last_location_poll_time = 0 # Start at 0 to have immediate poll on first startup
         self._device_names = {}  # Map device IDs to names for easier lookup
         self._startup_complete = False  # Flag to track if initial setup is done
         
-        # Zone cache for Google Home filtering (refresh every hour)
-        self._cached_zones = None
-        self._zones_cache_time = 0
-        
         # Initialize recorder-based location history
         self.location_recorder = LocationRecorder(hass)
-        
-        # Pre-compile Google Home keywords for efficient filtering
-        self._google_home_keywords_lower = None
-        self._last_config_check = 0
-        
-        # Track if we're being shutdown to prevent memory leaks
-        self._is_shutdown = False
+
+        # Initialize Google Home device filter
+        self.google_home_filter = GoogleHomeFilter(hass, config_data or {})
         
         super().__init__(
             hass,
@@ -72,16 +54,7 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
         # Defer FCM receiver registration to avoid blocking startup
         self._fcm_registered = False
 
-    def _update_google_home_keywords(self, config_data: dict, current_time: float) -> None:
-        """Update Google Home keywords cache if config changed."""
-        # Only check config every 5 minutes to reduce overhead
-        if current_time - self._last_config_check < 300:
-            return
-            
-        self._last_config_check = current_time
-        raw_keywords = config_data.get("google_home_device_keywords", ["Speaker", "Hub", "Display", "Chromecast", "Google Home", "Nest"])
-        # Pre-process and limit keywords to prevent memory issues
-        self._google_home_keywords_lower = [kw.strip().lower() for kw in raw_keywords[:20] if kw.strip()]
+
 
     async def _async_update_data(self):
         """Update data via library."""
@@ -112,7 +85,7 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
                 self._last_location_poll_time = current_time
             
             # Register with FCM receiver after first refresh to enable background updates
-            if not self._fcm_registered and not self._is_shutdown:
+            if not self._fcm_registered:
                 try:
                     from .Auth.fcm_receiver_ha import FcmReceiverHA
                     fcm_receiver = FcmReceiverHA()
@@ -133,7 +106,7 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
                         await asyncio.sleep(self.device_poll_delay)
                     
                     try:
-                        # Requesting location for device (reduced logging)
+                        _LOGGER.debug(f"Requesting location for {device_name}")
                         location_data = await self.api.async_get_device_location(device_id, device_name)
                         
                         if location_data:
@@ -142,180 +115,77 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
                             accuracy = location_data.get('accuracy')
                             semantic = location_data.get('semantic_name')
 
-                            # Debug logging to understand what data we get
-                            # Location data received (reduced logging)
+                            # Apply Google Home device filtering
+                            if semantic:
+                                should_filter, replacement_location = self.google_home_filter.should_filter_detection(device_id, semantic)
+                                if should_filter:
+                                    _LOGGER.debug(f"Filtering out Google Home spam detection for {device_name}")
+                                    continue  # Skip this device for this poll cycle
+                                elif replacement_location:
+                                    _LOGGER.info(f"Google Home filter: Device {device_name} detected at '{semantic}', using '{replacement_location}'")
+                                    semantic = replacement_location
+                                    # Update the semantic_name in location_data for consistency
+                                    location_data = location_data.copy()
+                                    location_data['semantic_name'] = replacement_location
                             
-                            # Get configuration settings
+                            # Get accuracy threshold from config
                             config_data = self.hass.data.get(DOMAIN, {}).get("config_data", {})
                             min_accuracy_threshold = config_data.get("min_accuracy_threshold", 100)
-                            filter_google_home = config_data.get("filter_google_home_devices", False)
                             
-                            # Update keywords cache if needed
-                            self._update_google_home_keywords(config_data, current_time)
-                            
-                            # Handle Google Home semantic locations if filtering is enabled
-                            google_home_detected = False
-                            if filter_google_home and semantic and self._google_home_keywords_lower:
-                                # Efficient keyword matching using pre-compiled lowercase keywords
-                                semantic_lower = semantic.lower()
-                                is_google_home_location = any(keyword in semantic_lower for keyword in self._google_home_keywords_lower)
-                                        
-                                # Google Home location check (reduced logging)
-                                if is_google_home_location:
-                                    google_home_detected = True
-                                    _LOGGER.info(f"Google Home location detected for {device_name}: '{semantic}'")
-
-                                    # Try to determine which HA zone we're in based on GPS coordinates
-                                    zone_name = None
-                                    if lat is not None and lon is not None:
-                                        # Get all zones from Home Assistant
-                                        enable_zone_caching = config_data.get("enable_zone_caching", True)
-                                        zone_cache_duration = config_data.get("zone_cache_duration", 3600)
-                                        
-                                        if enable_zone_caching:
-                                            # Use zone caching to reduce memory usage
-                                            if not self._cached_zones or (current_time - self._zones_cache_time) > zone_cache_duration:
-                                                # Clear old cache first to prevent memory accumulation
-                                                self._cached_zones = None
-                                                # Get fresh zones and limit to reasonable number
-                                                all_zones = self.hass.states.async_all("zone")
-                                                self._cached_zones = all_zones[:50] if len(all_zones) > 50 else all_zones
-                                                self._zones_cache_time = current_time
-                                            zones = self._cached_zones
-                                        else:
-                                            # No caching - get zones fresh each time but still limit
-                                            all_zones = self.hass.states.async_all("zone")
-                                            zones = all_zones[:50] if len(all_zones) > 50 else all_zones
-                                        
-                                        # Process zones (already limited to 50 max)
-                                        for zone in zones:
-
-                                            zone_lat = zone.attributes.get("latitude")
-                                            zone_lon = zone.attributes.get("longitude")
-                                            zone_radius = zone.attributes.get("radius", 100)
-
-                                            if zone_lat and zone_lon:
-                                                # Calculate distance to zone center
-                                                distance = haversine(lon, lat, zone_lon, zone_lat)
-                                                if distance <= zone_radius:
-                                                    zone_name = zone.attributes.get("friendly_name", zone.entity_id.split('.')[1])
-                                                    # Device found in zone (reduced logging)
-                                                    break
-
-                                    # Replace semantic location with zone name or use default
-                                    if zone_name:
-                                        semantic = zone_name
-                                        _LOGGER.info(f"Replaced Google Home location with zone: {zone_name}")
-                                    elif lat is None or lon is None:
-                                        # No GPS coordinates to determine zone, use the user's home zone
-                                        # Get the actual home zone (zone.home)
-                                        home_zone = self.hass.states.get("zone.home")
-                                        if home_zone:
-                                            semantic = home_zone.attributes.get("friendly_name", "Home")
-                                            # No GPS, using home zone (reduced logging)
-                                        else:
-                                            # Can't determine zone without GPS, keep original semantic
-                                            semantic = semantic  # Keep original semantic
-                                    else:
-                                        # Has GPS but not in any defined zone, clear the semantic location
-                                        semantic = None
-                                        # Google Home location filtered (reduced logging)
-
-                            # Process location data if we have coordinates or semantic location
+                            # Validate coordinates and accuracy threshold
                             if lat is not None and lon is not None or semantic:
-                                # Check if this is first poll for this device (no cached data)
-                                is_first_poll = device_id not in self._device_location_data
-
-                                # Check if current GPS data should be filtered out due to poor accuracy
-                                # Always accept if: first poll, semantic-only (no GPS), or good accuracy
-                                should_accept = (is_first_poll or
-                                               semantic and (lat is None or lon is None) or
-                                               accuracy is None or
-                                               accuracy <= min_accuracy_threshold)
-
-                                if not should_accept:
-                                    _LOGGER.warning(f"Poor accuracy for {device_name}: {accuracy}m exceeds {min_accuracy_threshold}m threshold")
+                                if accuracy is not None and accuracy > min_accuracy_threshold:
+                                    _LOGGER.debug(f"Filtering out location for {device_name}: accuracy {accuracy}m exceeds threshold {min_accuracy_threshold}m")
                                 else:
-                                    if is_first_poll and accuracy is not None and accuracy > min_accuracy_threshold:
-                                        _LOGGER.info(f"Accepting poor accuracy for {device_name} on first poll: {accuracy}m")
-                                    elif semantic and (lat is None or lon is None):
-                                        _LOGGER.debug(f"Accepting semantic location for {device_name}: {semantic}")
                                     # Location received successfully
-                                    # Check if we should skip this update to avoid duplicate recorder entries
-                                    skip_update = False
-                                    if google_home_detected and device_id in self._device_location_data:
-                                        # Check if we're already in the same zone
-                                        current_stored_semantic = self._device_location_data[device_id].get('semantic_name')
-                                        if current_stored_semantic == semantic:
-                                            # Already in the same zone, skip update to avoid recorder spam
-                                            # Skipping update, already in zone (reduced logging)
-                                            skip_update = True
-
-                                    if not skip_update:
-                                        # Store current location data with filtered semantic location
-                                        filtered_location_data = location_data.copy()
-                                        filtered_location_data['semantic_name'] = semantic  # Use filtered semantic location
-                                        filtered_location_data["last_updated"] = current_time
-                                        self._device_location_data[device_id] = filtered_location_data
-
-                                        # Limit cache size per device to prevent memory leaks
-                                        if len(self._device_location_data) > 50:  # Reduced from 100 to 50
-                                            # Remove oldest entry based on last_updated timestamp
-                                            oldest_key = min(self._device_location_data.keys(),
-                                                           key=lambda k: self._device_location_data[k].get('last_updated', 0))
-                                            # Cache cleanup (reduced logging)
-                                            del self._device_location_data[oldest_key]
-
-                                        # Location data stored (reduced logging)
-
-                                        # Get recorder history and combine with current data for better location selection
-                                        try:
-                                            # Try both possible entity ID formats
-                                            entity_id_by_unique = f"device_tracker.{DOMAIN}_{device_id}"
-                                            entity_id_by_name = f"device_tracker.{device_name.lower().replace(' ', '_')}"
+                                    
+                                    # Store current location and get best from recorder history
+                                    self._device_location_data[device_id] = location_data.copy()
+                                    self._device_location_data[device_id]["last_updated"] = current_time
+                                    
+                                    
+                                    # Get recorder history and combine with current data for better location selection
+                                    try:
+                                        # Try both possible entity ID formats
+                                        entity_id_by_unique = f"device_tracker.{DOMAIN}_{device_id}"
+                                        entity_id_by_name = f"device_tracker.{device_name.lower().replace(' ', '_')}"
                                         
-                                            # Try unique ID format first
-                                            historical_locations = await self.location_recorder.get_location_history(entity_id_by_unique, hours=24)
-
-                                            # If no history found, try name-based format
-                                            if not historical_locations:
-                                                # No history, trying alternate entity (reduced logging)
-                                                historical_locations = await self.location_recorder.get_location_history(entity_id_by_name, hours=24)
-
-                                            # Add current Google API location to historical data
-                                            current_location_entry = {
-                                                'timestamp': location_data.get('last_seen', current_time),
-                                                'latitude': location_data.get('latitude'),
-                                                'longitude': location_data.get('longitude'),
-                                                'accuracy': location_data.get('accuracy'),
-                                                'semantic_name' : semantic,  # Use processed semantic location (zone name if replaced)
-                                                'is_own_report': location_data.get('is_own_report', False),
-                                                'altitude': location_data.get('altitude')
-                                            }
-                                            historical_locations.insert(0, current_location_entry)
-
-                                            # Limit historical locations to prevent memory growth
-                                            if len(historical_locations) > 50:  # Reduced from 100 to 50
-                                                historical_locations = historical_locations[:50]
-                                                # Limited historical locations (reduced logging)
-
-                                            # Select best location from all data (current + 24hrs of history)
-                                            best_location = self.location_recorder.get_best_location(historical_locations)
-
-                                            if best_location:
-                                                # Use the best location from combined dataset
-                                                self._device_location_data[device_id].update({
-                                                    'latitude': best_location.get('latitude'),
-                                                    'longitude': best_location.get('longitude'),
-                                                    'accuracy': best_location.get('accuracy'),
-                                                    'altitude': best_location.get('altitude'),
-                                                    'semantic_name' : best_location.get('semantic_name'),
-                                                    'is_own_report': best_location.get('is_own_report')
-                                                })
-
-                                        except Exception as e:
-                                            # Recorder lookup failed, using current (reduced logging)
-                                            pass
+                                        # Try unique ID format first
+                                        historical_locations = await self.location_recorder.get_location_history(entity_id_by_unique, hours=24)
+                                        
+                                        # If no history found, try name-based format
+                                        if not historical_locations:
+                                            _LOGGER.debug(f"No history for {entity_id_by_unique}, trying {entity_id_by_name}")
+                                            historical_locations = await self.location_recorder.get_location_history(entity_id_by_name, hours=24)
+                                        
+                                        # Add current Google API location to historical data
+                                        current_location_entry = {
+                                            'timestamp': location_data.get('last_seen', current_time),
+                                            'latitude': location_data.get('latitude'),
+                                            'longitude': location_data.get('longitude'),
+                                            'accuracy': location_data.get('accuracy'),
+                                            'semantic_name' : location_data.get('semantic_name'),
+                                            'is_own_report': location_data.get('is_own_report', False),
+                                            'altitude': location_data.get('altitude')
+                                        }
+                                        historical_locations.insert(0, current_location_entry)
+                                        
+                                        # Select best location from all data (current + 24hrs of history)
+                                        best_location = self.location_recorder.get_best_location(historical_locations)
+                                        
+                                        if best_location:
+                                            # Use the best location from combined dataset
+                                            self._device_location_data[device_id].update({
+                                                'latitude': best_location.get('latitude'),
+                                                'longitude': best_location.get('longitude'),
+                                                'accuracy': best_location.get('accuracy'),
+                                                'altitude': best_location.get('altitude'),
+                                                'semantic_name' : best_location.get('semantic_name'),
+                                                'is_own_report': best_location.get('is_own_report')
+                                            })
+                                    
+                                    except Exception as e:
+                                        _LOGGER.debug(f"Recorder history lookup failed for {device_name}, using current data: {e}")
                             else:
                                 _LOGGER.warning(f"Invalid coordinates/semantic location for {device_name}: lat={lat}, lon={lon}, semantic_name={semantic}")
                         else:
@@ -392,17 +262,3 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
         return await self.hass.async_add_executor_job(
             self.api.play_sound, device_id
         )
-    
-    async def async_shutdown(self) -> None:
-        """Clean up coordinator resources."""
-        _LOGGER.info("Coordinator shutting down, cleaning up resources")
-        
-        self._is_shutdown = True
-        
-        # Clear caches to free memory
-        self._device_location_data.clear()
-        self._device_names.clear()
-        self._cached_zones = None
-        self._google_home_keywords_lower = None
-            
-        _LOGGER.info("Coordinator cleanup completed")
