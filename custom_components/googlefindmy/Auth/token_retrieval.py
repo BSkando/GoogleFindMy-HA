@@ -4,8 +4,10 @@
 #
 
 import gpsoauth
+import asyncio
 
 from custom_components.googlefindmy.Auth.aas_token_retrieval import get_aas_token
+
 def request_token(username, scope, play_services = False):
 
     aas_token = get_aas_token()
@@ -31,3 +33,8 @@ def request_token(username, scope, play_services = False):
         return token
     except Exception as e:
         raise RuntimeError(f"Failed to get auth token for scope '{scope}': {e}")
+
+async def async_request_token(username, scope, play_services = False):
+    """Async wrapper for request_token to avoid blocking I/O in event loop."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, request_token, username, scope, play_services)
