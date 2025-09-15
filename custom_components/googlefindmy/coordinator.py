@@ -3,16 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import gc
 from datetime import datetime, timedelta
 import time
 from math import radians, cos, sin, asin, sqrt
-
-try:
-    import psutil
-    PSUTIL_AVAILABLE = True
-except ImportError:
-    PSUTIL_AVAILABLE = False
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -32,81 +25,6 @@ def haversine(lon1, lat1, lon2, lat2):
     c = 2 * asin(sqrt(a))
     r = 6371000  # Radius of earth in meters
     return c * r
-
-class MemoryGuardian:
-    """Memory monitoring and safety system to prevent HA crashes."""
-    
-    def __init__(self):
-        self.enabled = PSUTIL_AVAILABLE
-        if self.enabled:
-            self.process = psutil.Process()
-        else:
-            self.process = None
-            _LOGGER.warning("psutil not available - memory monitoring disabled")
-        self.initial_memory = None
-        self.memory_warning_threshold = 85  # %
-        self.memory_critical_threshold = 95  # %
-        self.memory_growth_threshold = 500 * 1024 * 1024  # 500MB growth
-        self.memory_checks = 0
-        self.last_warning_time = 0
-        self.emergency_shutdown_triggered = False
-        
-    def check_memory_safety(self) -> tuple[bool, str]:
-        """Check memory usage and return (is_safe, status_message)."""
-        if not self.enabled:
-            return True, "Memory monitoring disabled (psutil not available)"
-
-        try:
-            # Get current memory info
-            memory_info = self.process.memory_info()
-            current_rss = memory_info.rss
-
-            # Set initial memory baseline on first check
-            if self.initial_memory is None:
-                self.initial_memory = current_rss
-                return True, f"Memory baseline set: {current_rss / 1024 / 1024:.1f}MB"
-
-            # Calculate memory growth
-            memory_growth = current_rss - self.initial_memory
-            current_mb = current_rss / 1024 / 1024
-            growth_mb = memory_growth / 1024 / 1024
-
-            # Get system memory percentage
-            system_memory = psutil.virtual_memory()
-            memory_percent = system_memory.percent
-
-            self.memory_checks += 1
-            current_time = time.time()
-
-            # Critical memory usage - emergency shutdown (be more conservative)
-            if memory_percent > self.memory_critical_threshold or memory_growth > self.memory_growth_threshold:
-                self.emergency_shutdown_triggered = True
-                return False, f"CRITICAL: Memory usage {memory_percent:.1f}% or growth {growth_mb:.1f}MB - EMERGENCY SHUTDOWN"
-
-            # Warning level
-            if memory_percent > self.memory_warning_threshold and (current_time - self.last_warning_time) > 300:  # 5 min between warnings
-                self.last_warning_time = current_time
-                _LOGGER.warning(f"GoogleFindMy memory warning: System {memory_percent:.1f}%, Process {current_mb:.1f}MB (+{growth_mb:.1f}MB)")
-                return True, f"WARNING: High memory usage {memory_percent:.1f}%"
-
-            # Normal operation - log every 5 checks instead of 10 to see more activity
-            if self.memory_checks % 5 == 0:
-                return True, f"Memory OK: {current_mb:.1f}MB (+{growth_mb:.1f}MB), System: {memory_percent:.1f}%"
-
-            return True, "Memory OK"
-
-        except Exception as e:
-            _LOGGER.warning(f"Memory check failed: {e} - continuing with polling")
-            # Don't stop polling if memory check fails - just log the error
-            return True, "Memory check failed - monitoring disabled"
-    
-    def force_garbage_collection(self):
-        """Force garbage collection and memory cleanup."""
-        try:
-            collected = gc.collect()
-            _LOGGER.debug(f"Garbage collection freed {collected} objects")
-        except Exception as e:
-            _LOGGER.error(f"Garbage collection failed: {e}")
 
 
 class GoogleFindMyCoordinator(DataUpdateCoordinator):
@@ -137,13 +55,12 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
         # Initialize recorder-based location history
         self.location_recorder = LocationRecorder(hass)
         
+        # Pre-compile Google Home keywords for efficient filtering
+        self._google_home_keywords_lower = None
+        self._last_config_check = 0
+        
         # Track if we're being shutdown to prevent memory leaks
         self._is_shutdown = False
-        self._fcm_receiver = None
-        
-        # Initialize memory guardian for safety monitoring
-        self._memory_guardian = MemoryGuardian()
-        self._emergency_mode = False
         
         super().__init__(
             hass,
@@ -155,29 +72,20 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
         # Defer FCM receiver registration to avoid blocking startup
         self._fcm_registered = False
 
-
+    def _update_google_home_keywords(self, config_data: dict, current_time: float) -> None:
+        """Update Google Home keywords cache if config changed."""
+        # Only check config every 5 minutes to reduce overhead
+        if current_time - self._last_config_check < 300:
+            return
+            
+        self._last_config_check = current_time
+        raw_keywords = config_data.get("google_home_device_keywords", ["Speaker", "Hub", "Display", "Chromecast", "Google Home", "Nest"])
+        # Pre-process and limit keywords to prevent memory issues
+        self._google_home_keywords_lower = [kw.strip().lower() for kw in raw_keywords[:20] if kw.strip()]
 
     async def _async_update_data(self):
         """Update data via library."""
         try:
-            # Memory safety check - emergency shutdown if critical
-            is_safe, memory_status = self._memory_guardian.check_memory_safety()
-            if not is_safe:
-                _LOGGER.critical(f"GoogleFindMy EMERGENCY SHUTDOWN: {memory_status}")
-                self._emergency_mode = True
-                # Trigger coordinator cleanup
-                await self.async_shutdown()
-                # Stop all operations
-                raise UpdateFailed("Emergency memory shutdown to prevent HA crash")
-            
-            # Log memory status occasionally (only warnings/baselines)
-            if "baseline" in memory_status or "WARNING" in memory_status:
-                _LOGGER.debug(f"GoogleFindMy Memory Status: {memory_status}")
-            
-            # Skip operations if in emergency mode
-            if self._emergency_mode:
-                _LOGGER.warning("GoogleFindMy in emergency mode, skipping operations")
-                return []
             # Get basic device list - always use async to avoid blocking the event loop
             all_devices = await self.hass.async_add_executor_job(self.api.get_basic_device_list)
             
@@ -207,8 +115,8 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
             if not self._fcm_registered and not self._is_shutdown:
                 try:
                     from .Auth.fcm_receiver_ha import FcmReceiverHA
-                    self._fcm_receiver = FcmReceiverHA()
-                    self._fcm_receiver.register_coordinator(self)
+                    fcm_receiver = FcmReceiverHA()
+                    fcm_receiver.register_coordinator(self)
                     self._fcm_registered = True
                 except Exception as e:
                     _LOGGER.warning(f"Failed to register with FCM receiver: {e}")
@@ -241,30 +149,16 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
                             config_data = self.hass.data.get(DOMAIN, {}).get("config_data", {})
                             min_accuracy_threshold = config_data.get("min_accuracy_threshold", 100)
                             filter_google_home = config_data.get("filter_google_home_devices", False)
-                            # Pre-process keywords once to avoid repeated string operations in loop
-                            raw_keywords = config_data.get("google_home_device_keywords", ["Speaker", "Hub", "Display", "Chromecast", "Google Home", "Nest"])
-                            google_home_keywords = [kw.strip().lower() for kw in raw_keywords if kw.strip()]
-
-                            # Configuration check (reduced logging)
+                            
+                            # Update keywords cache if needed
+                            self._update_google_home_keywords(config_data, current_time)
                             
                             # Handle Google Home semantic locations if filtering is enabled
                             google_home_detected = False
-                            if filter_google_home and semantic:
-                                # Checking semantic location (reduced logging)
-                                # Cache lowercased semantic and keywords to prevent repeated string operations
+                            if filter_google_home and semantic and self._google_home_keywords_lower:
+                                # Efficient keyword matching using pre-compiled lowercase keywords
                                 semantic_lower = semantic.lower()
-                                # Limit keyword checking to prevent memory issues
-                                max_keywords = 20
-                                keywords_checked = 0
-                                is_google_home_location = False
-                                
-                                for keyword_lower in google_home_keywords:
-                                    keywords_checked += 1
-                                    if keywords_checked > max_keywords:
-                                        break
-                                    if keyword_lower in semantic_lower:
-                                        is_google_home_location = True
-                                        break
+                                is_google_home_location = any(keyword in semantic_lower for keyword in self._google_home_keywords_lower)
                                         
                                 # Google Home location check (reduced logging)
                                 if is_google_home_location:
@@ -282,25 +176,19 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
                                             # Use zone caching to reduce memory usage
                                             if not self._cached_zones or (current_time - self._zones_cache_time) > zone_cache_duration:
                                                 # Clear old cache first to prevent memory accumulation
-                                                if self._cached_zones:
-                                                    del self._cached_zones
-                                                self._cached_zones = self.hass.states.async_all("zone")
+                                                self._cached_zones = None
+                                                # Get fresh zones and limit to reasonable number
+                                                all_zones = self.hass.states.async_all("zone")
+                                                self._cached_zones = all_zones[:50] if len(all_zones) > 50 else all_zones
                                                 self._zones_cache_time = current_time
-                                                # Zone cache refreshed (reduced logging)
                                             zones = self._cached_zones
                                         else:
-                                            # No caching - get zones fresh each time
-                                            zones = self.hass.states.async_all("zone")
+                                            # No caching - get zones fresh each time but still limit
+                                            all_zones = self.hass.states.async_all("zone")
+                                            zones = all_zones[:50] if len(all_zones) > 50 else all_zones
                                         
-                                        # Limit zone processing to prevent memory issues
-                                        zone_count = 0
-                                        max_zones = 50  # Limit zone checking to prevent memory leak
-                                        
+                                        # Process zones (already limited to 50 max)
                                         for zone in zones:
-                                            zone_count += 1
-                                            if zone_count > max_zones:
-                                                _LOGGER.warning(f"Zone processing limit reached ({max_zones}), stopping search")
-                                                break
 
                                             zone_lat = zone.attributes.get("latitude")
                                             zone_lon = zone.attributes.get("longitude")
@@ -335,10 +223,23 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
 
                             # Process location data if we have coordinates or semantic location
                             if lat is not None and lon is not None or semantic:
+                                # Check if this is first poll for this device (no cached data)
+                                is_first_poll = device_id not in self._device_location_data
+
                                 # Check if current GPS data should be filtered out due to poor accuracy
-                                if accuracy is not None and accuracy > min_accuracy_threshold:
+                                # Always accept if: first poll, semantic-only (no GPS), or good accuracy
+                                should_accept = (is_first_poll or
+                                               semantic and (lat is None or lon is None) or
+                                               accuracy is None or
+                                               accuracy <= min_accuracy_threshold)
+
+                                if not should_accept:
                                     _LOGGER.warning(f"Poor accuracy for {device_name}: {accuracy}m exceeds {min_accuracy_threshold}m threshold")
                                 else:
+                                    if is_first_poll and accuracy is not None and accuracy > min_accuracy_threshold:
+                                        _LOGGER.info(f"Accepting poor accuracy for {device_name} on first poll: {accuracy}m")
+                                    elif semantic and (lat is None or lon is None):
+                                        _LOGGER.debug(f"Accepting semantic location for {device_name}: {semantic}")
                                     # Location received successfully
                                     # Check if we should skip this update to avoid duplicate recorder entries
                                     skip_update = False
@@ -364,10 +265,6 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
                                                            key=lambda k: self._device_location_data[k].get('last_updated', 0))
                                             # Cache cleanup (reduced logging)
                                             del self._device_location_data[oldest_key]
-                                            
-                                            # Force garbage collection of removed data
-                                            import gc
-                                            gc.collect()
 
                                         # Location data stored (reduced logging)
 
@@ -401,8 +298,6 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
                                             if len(historical_locations) > 50:  # Reduced from 100 to 50
                                                 historical_locations = historical_locations[:50]
                                                 # Limited historical locations (reduced logging)
-                                                # Force cleanup of truncated data
-                                                gc.collect()
 
                                             # Select best location from all data (current + 24hrs of history)
                                             best_location = self.location_recorder.get_best_location(historical_locations)
@@ -431,9 +326,6 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
                 
                 # Update polling state
                 self._last_location_poll_time = current_time
-                
-                # Force garbage collection after intensive polling operations
-                self._memory_guardian.force_garbage_collection()
             
             # Build device data with cached location information
             device_data = []
@@ -507,27 +399,10 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
         
         self._is_shutdown = True
         
-        # Unregister from FCM receiver
-        if self._fcm_receiver and self._fcm_registered:
-            try:
-                self._fcm_receiver.unregister_coordinator(self)
-                # Unregistered from FCM receiver (reduced logging)
-            except Exception as e:
-                _LOGGER.warning(f"Error unregistering from FCM receiver: {e}")
-        
         # Clear caches to free memory
-        if self._device_location_data:
-            self._device_location_data.clear()
+        self._device_location_data.clear()
+        self._device_names.clear()
+        self._cached_zones = None
+        self._google_home_keywords_lower = None
             
-        if self._device_names:
-            self._device_names.clear()
-            
-        if self._cached_zones:
-            del self._cached_zones
-            self._cached_zones = None
-            
-        # Force garbage collection
-        import gc
-        gc.collect()
-        
         _LOGGER.info("Coordinator cleanup completed")
