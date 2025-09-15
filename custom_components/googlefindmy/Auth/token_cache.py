@@ -257,11 +257,13 @@ async def async_get_all_cached_values():
 
 # Global variable to store in-memory secrets for Home Assistant
 _memory_cache = {}
+_cache_loaded = False
 
 def set_memory_cache(data: dict):
     """Set the in-memory cache for Home Assistant (avoids file I/O in event loop)."""
-    global _memory_cache
+    global _memory_cache, _cache_loaded
     _memory_cache = data.copy()
+    _cache_loaded = True
 
 def get_from_memory_cache(key: str):
     """Get a value from the in-memory cache."""
@@ -269,8 +271,14 @@ def get_from_memory_cache(key: str):
 
 async def async_load_cache_from_file():
     """Load the entire cache from file into memory (async)."""
+    global _cache_loaded
+
+    # Skip if cache is already loaded
+    if _cache_loaded and _memory_cache:
+        return _memory_cache
+
     secrets_file = _get_secrets_file()
-    
+
     loop = asyncio.get_event_loop()
     exists = await loop.run_in_executor(None, os.path.exists, secrets_file)
     

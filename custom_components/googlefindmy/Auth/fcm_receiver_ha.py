@@ -51,6 +51,10 @@ class FcmReceiverHA:
         
     async def async_initialize(self):
         """Async initialization that works with Home Assistant."""
+        # Skip if already initialized with valid credentials and push client
+        if self.credentials and self.pc:
+            return True
+
         try:
             # Load cached credentials asynchronously to avoid blocking I/O
             await async_load_cache_from_file()
