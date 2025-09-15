@@ -39,6 +39,7 @@ class FcmReceiverHA:
         self._listening = False
         self._listen_task = None
         self._background_tasks = set()  # Track background tasks for cleanup
+        self._stopping = False  # Flag to prevent recursive cleanup
         
         # Firebase project configuration for Google Find My Device
         self.project_id = "google.com:api-project-289722593072"
@@ -413,6 +414,9 @@ class FcmReceiverHA:
     
     async def async_stop(self):
         """Stop listening for FCM messages."""
+        if self._stopping:
+            return  # Already stopping, prevent recursion
+        self._stopping = True
         try:
             # Cancel all background tasks first
             for task in list(self._background_tasks):
@@ -463,9 +467,11 @@ class FcmReceiverHA:
             self.location_update_callbacks.clear()
             
             _LOGGER.debug("FCM receiver stopped")
-            
+
         except Exception as e:
             _LOGGER.error(f"Error stopping FCM receiver: {e}")
+        finally:
+            self._stopping = False
     
     def get_fcm_token(self) -> Optional[str]:
         """Get current FCM token if available."""
@@ -476,6 +482,8 @@ class FcmReceiverHA:
     async def _cleanup_if_empty(self) -> None:
         """Clean up FCM receiver if no callbacks or coordinators are registered."""
         try:
+            if self._stopping:
+                return  # Already stopping, prevent recursion
             if not self.coordinators and not self.location_update_callbacks:
                 _LOGGER.debug("No coordinators or callbacks remaining, stopping FCM receiver to prevent memory leak")
                 await self.async_stop()
