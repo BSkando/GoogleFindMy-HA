@@ -208,6 +208,7 @@ class FcmPushClient:  # pylint:disable=too-many-instance-attributes
 
         self.reset_lock: asyncio.Lock | None = None
         self.stopping_lock: asyncio.Lock | None = None
+        self.read_lock: asyncio.Lock | None = None
 
     def _msg_str(self, msg: Message) -> str:
         if self.config.log_debug_verbose:
@@ -317,28 +318,39 @@ class FcmPushClient:  # pylint:disable=too-many-instance-attributes
         await self.writer.drain()  # type: ignore[union-attr]
 
     async def _receive_msg(self) -> Message | None:
-        if self.first_message:
-            r = await self.reader.readexactly(2)  # type: ignore[union-attr]
-            version, tag = struct.unpack("BB", r)
-            if version < MCS_VERSION and version != 38:
-                raise RuntimeError(f"protocol version {version} unsupported")
-            self.first_message = False
-        else:
-            r = await self.reader.readexactly(1)  # type: ignore[union-attr]
-            (tag,) = struct.unpack("B", r)
-        size = await self._read_varint32()
+        try:
+            async with self.read_lock:  # Prevent concurrent reads
+                if self.first_message:
+                    r = await self.reader.readexactly(2)  # type: ignore[union-attr]
+                    version, tag = struct.unpack("BB", r)
+                    if version < MCS_VERSION and version != 38:
+                        raise RuntimeError(f"protocol version {version} unsupported")
+                    self.first_message = False
+                else:
+                    r = await self.reader.readexactly(1)  # type: ignore[union-attr]
+                    (tag,) = struct.unpack("B", r)
+                size = await self._read_varint32()
 
-        self._log_verbose(
-            "Received message with tag %s and size %s",
-            tag,
-            size,
-        )
+                self._log_verbose(
+                    "Received message with tag %s and size %s",
+                    tag,
+                    size,
+                )
 
-        if not size >= 0:
-            self._log_warn_with_limit("Unexpected message size %s", size)
+                if not size >= 0:
+                    self._log_warn_with_limit("Unexpected message size %s", size)
+                    return None
+
+                buf = await self.reader.readexactly(size)  # type: ignore[union-attr]
+        except ssl.SSLError as ssl_err:
+            if "APPLICATION_DATA_AFTER_CLOSE_NOTIFY" in str(ssl_err):
+                self._log_verbose("SSL connection closed gracefully: %s", ssl_err)
+            else:
+                self._log_warn_with_limit("SSL error during read: %s", ssl_err)
             return None
-
-        buf = await self.reader.readexactly(size)  # type: ignore[union-attr]
+        except (ConnectionResetError, asyncio.IncompleteReadError, OSError) as conn_err:
+            self._log_verbose("Connection error during read: %s", conn_err)
+            return None
 
         msg_class = next(iter([c for c, t in MCS_MESSAGE_TAG.items() if t == tag]))
         if not msg_class:
@@ -779,6 +791,7 @@ class FcmPushClient:  # pylint:disable=too-many-instance-attributes
         """Connect to FCM and start listening for push notifications."""
         self.reset_lock = asyncio.Lock()
         self.stopping_lock = asyncio.Lock()
+        self.read_lock = asyncio.Lock()
         self.do_listen = True
         self.run_state = FcmPushClientRunState.STARTING_TASKS
         try:
