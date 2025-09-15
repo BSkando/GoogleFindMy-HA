@@ -235,8 +235,10 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 "device_poll_delay": user_input.get("device_poll_delay", 5),
                 "min_accuracy_threshold": user_input.get("min_accuracy_threshold", 100),
                 "movement_threshold": user_input.get("movement_threshold", 50),
-                "filter_google_home_semantic": user_input.get("filter_google_home_semantic", False),
-                "google_home_semantic_keywords": [kw.strip() for kw in user_input.get("google_home_semantic_keywords", "Speaker,Hub,Display,Chromecast,Google Home,Nest").split(",") if kw.strip()]
+                "filter_google_home_devices": user_input.get("filter_google_home_devices", False),
+                "google_home_device_keywords": [kw.strip() for kw in user_input.get("google_home_device_keywords", "Speaker,Hub,Display,Chromecast,Google Home,Nest").split(",") if kw.strip()],
+                "enable_zone_caching": user_input.get("enable_zone_caching", True),
+                "zone_cache_duration": user_input.get("zone_cache_duration", 3600)
             })
             
             self.hass.config_entries.async_update_entry(
@@ -252,8 +254,8 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         current_delay = self.config_entry.data.get("device_poll_delay", 5)
         current_accuracy = self.config_entry.data.get("min_accuracy_threshold", 100)
         current_movement = self.config_entry.data.get("movement_threshold", 50)
-        current_filter_semantic = self.config_entry.data.get("filter_google_home_semantic", False)
-        current_semantic_keywords = ",".join(self.config_entry.data.get("google_home_semantic_keywords", ["Speaker", "Hub", "Display", "Chromecast", "Google Home", "Nest"]))
+        current_filter_semantic = self.config_entry.data.get("filter_google_home_devices", False)
+        current_semantic_keywords = ",".join(self.config_entry.data.get("google_home_device_keywords", ["Speaker", "Hub", "Display", "Chromecast", "Google Home", "Nest"]))
         
         # Get available devices
         try:
@@ -302,15 +304,20 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 vol.Coerce(int),
                 vol.Range(min=10, max=200)
             ),
-            vol.Optional("filter_google_home_semantic", default=current_filter_semantic): bool,
-            vol.Optional("google_home_semantic_keywords", default=current_semantic_keywords): str
+            vol.Optional("filter_google_home_devices", default=current_filter_semantic, description="Filters devices with matching keywords and substitutes configured zone semantic name."): bool,
+            vol.Optional("google_home_device_keywords", default=current_semantic_keywords): str,
+            vol.Optional("enable_zone_caching", default=self.config_entry.data.get("enable_zone_caching", True), description="Cache HA zones to reduce memory usage during Google Home filtering"): bool,
+            vol.Optional("zone_cache_duration", default=self.config_entry.data.get("zone_cache_duration", 3600)): vol.All(
+                vol.Coerce(int),
+                vol.Range(min=300, max=86400)
+            )
         })
 
         return self.async_show_form(
             step_id="init",
             data_schema=options_schema,
             description_placeholders={
-                "info": "Modify tracking settings:\n• Location poll interval: How often to poll for locations (60-3600 seconds)\n• Device poll delay: Delay between device polls (1-60 seconds)\n• Min accuracy threshold: Ignore locations worse than this (25-500 meters)\n• Movement threshold: Minimum movement to register location change (10-200 meters)\n• Filter Google Home semantic: Ignore semantic locations matching Google Home devices\n• Google Home keywords: Comma-separated keywords to identify Google Home devices in semantic locations\n\nThese settings help filter poor location data and remove unwanted Google Home device locations."
+                "info": "Modify tracking settings:\n• Location poll interval: How often to poll for locations (60-3600 seconds)\n• Device poll delay: Delay between device polls (1-60 seconds)\n• Min accuracy threshold: Ignore locations worse than this (25-500 meters)\n• Movement threshold: Minimum movement to register location change (10-200 meters)\n• Filter Google Home devices: Filters devices with matching keywords and substitutes configured zone semantic name\n• Google Home device keywords: Comma-separated keywords to identify Google Home devices in semantic locations\n• Enable zone caching: Cache HA zones to reduce memory usage during Google Home filtering\n• Zone cache duration: How long to cache zones in seconds (300-86400)\n\nThese settings help filter poor location data and remove unwanted Google Home device locations. Zone caching prevents memory leaks by avoiding repeated zone lookups."
             }
         )
 

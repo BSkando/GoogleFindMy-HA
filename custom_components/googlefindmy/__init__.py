@@ -122,8 +122,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN]["config_data"] = {
         "min_accuracy_threshold": min_accuracy_threshold,
         "movement_threshold": movement_threshold,
-        "filter_google_home_semantic": entry.data.get("filter_google_home_semantic", False),
-        "google_home_semantic_keywords": entry.data.get("google_home_semantic_keywords", ["Speaker", "Hub", "Display", "Chromecast", "Google Home", "Nest"])
+        "filter_google_home_devices": entry.data.get("filter_google_home_devices", False),
+        "google_home_device_keywords": entry.data.get("google_home_device_keywords", ["Speaker", "Hub", "Display", "Chromecast", "Google Home", "Nest"]),
+        "enable_zone_caching": entry.data.get("enable_zone_caching", True),
+        "zone_cache_duration": entry.data.get("zone_cache_duration", 3600)
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -151,13 +153,19 @@ async def async_update_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     hass.data[DOMAIN]["config_data"] = {
         "min_accuracy_threshold": entry.data.get("min_accuracy_threshold", 100),
         "movement_threshold": entry.data.get("movement_threshold", 50),
-        "filter_google_home_semantic": entry.data.get("filter_google_home_semantic", False),
-        "google_home_semantic_keywords": entry.data.get("google_home_semantic_keywords", ["Speaker", "Hub", "Display", "Chromecast", "Google Home", "Nest"])
+        "filter_google_home_devices": entry.data.get("filter_google_home_devices", False),
+        "google_home_device_keywords": entry.data.get("google_home_device_keywords", ["Speaker", "Hub", "Display", "Chromecast", "Google Home", "Nest"]),
+        "enable_zone_caching": entry.data.get("enable_zone_caching", True),
+        "zone_cache_duration": entry.data.get("zone_cache_duration", 3600)
     }
     
     # Reset polling state to apply changes immediately  
     coordinator._last_location_poll_time = 0
     coordinator._device_location_data = {}
+    
+    # Reset zone cache when config changes to apply new caching settings
+    coordinator._cached_zones = None
+    coordinator._zones_cache_time = 0
     
     _LOGGER.info(f"Updated configuration: {len(coordinator.tracked_devices)} tracked devices, {coordinator.location_poll_interval}s poll interval")
     
@@ -167,8 +175,17 @@ async def async_update_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    # Get the coordinator and clean it up before unloading platforms
+    coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if coordinator and hasattr(coordinator, 'async_shutdown'):
+        try:
+            await coordinator.async_shutdown()
+            _LOGGER.debug("Coordinator shutdown completed")
+        except Exception as e:
+            _LOGGER.warning(f"Error during coordinator shutdown: {e}")
+    
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
-        hass.data[DOMAIN].pop(entry.entry_id)
+        hass.data[DOMAIN].pop(entry.entry_id, None)
 
     return unload_ok
 

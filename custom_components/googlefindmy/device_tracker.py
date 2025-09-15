@@ -47,7 +47,7 @@ class GoogleFindMyDeviceTracker(CoordinatorEntity, TrackerEntity):
         self._attr_unique_id = f"{DOMAIN}_{device['id']}"
         self._attr_name = device["name"]
         self._attr_source_type = SourceType.GPS
-        self._attr_has_entity_name = True
+        self._attr_has_entity_name = False
         # Set battery attributes for proper display
         self._attr_battery_level = None
         self._attr_battery_unit = PERCENTAGE
@@ -133,6 +133,7 @@ class GoogleFindMyDeviceTracker(CoordinatorEntity, TrackerEntity):
         # If we have a semantic location, use it
         semantic_name = device_data.get("semantic_name")
         if semantic_name:
+            # Device tracker returning semantic location (reduced logging)
             return semantic_name
         
         # Otherwise return None to let HA determine zone/home/away
