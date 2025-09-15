@@ -9,7 +9,7 @@ import aiohttp
 from bs4 import BeautifulSoup
 
 from custom_components.googlefindmy.Auth.aas_token_retrieval import get_aas_token
-from custom_components.googlefindmy.Auth.adm_token_retrieval import get_adm_token
+from custom_components.googlefindmy.Auth.adm_token_retrieval import get_adm_token, async_get_adm_token
 from custom_components.googlefindmy.Auth.username_provider import get_username
 
 
@@ -26,19 +26,19 @@ def nova_request(api_scope, hex_payload):
     
     # Debug: Print all available cached values
     all_cached = get_all_cached_values()
-    _logger.info(f"Available cached tokens: {list(all_cached.keys())}")
-    _logger.info(f"Username: {username}")
+    _logger.debug(f"Available cached tokens: {list(all_cached.keys())}")
+    _logger.debug(f"Username: {username}")
     
     # Check if we have a cached ADM token (from secrets.json)
     android_device_manager_oauth_token = get_cached_value(f'adm_token_{username}')
-    _logger.info(f"ADM token for {username}: {'Found' if android_device_manager_oauth_token else 'Not found'}")
+    _logger.debug(f"ADM token for {username}: {'Found' if android_device_manager_oauth_token else 'Not found'}")
     if android_device_manager_oauth_token:
-        _logger.info(f"ADM token preview: {android_device_manager_oauth_token[:20]}...")
+        _logger.debug(f"ADM token preview: {android_device_manager_oauth_token[:20]}...")
     
     if not android_device_manager_oauth_token:
         # Try alternative token names that might be in secrets.json
         android_device_manager_oauth_token = get_cached_value('adm_token')
-        _logger.info(f"Generic ADM token: {'Found' if android_device_manager_oauth_token else 'Not found'}")
+        _logger.debug(f"Generic ADM token: {'Found' if android_device_manager_oauth_token else 'Not found'}")
         
     if not android_device_manager_oauth_token:
         # Look for ANY adm_token in the cache
@@ -46,7 +46,7 @@ def nova_request(api_scope, hex_payload):
             if key.startswith('adm_token_') and '@' in key:
                 android_device_manager_oauth_token = value
                 extracted_username = key.replace('adm_token_', '')
-                _logger.info(f"Found ADM token for {extracted_username}, using it")
+                _logger.debug(f"Found ADM token for {extracted_username}, using it")
                 # Update the username for future use
                 username = extracted_username
                 break
@@ -54,9 +54,9 @@ def nova_request(api_scope, hex_payload):
     if not android_device_manager_oauth_token:
         # Fall back to generating ADM token
         try:
-            _logger.info("Attempting to generate new ADM token...")
+            _logger.debug("Attempting to generate new ADM token...")
             android_device_manager_oauth_token = get_adm_token(username)
-            _logger.info(f"Generated ADM token: {'Success' if android_device_manager_oauth_token else 'Failed'}")
+            _logger.debug(f"Generated ADM token: {'Success' if android_device_manager_oauth_token else 'Failed'}")
         except Exception as e:
             _logger.error(f"ADM token generation failed: {e}")
             raise RuntimeError(
@@ -77,18 +77,18 @@ def nova_request(api_scope, hex_payload):
 
     payload = binascii.unhexlify(hex_payload)
 
-    _logger.info(f"Making Nova API request to: {url}")
-    _logger.info(f"Request headers: {headers}")
-    _logger.info(f"Payload length: {len(payload)} bytes")
+    _logger.debug(f"Making Nova API request to: {url}")
+    _logger.debug(f"Request headers: {headers}")
+    _logger.debug(f"Payload length: {len(payload)} bytes")
     
     response = requests.post(url, headers=headers, data=payload)
     
-    _logger.info(f"Nova API response status: {response.status_code}")
-    _logger.info(f"Response content length: {len(response.content)} bytes")
+    _logger.debug(f"Nova API response status: {response.status_code}")
+    _logger.debug(f"Response content length: {len(response.content)} bytes")
     
     if response.status_code == 200:
         result_hex = response.content.hex()
-        _logger.info(f"Nova API success - returning {len(result_hex)} characters of hex data")
+        _logger.debug(f"Nova API success - returning {len(result_hex)} characters of hex data")
         return result_hex
     elif response.status_code == 401:
         # Token expired - clear cached ADM token and retry once
@@ -100,18 +100,18 @@ def nova_request(api_scope, hex_payload):
         
         # Generate new ADM token
         try:
-            _logger.info("Generating fresh ADM token...")
+            _logger.debug("Generating fresh ADM token...")
             android_device_manager_oauth_token = get_adm_token(username)
             
             if android_device_manager_oauth_token:
                 # Retry request with new token
                 headers["Authorization"] = "Bearer " + android_device_manager_oauth_token
-                _logger.info("Retrying Nova API request with fresh token...")
+                _logger.debug("Retrying Nova API request with fresh token...")
                 retry_response = requests.post(url, headers=headers, data=payload)
                 
                 if retry_response.status_code == 200:
                     result_hex = retry_response.content.hex()
-                    _logger.info(f"Nova API success after token refresh - returning {len(result_hex)} characters")
+                    _logger.debug(f"Nova API success after token refresh - returning {len(result_hex)} characters")
                     return result_hex
                 else:
                     _logger.error(f"Nova API still failed after token refresh: status={retry_response.status_code}")
@@ -148,12 +148,12 @@ async def async_nova_request(api_scope, hex_payload):
     
     # Check if we have a cached ADM token (from secrets.json) - use async version
     android_device_manager_oauth_token = await async_get_cached_value(f'adm_token_{username}')
-    _logger.info(f"ADM token for {username}: {'Found' if android_device_manager_oauth_token else 'Not found'}")
+    _logger.debug(f"ADM token for {username}: {'Found' if android_device_manager_oauth_token else 'Not found'}")
     
     if not android_device_manager_oauth_token:
         # Try alternative token names that might be in secrets.json
         android_device_manager_oauth_token = await async_get_cached_value('adm_token')
-        _logger.info(f"Generic ADM token: {'Found' if android_device_manager_oauth_token else 'Not found'}")
+        _logger.debug(f"Generic ADM token: {'Found' if android_device_manager_oauth_token else 'Not found'}")
         
     if not android_device_manager_oauth_token:
         # Look for ANY adm_token in the cache - use async version
@@ -162,7 +162,7 @@ async def async_nova_request(api_scope, hex_payload):
             if key.startswith('adm_token_') and '@' in key:
                 android_device_manager_oauth_token = value
                 extracted_username = key.replace('adm_token_', '')
-                _logger.info(f"Found ADM token for {extracted_username}, using it")
+                _logger.debug(f"Found ADM token for {extracted_username}, using it")
                 # Update the username for future use
                 username = extracted_username
                 break
@@ -170,9 +170,9 @@ async def async_nova_request(api_scope, hex_payload):
     if not android_device_manager_oauth_token:
         # Fall back to generating ADM token
         try:
-            _logger.info("Attempting to generate new ADM token...")
+            _logger.debug("Attempting to generate new ADM token...")
             android_device_manager_oauth_token = get_adm_token(username)
-            _logger.info(f"Generated ADM token: {'Success' if android_device_manager_oauth_token else 'Failed'}")
+            _logger.debug(f"Generated ADM token: {'Success' if android_device_manager_oauth_token else 'Failed'}")
         except Exception as e:
             _logger.error(f"ADM token generation failed: {e}")
             raise RuntimeError(
@@ -193,19 +193,19 @@ async def async_nova_request(api_scope, hex_payload):
 
     payload = binascii.unhexlify(hex_payload)
 
-    _logger.info(f"Making async Nova API request to: {url}")
-    _logger.info(f"Payload length: {len(payload)} bytes")
+    _logger.debug(f"Making async Nova API request to: {url}")
+    _logger.debug(f"Payload length: {len(payload)} bytes")
     
     async with aiohttp.ClientSession() as session:
         async with session.post(url, headers=headers, data=payload) as response:
             content = await response.read()
             
-            _logger.info(f"Nova API response status: {response.status}")
-            _logger.info(f"Response content length: {len(content)} bytes")
+            _logger.debug(f"Nova API response status: {response.status}")
+            _logger.debug(f"Response content length: {len(content)} bytes")
             
             if response.status == 200:
                 result_hex = content.hex()
-                _logger.info(f"Nova API success - returning {len(result_hex)} characters of hex data")
+                _logger.debug(f"Nova API success - returning {len(result_hex)} characters of hex data")
                 return result_hex
             elif response.status == 401:
                 # Token expired - clear cached ADM token and retry once
@@ -217,20 +217,20 @@ async def async_nova_request(api_scope, hex_payload):
                 
                 # Generate new ADM token
                 try:
-                    _logger.info("Generating fresh ADM token...")
-                    android_device_manager_oauth_token = get_adm_token(username)
+                    _logger.debug("Generating fresh ADM token...")
+                    android_device_manager_oauth_token = await async_get_adm_token(username)
                     
                     if android_device_manager_oauth_token:
                         # Retry request with new token
                         headers["Authorization"] = "Bearer " + android_device_manager_oauth_token
-                        _logger.info("Retrying Nova API request with fresh token...")
+                        _logger.debug("Retrying Nova API request with fresh token...")
                         
                         async with session.post(url, headers=headers, data=payload) as retry_response:
                             retry_content = await retry_response.read()
                             
                             if retry_response.status == 200:
                                 result_hex = retry_content.hex()
-                                _logger.info(f"Nova API success after token refresh - returning {len(result_hex)} characters")
+                                _logger.debug(f"Nova API success after token refresh - returning {len(result_hex)} characters")
                                 return result_hex
                             else:
                                 _logger.error(f"Nova API still failed after token refresh: status={retry_response.status}")
