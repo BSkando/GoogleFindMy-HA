@@ -178,8 +178,8 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
             if self._emergency_mode:
                 _LOGGER.warning("GoogleFindMy in emergency mode, skipping operations")
                 return []
-            # Get basic device list using async API to avoid blocking the event loop
-            all_devices = await self.api.async_get_basic_device_list()
+            # Get basic device list - always use async to avoid blocking the event loop
+            all_devices = await self.hass.async_add_executor_job(self.api.get_basic_device_list)
             
             # Filter to only tracked devices
             if self.tracked_devices:
