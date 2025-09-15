@@ -38,6 +38,7 @@ class FcmReceiverHA:
         self.pc = None
         self._listening = False
         self._listen_task = None
+        self._background_tasks = set()  # Track background tasks for cleanup
         
         # Firebase project configuration for Google Find My Device
         self.project_id = "google.com:api-project-289722593072"
@@ -59,7 +60,7 @@ class FcmReceiverHA:
                 import json
                 try:
                     self.credentials = json.loads(self.credentials)
-                    _LOGGER.debug("Parsed FCM credentials from JSON string")
+                    # FCM credentials parsed (reduced logging)
                 except json.JSONDecodeError as e:
                     _LOGGER.error(f"Failed to parse FCM credentials JSON: {e}")
                     return False
@@ -83,7 +84,7 @@ class FcmReceiverHA:
                 self._on_credentials_updated
             )
             
-            _LOGGER.info("FCM receiver initialized successfully")
+            # FCM receiver initialized (reduced logging)
             return True
             
         except Exception as e:
@@ -95,7 +96,7 @@ class FcmReceiverHA:
         try:
             # Add callback to dict
             self.location_update_callbacks[device_id] = callback
-            _LOGGER.debug(f"Registered FCM callback for device: {device_id}")
+            # FCM callback registered (reduced logging)
             
             # If not listening, start listening
             if not self._listening:
@@ -104,7 +105,7 @@ class FcmReceiverHA:
             # Return FCM token if available
             if self.credentials and 'fcm' in self.credentials and 'registration' in self.credentials['fcm']:
                 token = self.credentials['fcm']['registration']['token']
-                _LOGGER.info(f"FCM token available: {token[:20]}...")
+                # FCM token available (reduced logging)
                 return token
             else:
                 _LOGGER.warning("FCM credentials not available")
@@ -119,9 +120,9 @@ class FcmReceiverHA:
         try:
             if device_id in self.location_update_callbacks:
                 del self.location_update_callbacks[device_id]
-                _LOGGER.debug(f"Unregistered FCM callback for device: {device_id}")
+                # FCM callback unregistered (reduced logging)
             else:
-                _LOGGER.debug(f"No FCM callback found to unregister for device: {device_id}")
+                # No FCM callback found (reduced logging)
         except Exception as e:
             _LOGGER.error(f"Failed to unregister location updates for {device_id}: {e}")
     
@@ -129,13 +130,17 @@ class FcmReceiverHA:
         """Register a coordinator to receive background location updates."""
         if coordinator not in self.coordinators:
             self.coordinators.append(coordinator)
-            _LOGGER.debug(f"Registered coordinator for background FCM updates")
+            # Coordinator registered for FCM updates (reduced logging)
     
     def unregister_coordinator(self, coordinator) -> None:
         """Unregister a coordinator from background location updates."""
         if coordinator in self.coordinators:
             self.coordinators.remove(coordinator)
-            _LOGGER.debug(f"Unregistered coordinator from background FCM updates")
+            # Coordinator unregistered from FCM (reduced logging)
+            
+            # If no coordinators left, clean up to prevent memory leaks
+            if not self.coordinators and not self.location_update_callbacks:
+                asyncio.create_task(self._cleanup_if_empty())
     
     async def _start_listening(self):
         """Start listening for FCM messages."""
@@ -150,7 +155,7 @@ class FcmReceiverHA:
                 # Start listening in background task
                 self._listen_task = asyncio.create_task(self._listen_for_messages())
                 self._listening = True
-                _LOGGER.info("Started listening for FCM notifications")
+                # Started FCM listening (reduced logging)
             else:
                 _LOGGER.error("Failed to create FCM push client")
                 
@@ -184,7 +189,7 @@ class FcmReceiverHA:
         try:
             if self.pc:
                 await self.pc.start()
-                _LOGGER.info("FCM message listener started")
+                # FCM message listener started (reduced logging)
         except Exception as e:
             _LOGGER.error(f"FCM listen error: {e}")
             self._listening = False
@@ -212,7 +217,7 @@ class FcmReceiverHA:
                 # Convert to hex string
                 hex_string = binascii.hexlify(decoded_bytes).decode('utf-8')
                 
-                _LOGGER.info(f"Received FCM location response: {len(hex_string)} chars")
+                # FCM location response received (reduced logging)
                 
                 # Extract canonic_id from response to find the right callback
                 canonic_id = None
@@ -226,7 +231,9 @@ class FcmReceiverHA:
                     callback = self.location_update_callbacks[canonic_id]
                     try:
                         # Run callback in executor to avoid blocking the event loop
-                        asyncio.create_task(self._run_callback_async(callback, canonic_id, hex_string))
+                        task = asyncio.create_task(self._run_callback_async(callback, canonic_id, hex_string))
+                        self._background_tasks.add(task)
+                        task.add_done_callback(self._background_tasks.discard)
                     except Exception as e:
                         _LOGGER.error(f"Error scheduling FCM callback for device {canonic_id}: {e}")
                 elif canonic_id:
@@ -234,9 +241,11 @@ class FcmReceiverHA:
                     handled_by_coordinator = False
                     for coordinator in self.coordinators:
                         if hasattr(coordinator, 'tracked_devices') and canonic_id in coordinator.tracked_devices:
-                            _LOGGER.info(f"Processing background FCM update for tracked device {coordinator._device_names.get(canonic_id, canonic_id[:8])}")
+                            # Processing background FCM update (reduced logging)
                             # Process background update
-                            asyncio.create_task(self._process_background_update(coordinator, canonic_id, hex_string))
+                            task = asyncio.create_task(self._process_background_update(coordinator, canonic_id, hex_string))
+                            self._background_tasks.add(task)
+                            task.add_done_callback(self._background_tasks.discard)
                             handled_by_coordinator = True
                             break
                     
@@ -298,13 +307,18 @@ class FcmReceiverHA:
             )
             
             if location_data:
-                # Store in coordinator's location cache
-                coordinator._device_location_data[canonic_id] = location_data.copy()
-                coordinator._device_location_data[canonic_id]["last_updated"] = time.time()
-                
                 device_name = coordinator._device_names.get(canonic_id, canonic_id[:8])
-                _LOGGER.info(f"Stored background location update for {device_name}")
-                
+
+                # Apply Google Home filtering to background updates
+                filtered_location_data = await self._apply_google_home_filtering(location_data, coordinator, device_name)
+
+                # Store in coordinator's location cache
+                coordinator._device_location_data[canonic_id] = filtered_location_data
+                coordinator._device_location_data[canonic_id]["last_updated"] = time.time()
+
+                semantic_value = filtered_location_data.get('semantic_name')
+                _LOGGER.debug(f"FCM stored background location update for {device_name}: semantic='{semantic_value}' (type: {type(semantic_value)})")
+
                 # Trigger coordinator update to refresh entities
                 await coordinator.async_request_refresh()
             else:
@@ -312,7 +326,41 @@ class FcmReceiverHA:
                 
         except Exception as e:
             _LOGGER.error(f"Error processing background update for device {canonic_id}: {e}")
-    
+
+    async def _apply_google_home_filtering(self, location_data: dict, coordinator, device_name: str) -> dict:
+        """Apply Google Home filtering logic to location data."""
+        try:
+            from ..const import DOMAIN
+
+            # Get configuration settings
+            config_data = coordinator.hass.data.get(DOMAIN, {}).get("config_data", {})
+            filter_google_home = config_data.get("filter_google_home_devices", False)
+            google_home_keywords = config_data.get("google_home_device_keywords", ["Speaker", "Hub", "Display", "Chromecast", "Google Home", "Nest"])
+
+            semantic = location_data.get('semantic_name')
+
+            if filter_google_home and semantic:
+                is_google_home_location = any(keyword.strip().lower() in semantic.lower() for keyword in google_home_keywords if keyword.strip())
+                if is_google_home_location:
+                    _LOGGER.debug(f"FCM background update: Google Home location detected for {device_name}: '{semantic}'")
+
+                    # Replace with home zone (same logic as coordinator)
+                    home_zone = coordinator.hass.states.get("zone.home")
+                    if home_zone:
+                        semantic = home_zone.attributes.get("friendly_name", "Home")
+                        _LOGGER.info(f"FCM: Replaced with home zone: {semantic}")
+                    else:
+                        # FCM: No home zone found (reduced logging)
+
+            # Create filtered location data
+            filtered_data = location_data.copy()
+            filtered_data['semantic_name'] = semantic
+            return filtered_data
+
+        except Exception as e:
+            _LOGGER.error(f"Error applying Google Home filtering to background update: {e}")
+            return location_data.copy()
+
     def _decode_background_location(self, hex_string: str) -> dict:
         """Decode location data from hex string (runs in executor)."""
         try:
@@ -349,8 +397,10 @@ class FcmReceiverHA:
         """Handle credential updates."""
         self.credentials = creds
         # Schedule async update to avoid blocking I/O in callback
-        asyncio.create_task(self._async_save_credentials())
-        _LOGGER.info("FCM credentials updated")
+        task = asyncio.create_task(self._async_save_credentials())
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        _LOGGER.debug("FCM credentials updated")
     
     async def _async_save_credentials(self):
         """Save credentials asynchronously."""
@@ -362,6 +412,23 @@ class FcmReceiverHA:
     async def async_stop(self):
         """Stop listening for FCM messages."""
         try:
+            # Cancel all background tasks first
+            for task in list(self._background_tasks):
+                if not task.done():
+                    task.cancel()
+            
+            # Wait for tasks to complete with timeout
+            if self._background_tasks:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*self._background_tasks, return_exceptions=True),
+                        timeout=5.0
+                    )
+                except asyncio.TimeoutError:
+                    _LOGGER.warning("Some FCM background tasks didn't complete within timeout")
+            
+            self._background_tasks.clear()
+            
             if self._listen_task:
                 self._listen_task.cancel()
                 try:
@@ -388,7 +455,12 @@ class FcmReceiverHA:
                     _LOGGER.debug(f"Error stopping FCM push client: {pc_error}")
                 
             self._listening = False
-            _LOGGER.info("FCM receiver stopped")
+            
+            # Clear coordinator references to prevent memory leaks
+            self.coordinators.clear()
+            self.location_update_callbacks.clear()
+            
+            _LOGGER.debug("FCM receiver stopped")
             
         except Exception as e:
             _LOGGER.error(f"Error stopping FCM receiver: {e}")
@@ -398,3 +470,12 @@ class FcmReceiverHA:
         if self.credentials and 'fcm' in self.credentials and 'registration' in self.credentials['fcm']:
             return self.credentials['fcm']['registration']['token']
         return None
+    
+    async def _cleanup_if_empty(self) -> None:
+        """Clean up FCM receiver if no callbacks or coordinators are registered."""
+        try:
+            if not self.coordinators and not self.location_update_callbacks:
+                _LOGGER.debug("No coordinators or callbacks remaining, stopping FCM receiver to prevent memory leak")
+                await self.async_stop()
+        except Exception as e:
+            _LOGGER.error(f"Error during FCM receiver cleanup: {e}")
