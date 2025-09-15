@@ -123,6 +123,7 @@ class FcmReceiverHA:
                 # FCM callback unregistered (reduced logging)
             else:
                 # No FCM callback found (reduced logging)
+                pass
         except Exception as e:
             _LOGGER.error(f"Failed to unregister location updates for {device_id}: {e}")
     
@@ -351,6 +352,7 @@ class FcmReceiverHA:
                         _LOGGER.info(f"FCM: Replaced with home zone: {semantic}")
                     else:
                         # FCM: No home zone found (reduced logging)
+                        pass
 
             # Create filtered location data
             filtered_data = location_data.copy()
