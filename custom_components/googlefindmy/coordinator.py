@@ -326,7 +326,7 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
                                             # No GPS, using home zone (reduced logging)
                                         else:
                                             # Can't determine zone without GPS, keep original semantic
-                                            # No GPS/home zone, keeping original (reduced logging)
+                                            semantic = semantic  # Keep original semantic
                                     else:
                                         # Has GPS but not in any defined zone, clear the semantic location
                                         semantic = None
@@ -339,7 +339,6 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
                                     _LOGGER.warning(f"Poor accuracy for {device_name}: {accuracy}m exceeds {min_accuracy_threshold}m threshold")
                                 else:
                                     # Location received successfully
-
                                     # Check if we should skip this update to avoid duplicate recorder entries
                                     skip_update = False
                                     if google_home_detected and device_id in self._device_location_data:
@@ -420,6 +419,7 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
 
                                         except Exception as e:
                                             # Recorder lookup failed, using current (reduced logging)
+                                            pass
                             else:
                                 _LOGGER.warning(f"Invalid coordinates/semantic location for {device_name}: lat={lat}, lon={lon}, semantic_name={semantic}")
                         else:
