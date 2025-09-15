@@ -81,6 +81,27 @@ class GoogleFindMyAPI:
             _LOGGER.error("Failed to get basic device list: %s", err)
             raise
 
+    async def async_get_basic_device_list(self) -> list[dict[str, Any]]:
+        """Get list of Find My devices without location data (async version for coordinator)."""
+        try:
+            from custom_components.googlefindmy.NovaApi.ListDevices.nbe_list_devices import async_request_device_list
+            result_hex = await async_request_device_list()
+            device_list = parse_device_list_protobuf(result_hex)
+            canonic_ids = get_canonic_ids(device_list)
+
+            devices = []
+            for device_name, canonic_id in canonic_ids:
+                devices.append({
+                    "name": device_name,
+                    "id": canonic_id,
+                    "device_id": canonic_id,
+                })
+
+            return devices
+        except Exception as err:
+            _LOGGER.error("Failed to get basic device list (async): %s", err)
+            raise
+
     def get_devices(self) -> list[dict[str, Any]]:
         """Get list of Find My devices with basic info (no location data for now)."""
         try:

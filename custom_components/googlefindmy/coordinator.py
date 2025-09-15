@@ -178,8 +178,8 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
             if self._emergency_mode:
                 _LOGGER.warning("GoogleFindMy in emergency mode, skipping operations")
                 return []
-            # Get basic device list - always use async to avoid blocking the event loop
-            all_devices = await self.hass.async_add_executor_job(self.api.get_basic_device_list)
+            # Get basic device list using async API to avoid blocking the event loop
+            all_devices = await self.api.async_get_basic_device_list()
             
             # Filter to only tracked devices
             if self.tracked_devices:
@@ -241,7 +241,9 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
                             config_data = self.hass.data.get(DOMAIN, {}).get("config_data", {})
                             min_accuracy_threshold = config_data.get("min_accuracy_threshold", 100)
                             filter_google_home = config_data.get("filter_google_home_devices", False)
-                            google_home_keywords = config_data.get("google_home_device_keywords", ["Speaker", "Hub", "Display", "Chromecast", "Google Home", "Nest"])
+                            # Pre-process keywords once to avoid repeated string operations in loop
+                            raw_keywords = config_data.get("google_home_device_keywords", ["Speaker", "Hub", "Display", "Chromecast", "Google Home", "Nest"])
+                            google_home_keywords = [kw.strip().lower() for kw in raw_keywords if kw.strip()]
 
                             # Configuration check (reduced logging)
                             
@@ -256,12 +258,11 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
                                 keywords_checked = 0
                                 is_google_home_location = False
                                 
-                                for keyword in google_home_keywords:
+                                for keyword_lower in google_home_keywords:
                                     keywords_checked += 1
                                     if keywords_checked > max_keywords:
                                         break
-                                    keyword_clean = keyword.strip()
-                                    if keyword_clean and keyword_clean.lower() in semantic_lower:
+                                    if keyword_lower in semantic_lower:
                                         is_google_home_location = True
                                         break
                                         
@@ -300,7 +301,7 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
                                             if zone_count > max_zones:
                                                 _LOGGER.warning(f"Zone processing limit reached ({max_zones}), stopping search")
                                                 break
-                                                
+
                                             zone_lat = zone.attributes.get("latitude")
                                             zone_lon = zone.attributes.get("longitude")
                                             zone_radius = zone.attributes.get("radius", 100)
