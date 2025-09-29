@@ -289,7 +289,7 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
                         )
                     else:
                         # Guess entity_id from name as last resort
-                        entity_id = f"device_tracker.{device_info['name'].lower().replace(' ', '_').replace(\"'\", \"\")}"
+                        entity_id = f"device_tracker.{device_info['name'].lower().replace(' ', '_').replace(\"'\", '')}"
                         _LOGGER.debug(
                             "No registry entry found, trying '%s' for device '%s'",
                             entity_id, device_info['name']
@@ -309,7 +309,7 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
                                 # Try multiple name formats
                                 entity_patterns = [
                                     entity_id,
-                                    f"device_tracker.{device_info['name'].lower().replace(' ', '_').replace(\"'\", \"\")}",
+                                    f"device_tracker.{device_info['name'].lower().replace(' ', '_').replace(\"'\", '')}",
                                     f"device_tracker.{device_info['name'].lower().replace(' ', '_')}",
                                 ]
 
