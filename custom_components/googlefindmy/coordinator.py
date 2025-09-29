@@ -148,55 +148,71 @@ class GoogleFindMyCoordinator(DataUpdateCoordinator):
                             acc = location_data.get('accuracy')
                             last_seen = location_data.get('last_seen', 0)
 
-                            # Accept only valid coordinate ranges
-                            if lat is not None and lon is not None and -90 <= lat <= 90 and -180 <= lon <= 180:
-                                # Skip duplicates when last_seen unchanged
-                                existing_data = self._device_location_data.get(device_id, {})
-                                existing_last_seen = existing_data.get('last_seen')
+                            # Refined coordinate handling:
+                            # - both None => debug (no coordinates yet)
+                            # - one None  => warning (incomplete)
+                            # - both present but out of range => warning (invalid range)
+                            # - both present and valid => process as before
+                            if lat is not None and lon is not None:
+                                if -90 <= lat <= 90 and -180 <= lon <= 180:
+                                    # Skip duplicates when last_seen unchanged
+                                    existing_data = self._device_location_data.get(device_id, {})
+                                    existing_last_seen = existing_data.get('last_seen')
 
-                                if last_seen != existing_last_seen:
-                                    # New data
-                                    if last_seen > 0:
-                                        location_age_hours = (current_time - last_seen) / 3600
-                                        _LOGGER.info(
-                                            "Got valid location for %s: lat=%s, lon=%s, accuracy=%sm, age=%.1fh",
-                                            device_name, lat, lon, acc, location_age_hours
-                                        )
+                                    if last_seen != existing_last_seen:
+                                        # New data
+                                        if last_seen > 0:
+                                            location_age_hours = (current_time - last_seen) / 3600
+                                            _LOGGER.info(
+                                                "Got valid location for %s: lat=%s, lon=%s, accuracy=%sm, age=%.1fh",
+                                                device_name, lat, lon, acc, location_age_hours
+                                            )
+                                        else:
+                                            _LOGGER.info(
+                                                "Got valid location for %s: lat=%s, lon=%s, accuracy=%sm",
+                                                device_name, lat, lon, acc
+                                            )
+
+                                        self._device_location_data[device_id] = location_data
+                                        self._device_location_data[device_id]["last_updated"] = current_time
+
+                                        # Stats
+                                        self.increment_stat("background_updates")
+
+                                        # Persist last-known position asynchronously (non-blocking)
+                                        self.last_known_locations[device_id] = {
+                                            "latitude": lat,
+                                            "longitude": lon,
+                                            "accuracy": acc,
+                                            "last_seen": last_seen,
+                                            "last_updated": self._device_location_data[device_id].get("last_updated", current_time),
+                                            "status": self._device_location_data[device_id].get("status"),
+                                            "is_own_report": location_data.get("is_own_report"),
+                                            "semantic_name": location_data.get("semantic_name"),
+                                        }
+                                        self.hass.async_create_task(self._store.async_save(self.last_known_locations))
                                     else:
-                                        _LOGGER.info(
-                                            "Got valid location for %s: lat=%s, lon=%s, accuracy=%sm",
-                                            device_name, lat, lon, acc
+                                        _LOGGER.debug(
+                                            "Skipping duplicate location data for %s (same last_seen: %s)",
+                                            device_name, last_seen
                                         )
-
-                                    self._device_location_data[device_id] = location_data
-                                    self._device_location_data[device_id]["last_updated"] = current_time
-
-                                    # Stats
-                                    self.increment_stat("background_updates")
-
-                                    # Persist last-known position asynchronously (non-blocking)
-                                    self.last_known_locations[device_id] = {
-                                        "latitude": lat,
-                                        "longitude": lon,
-                                        "accuracy": acc,
-                                        "last_seen": last_seen,
-                                        "last_updated": self._device_location_data[device_id].get("last_updated", current_time),
-                                        "status": self._device_location_data[device_id].get("status"),
-                                        "is_own_report": location_data.get("is_own_report"),
-                                        "semantic_name": location_data.get("semantic_name"),
-                                    }
-                                    self.hass.async_create_task(self._store.async_save(self.last_known_locations))
+                                        self.increment_stat("skipped_duplicates")
                                 else:
-                                    _LOGGER.debug(
-                                        "Skipping duplicate location data for %s (same last_seen: %s)",
-                                        device_name, last_seen
+                                    _LOGGER.warning(
+                                        "Invalid coordinate range for %s: lat=%s, lon=%s",
+                                        device_name, lat, lon
                                     )
-                                    self.increment_stat("skipped_duplicates")
                             else:
-                                _LOGGER.warning(
-                                    "Invalid coordinates for %s: lat=%s, lon=%s",
-                                    device_name, lat, lon
-                                )
+                                if lat is None and lon is None:
+                                    _LOGGER.debug(
+                                        "No coordinates for %s: lat=None, lon=None (preserving previous data)",
+                                        device_name
+                                    )
+                                else:
+                                    _LOGGER.warning(
+                                        "Incomplete coordinates for %s: lat=%s, lon=%s",
+                                        device_name, lat, lon
+                                    )
                         else:
                             _LOGGER.warning("No location data returned for %s", device_name)
 
