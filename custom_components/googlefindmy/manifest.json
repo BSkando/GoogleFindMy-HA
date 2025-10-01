@@ -30,5 +30,5 @@
   ],
   "dependencies": ["http"],
   "after_dependencies": ["recorder"],
-  "version": "1.5.5-2"
+  "version": "1.5.5-3"
 }

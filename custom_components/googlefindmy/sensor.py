@@ -140,23 +140,32 @@ class GoogleFindMyLastSeenSensor(CoordinatorEntity, SensorEntity):
         }
 
     def _get_map_token(self) -> str:
-        """Generate a simple token for map authentication."""
+        """Generate a simple token for map authentication.
+
+        Weekly-rotating token when enabled; otherwise a static token.
+        """
         import hashlib
         import time
         from .const import DEFAULT_MAP_VIEW_TOKEN_EXPIRATION
 
-        # Check if token expiration is enabled in config
-        config_entries = self.hass.config_entries.async_entries(DOMAIN)
-        token_expiration_enabled = DEFAULT_MAP_VIEW_TOKEN_EXPIRATION
-        if config_entries:
-            token_expiration_enabled = config_entries[0].data.get("map_view_token_expiration", DEFAULT_MAP_VIEW_TOKEN_EXPIRATION)
+        # Check if token expiration is enabled - prefer options over data
+        config_entry = getattr(self.coordinator, "config_entry", None)
+        if config_entry:
+            token_expiration_enabled = config_entry.options.get(
+                "map_view_token_expiration",
+                config_entry.data.get("map_view_token_expiration", DEFAULT_MAP_VIEW_TOKEN_EXPIRATION)
+            )
+        else:
+            token_expiration_enabled = DEFAULT_MAP_VIEW_TOKEN_EXPIRATION
 
         ha_uuid = str(self.hass.data.get("core.uuid", "ha"))
 
         if token_expiration_enabled:
-            # Use weekly expiration when enabled
-            week = str(int(time.time() // 604800))  # Current week since epoch (7 days)
-            return hashlib.md5(f"{ha_uuid}:{week}".encode()).hexdigest()[:16]
+            # Weekly-rolling token (7-day bucket)
+            week = str(int(time.time() // 604800))
+            token_src = f"{ha_uuid}:{week}"
         else:
-            # No expiration - use static token based on HA UUID only
-            return hashlib.md5(f"{ha_uuid}:static".encode()).hexdigest()[:16]
+            # Static token (no rotation)
+            token_src = f"{ha_uuid}:static"
+
+        return hashlib.md5(token_src.encode()).hexdigest()[:16]

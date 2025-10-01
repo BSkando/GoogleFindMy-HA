@@ -463,13 +463,46 @@ class FcmPushClient:  # pylint:disable=too-many-instance-attributes
             )
         if not self.credentials:
             return
+
         decrypted = self._decrypt_raw_data(
             self.credentials, crypto_key, salt, msg.raw_data
         )
-        with contextlib_suppress(json.JSONDecodeError, ValueError):
-            decrypted_json = json.loads(decrypted.decode("utf-8"))
 
-        ret_val = decrypted_json if decrypted_json else decrypted
+        # --- Minimal robustness patch: normalize decrypted payload to a dict ---
+        # Rationale:
+        # * json.loads() may return any JSON type (object/array/string/number/etc.).
+        # * Downstream callbacks often expect a mapping (dict) and may index by key.
+        # * To avoid "TypeError: string indices must be integers", we normalize here:
+        #   - If JSON object: pass through as-is.
+        #   - If valid JSON but not an object: wrap into {"_raw_json": <value>}.
+        #   - If not JSON: wrap UTF-8 text into {"_raw_text": "..."} or bytes as hex
+        #     into {"_raw_bytes": "..."}.
+        decrypted_json: Any | None = None
+        text: str | None = None
+        try:
+            text = decrypted.decode("utf-8")
+        except Exception:
+            text = None
+
+        if text is not None:
+            try:
+                decrypted_json = json.loads(text)
+            except (json.JSONDecodeError, ValueError):
+                decrypted_json = None
+
+        if isinstance(decrypted_json, dict):
+            ret_val: dict[str, Any] = decrypted_json
+        elif decrypted_json is not None:
+            # Valid JSON, but not an object (e.g., list/string/number/boolean/null)
+            self._log_warn_with_limit(
+                "FCM payload JSON is not an object (%s); wrapping",
+                type(decrypted_json).__name__,
+            )
+            ret_val = {"_raw_json": decrypted_json}
+        else:
+            # Not JSON → provide a stable mapping for consumers
+            ret_val = {"_raw_text": text} if text is not None else {"_raw_bytes": decrypted.hex()}
+
         self._log_verbose(
             "Decrypted data for message %s is: %s", msg.persistent_id, ret_val
         )
@@ -708,7 +741,8 @@ class FcmPushClient:  # pylint:disable=too-many-instance-attributes
                     elif msg := await self._receive_msg():
                         await self._handle_message(msg)
 
-                except (OSError, EOFError) as osex:
+                # --- Minimal robustness patch: treat IncompleteReadError as normal reconnect case ---
+                except (OSError, EOFError, asyncio.IncompleteReadError) as osex:
                     if (
                         isinstance(
                             osex,

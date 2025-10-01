@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from aiohttp import web
-import voluptuous as vol
+import ipaddress  # IPv4/IPv6 checks for private/link-local/loopback
 
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
@@ -17,6 +17,16 @@ from homeassistant.util import dt as dt_util
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _is_private_host(host: str) -> bool:
+    """Return True if host is private/loopback/link-local (IPv4/IPv6) or a known local hostname."""
+    try:
+        ip = ipaddress.ip_address(host)
+        return ip.is_private or ip.is_loopback or ip.is_link_local
+    except ValueError:
+        # Not an IP literal; treat common local names as private
+        return host in ("localhost", "homeassistant.local")
 
 
 class GoogleFindMyMapView(HomeAssistantView):
@@ -135,7 +145,7 @@ class GoogleFindMyMapView(HomeAssistantView):
                 [entity_id]
             )
 
-            locations = []
+            locations: list[dict[str, Any]] = []
             if entity_id in history:
                 last_seen = None
                 for state in history[entity_id]:
@@ -267,7 +277,7 @@ class GoogleFindMyMapView(HomeAssistantView):
         center_lon = sum(loc["lon"] for loc in locations) / len(locations)
 
         # Generate markers JavaScript
-        markers_js = []
+        markers_js: list[str] = []
         for i, loc in enumerate(locations):
             accuracy = loc.get("accuracy", 0)
 
@@ -680,7 +690,7 @@ class GoogleFindMyMapRedirectView(HomeAssistantView):
 
         # Determine if this is a cloud request or local request
         is_cloud_request = False
-        base_url = None
+        base_url: str | None = None
 
         # Check for Nabu Casa cloud indicators - more comprehensive detection
         cloud_indicators = ['nabu', 'ui.nabu.casa', 'www.nabucasa.com', 'nabucasa.com', 'duckdns.org', 'remote.nabucasa.com']
@@ -696,24 +706,22 @@ class GoogleFindMyMapRedirectView(HomeAssistantView):
         if not is_cloud_request and host_header:
             host_ip = host_header.split(':')[0]  # Remove port if present
             # Check if host is not a local/private IP address
-            if not (
-                host_ip.startswith('192.168.') or
-                host_ip.startswith('10.') or
-                host_ip.startswith('172.') and host_ip.split('.')[1].isdigit() and 16 <= int(host_ip.split('.')[1]) <= 31 or
-                host_ip in ['localhost', '127.0.0.1', 'homeassistant.local'] or
-                host_ip.startswith('127.') or
-                host_ip.startswith('169.254.')  # Link-local
-            ):
+            if not _is_private_host(host_ip):
                 is_cloud_request = True
                 _LOGGER.debug(f"Detected external IP in host header: {host_ip}, treating as cloud request")
 
-        if is_cloud_request:
-            # Use HA's cloud/external URL detection
-            try:
+        # Prefer HA's URL helper first (best practice)
+        try:
+            if is_cloud_request:
+                # Use HA's cloud/external URL detection
                 base_url = get_url(self.hass, prefer_external=True, allow_cloud=True)
                 _LOGGER.info(f"Detected cloud request, using external URL: {base_url}")
-            except Exception as e:
-                _LOGGER.warning(f"Cloud URL detection failed: {e}")
+            else:
+                # Use HA's internal URL for local requests
+                base_url = get_url(self.hass, prefer_external=False, allow_cloud=False, allow_external=False, allow_internal=True)
+                _LOGGER.info(f"Detected local request, using internal URL: {base_url}")
+        except Exception as e:
+            _LOGGER.warning(f"URL detection with get_url failed: {e}")
 
         if not base_url:
             # Use local IP detection for local requests
@@ -750,7 +758,7 @@ class GoogleFindMyMapRedirectView(HomeAssistantView):
         # Build the redirect URL
         redirect_url = f"{base_url}/api/googlefindmy/map/{device_id}?token={auth_token}"
 
-        _LOGGER.info(f"Redirecting to: {redirect_url}")
+        _LOGGER.debug(f"Redirecting to: {redirect_url}")
 
         # Return a 302 redirect response
         return web.Response(status=302, headers={'Location': redirect_url})
