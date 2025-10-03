@@ -48,6 +48,14 @@ class FcmReceiver:
             )
 
             self.credentials = get_cached_value('fcm_credentials')
+            # PATCH: Normalize credentials if stored as JSON string to ensure consistent downstream type.
+            if isinstance(self.credentials, str):
+                try:
+                    import json
+                    self.credentials = json.loads(self.credentials)
+                except Exception:
+                    # Leave as-is; read-path hardening handles non-dict values elsewhere.
+                    pass
             self.pc = FcmPushClient(self._on_notification, fcm_config, self.credentials, self._on_credentials_updated)
         except Exception as e:
             print(f"[FCMReceiver] Initialization error: {e}")
@@ -170,7 +178,17 @@ class FcmReceiver:
 
 
     def _on_credentials_updated(self, creds):
-        self.credentials = creds
+        # PATCH: Normalize credentials if provided as JSON string; ensures consistent dict type for downstream consumers.
+        creds_to_store = creds
+        if isinstance(creds_to_store, str):
+            try:
+                import json
+                creds_to_store = json.loads(creds_to_store)
+            except Exception:
+                # If parsing fails, store raw value; read-path hardening must cope with it.
+                pass
+
+        self.credentials = creds_to_store
 
         # Also store to disk
         set_cached_value('fcm_credentials', self.credentials)

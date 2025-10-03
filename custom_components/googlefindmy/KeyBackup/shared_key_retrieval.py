@@ -31,6 +31,12 @@ def _retrieve_shared_key():
         # Try to find any key that might work as a shared key
         # Look for keys in FCM credentials that might serve as shared keys
         fcm_creds = all_cached.get('fcm_credentials', {})
+        if isinstance(fcm_creds, str):
+            import json
+            try:
+                fcm_creds = json.loads(fcm_creds)
+            except Exception:
+                fcm_creds = {}
         if 'keys' in fcm_creds and 'private' in fcm_creds['keys']:
             print("[SharedKeyRetrieval] Using FCM private key as shared key fallback")
             # Use first 32 bytes of the private key as shared key

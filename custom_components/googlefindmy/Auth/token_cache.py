@@ -13,6 +13,16 @@ except ImportError:
 
 SECRETS_FILE = 'secrets.json'
 
+# PATCH: Helper to normalize FCM credentials when stored as a JSON string.
+def _normalize_fcm_credentials(value):
+    """Normalize 'fcm_credentials' to a dict if it's a JSON string."""
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except Exception:
+            return value
+    return value
+
 def get_cached_value_or_set(name: str, generator: callable):
 
     existing_value = get_cached_value(name)
@@ -44,6 +54,11 @@ def get_cached_value(name: str):
     # Check in-memory cache first (for Home Assistant)
     value = get_from_memory_cache(name)
     if value is not None:
+        # PATCH: Normalize 'fcm_credentials' read from memory cache.
+        if name == 'fcm_credentials':
+            value = _normalize_fcm_credentials(value)
+            # Keep memory cache consistent with normalized type.
+            _memory_cache[name] = value
         return value
     
     # Fall back to synchronous file access (for non-async contexts)
@@ -56,6 +71,10 @@ def get_cached_value(name: str):
                 data = json.load(file)
                 value = data.get(name)
                 if value:
+                    # PATCH: Normalize 'fcm_credentials' read from file.
+                    if name == 'fcm_credentials':
+                        value = _normalize_fcm_credentials(value)
+                        _memory_cache[name] = value
                     return value
             except json.JSONDecodeError:
                 return None
@@ -65,6 +84,10 @@ async def async_get_cached_value(name: str):
     # Check in-memory cache first (for Home Assistant)
     value = get_from_memory_cache(name)
     if value is not None:
+        # PATCH: Normalize 'fcm_credentials' read from memory cache (async path).
+        if name == 'fcm_credentials':
+            value = _normalize_fcm_credentials(value)
+            _memory_cache[name] = value
         return value
     
     # Use async file operations if available
@@ -82,6 +105,9 @@ async def async_get_cached_value(name: str):
                     data = json.loads(content)
                     value = data.get(name)
                     if value:
+                        # PATCH: Normalize 'fcm_credentials' read from file (async path).
+                        if name == 'fcm_credentials':
+                            value = _normalize_fcm_credentials(value)
                         # Update in-memory cache
                         _memory_cache[name] = value
                         return value
@@ -95,11 +121,16 @@ async def async_get_cached_value(name: str):
                         data = json.load(file)
                         value = data.get(name)
                         if value:
-                            _memory_cache[name] = value
                             return value
                     except json.JSONDecodeError:
                         return None
-            return await loop.run_in_executor(None, read_file)
+            value = await loop.run_in_executor(None, read_file)
+            if value and name == 'fcm_credentials':
+                # PATCH: Normalize after executor read.
+                value = _normalize_fcm_credentials(value)
+            if value:
+                _memory_cache[name] = value
+                return value
     return None
 
 
@@ -207,7 +238,12 @@ def get_all_cached_values():
     """Get all cached values for debugging."""
     # Return from memory cache if available
     if _memory_cache:
-        return _memory_cache.copy()
+        # PATCH: Normalize 'fcm_credentials' in memory snapshot.
+        data = _memory_cache.copy()
+        if 'fcm_credentials' in data:
+            data['fcm_credentials'] = _normalize_fcm_credentials(data['fcm_credentials'])
+            _memory_cache['fcm_credentials'] = data['fcm_credentials']
+        return data
     
     secrets_file = _get_secrets_file()
     
@@ -215,6 +251,10 @@ def get_all_cached_values():
         with open(secrets_file, 'r') as file:
             try:
                 data = json.load(file)
+                # PATCH: Normalize 'fcm_credentials' read from file.
+                if 'fcm_credentials' in data:
+                    data['fcm_credentials'] = _normalize_fcm_credentials(data['fcm_credentials'])
+                    _memory_cache['fcm_credentials'] = data['fcm_credentials']
                 return data
             except json.JSONDecodeError:
                 return {}
@@ -224,7 +264,12 @@ async def async_get_all_cached_values():
     """Get all cached values for debugging (async version)."""
     # Return from memory cache if available
     if _memory_cache:
-        return _memory_cache.copy()
+        # PATCH: Normalize 'fcm_credentials' in memory snapshot (async path).
+        data = _memory_cache.copy()
+        if 'fcm_credentials' in data:
+            data['fcm_credentials'] = _normalize_fcm_credentials(data['fcm_credentials'])
+            _memory_cache['fcm_credentials'] = data['fcm_credentials']
+        return data
     
     secrets_file = _get_secrets_file()
     
@@ -237,6 +282,9 @@ async def async_get_all_cached_values():
                 try:
                     content = await file.read()
                     data = json.loads(content)
+                    # PATCH: Normalize 'fcm_credentials' read from file (async path).
+                    if 'fcm_credentials' in data:
+                        data['fcm_credentials'] = _normalize_fcm_credentials(data['fcm_credentials'])
                     # Update memory cache
                     set_memory_cache(data)
                     return data
@@ -248,11 +296,15 @@ async def async_get_all_cached_values():
                 with open(secrets_file, 'r') as file:
                     try:
                         data = json.load(file)
-                        set_memory_cache(data)
                         return data
                     except json.JSONDecodeError:
                         return {}
-            return await loop.run_in_executor(None, read_file)
+            data = await loop.run_in_executor(None, read_file)
+            if data and 'fcm_credentials' in data:
+                # PATCH: Normalize after executor read.
+                data['fcm_credentials'] = _normalize_fcm_credentials(data['fcm_credentials'])
+            set_memory_cache(data or {})
+            return data
     return {}
 
 # Global variable to store in-memory secrets for Home Assistant
@@ -280,6 +332,9 @@ async def async_load_cache_from_file():
                 try:
                     content = await file.read()
                     data = json.loads(content)
+                    # PATCH: Normalize 'fcm_credentials' during bulk load.
+                    if 'fcm_credentials' in data:
+                        data['fcm_credentials'] = _normalize_fcm_credentials(data['fcm_credentials'])
                     set_memory_cache(data)
                     return data
                 except json.JSONDecodeError:
@@ -290,9 +345,13 @@ async def async_load_cache_from_file():
                 with open(secrets_file, 'r') as file:
                     try:
                         data = json.load(file)
-                        set_memory_cache(data)
                         return data
                     except json.JSONDecodeError:
                         return {}
-            return await loop.run_in_executor(None, read_file)
+            data = await loop.run_in_executor(None, read_file)
+            if data and 'fcm_credentials' in data:
+                # PATCH: Normalize after executor read.
+                data['fcm_credentials'] = _normalize_fcm_credentials(data['fcm_credentials'])
+            set_memory_cache(data or {})
+            return data
     return {}

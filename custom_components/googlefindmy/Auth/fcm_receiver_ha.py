@@ -132,7 +132,7 @@ class FcmReceiverHA:
             _LOGGER.debug(f"Registered coordinator for background FCM updates")
     
     def unregister_coordinator(self, coordinator) -> None:
-        """Unregister a coordinator from background location updates."""
+        """Unregister a coordinator from background FCM updates."""
         if coordinator in self.coordinators:
             self.coordinators.remove(coordinator)
             _LOGGER.debug(f"Unregistered coordinator from background FCM updates")
@@ -379,7 +379,15 @@ class FcmReceiverHA:
     
     def _on_credentials_updated(self, creds):
         """Handle credential updates."""
-        self.credentials = creds
+        # PATCH: Normalize credentials if provided as a JSON string to ensure consistent dict type for downstream consumers and cache.
+        creds_to_store = creds
+        if isinstance(creds_to_store, str):
+            try:
+                import json
+                creds_to_store = json.loads(creds_to_store)
+            except Exception:
+                _LOGGER.debug("Received FCM credentials as non-JSON string; storing raw value (read-path is hardened).")
+        self.credentials = creds_to_store
         # Schedule async update to avoid blocking I/O in callback
         asyncio.create_task(self._async_save_credentials())
         _LOGGER.info("FCM credentials updated")
