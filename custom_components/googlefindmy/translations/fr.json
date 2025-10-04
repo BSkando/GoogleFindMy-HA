@@ -1,0 +1,94 @@
+{
+  "title": "Google Find My Device",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Authentification Google Find My Device",
+        "description": "Choisissez votre méthode d’authentification. La méthode 1 est recommandée si vous pouvez exécuter GoogleFindMyTools sur un ordinateur avec Chrome.",
+        "data": {
+          "auth_method": "Méthode d’authentification"
+        }
+      },
+      "secrets_json": {
+        "title": "Méthode 1 : GoogleFindMyTools secrets.json",
+        "description": "Exécutez GoogleFindMyTools (Chrome) pour générer des jetons d’authentification, puis collez ci-dessous le contenu complet du fichier Auth/secrets.json.",
+        "data": {
+          "secrets_json": "Contenu du fichier secrets.json"
+        }
+      },
+      "individual_tokens": {
+        "title": "Méthode 2 : Jeton OAuth individuel",
+        "description": "Saisissez votre jeton OAuth et votre adresse e-mail Google obtenus lors d’un processus d’authentification manuel.",
+        "data": {
+          "oauth_token": "Jeton OAuth",
+          "google_email": "Adresse e-mail Google"
+        }
+      },
+      "device_selection": {
+        "title": "Sélection des appareils et interrogation",
+        "description": "Sélectionnez les appareils à suivre et configurez les paramètres d’interrogation :\n• Intervalle d’interrogation de position : fréquence de démarrage d’un nouveau cycle (60–3600 secondes)\n• Délai entre les interrogations d’appareil : intervalle entre les requêtes pour chaque appareil au sein d’un cycle (1–60 secondes)\n\nL’intégration interroge les appareils de manière séquentielle et demande les données de position pour chaque appareil avec le délai spécifié.",
+        "data": {
+          "tracked_devices": "Appareils suivis",
+          "location_poll_interval": "Intervalle d’interrogation de position (s)",
+          "device_poll_delay": "Délai entre les interrogations d’appareil (s)"
+        }
+      }
+    },
+    "error": {
+      "auth_failed": "Échec de l’authentification. Veuillez réessayer.",
+      "invalid_token": "Jeton invalide ou champs requis manquants.",
+      "invalid_json": "Format JSON invalide dans le contenu de secrets.json.",
+      "no_devices": "Aucun appareil trouvé. Assurez-vous que « Localiser mon appareil » est activé sur votre compte Google.",
+      "cannot_connect": "Échec de la connexion à l’API Google. Il peut s’agir d’un problème temporaire — réessayez plus tard.",
+      "unknown": "Erreur inattendue."
+    },
+    "abort": {
+      "already_configured": "Google Find My Device est déjà configuré.",
+      "cannot_connect": "Échec de la connexion à Google Find My Device."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options",
+        "description": "Modifier les paramètres de suivi :\n• Intervalle d’interrogation de position : fréquence des requêtes de position (60–3600 secondes)\n• Délai entre les interrogations d’appareil : intervalle entre les requêtes par appareil (1–60 secondes)\n• Précision minimale : ignorer les positions moins précises que cette valeur (25–500 mètres)\n• Seuil de mouvement : mouvement minimal déclenchant une mise à jour de la position (10–200 mètres)\n\nFiltre Google Home :\n• Activez pour regrouper les détections Google Home dans la zone « Domicile »\n• Les mots-clés acceptent les correspondances partielles (séparés par des virgules)\n• Exemple : « nest » correspond à « Kitchen Nest Mini »",
+        "data": {
+          "tracked_devices": "Appareils suivis",
+          "location_poll_interval": "Intervalle d’interrogation de position (s)",
+          "device_poll_delay": "Délai entre les interrogations d’appareil (s)",
+          "min_accuracy_threshold": "Précision minimale (m)",
+          "movement_threshold": "Seuil de mouvement (m)",
+          "google_home_filter_enabled": "Filtrer les appareils Google Home",
+          "google_home_filter_keywords": "Mots-clés du filtre (séparés par des virgules)",
+          "enable_stats_entities": "Créer des entités de statistiques",
+          "map_view_token_expiration": "Activer l’expiration du jeton de la vue carte"
+        },
+        "data_description": {
+          "map_view_token_expiration": "Lorsqu’elle est activée, les jetons de la vue carte expirent après 1 semaine. Lorsqu’elle est désactivée (par défaut), ils n’expirent pas."
+        }
+      }
+    }
+  },
+  "services": {
+    "locate_device": {
+      "name": "Localiser l’appareil",
+      "description": "Obtenir la position actuelle d’un appareil Google Find My.",
+      "fields": {
+        "device_id": {
+          "name": "ID de l’appareil",
+          "description": "L’ID de l’appareil à localiser."
+        }
+      }
+    },
+    "play_sound": {
+      "name": "Émettre un son",
+      "description": "Jouer un son sur un appareil Google Find My.",
+      "fields": {
+        "device_id": {
+          "name": "ID de l’appareil",
+          "description": "L’ID de l’appareil sur lequel le son sera joué."
+        }
+      }
+    }
+  }
+}

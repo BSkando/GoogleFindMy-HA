@@ -1,0 +1,94 @@
+{
+  "title": "Google Find My Device",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Uwierzytelnianie Google Find My Device",
+        "description": "Wybierz metodę uwierzytelniania. Metoda 1 jest zalecana, jeśli możesz uruchomić GoogleFindMyTools na komputerze z przeglądarką Chrome.",
+        "data": {
+          "auth_method": "Metoda uwierzytelniania"
+        }
+      },
+      "secrets_json": {
+        "title": "Metoda 1: GoogleFindMyTools secrets.json",
+        "description": "Uruchom GoogleFindMyTools (Chrome), aby wygenerować tokeny uwierzytelniające, a następnie wklej poniżej pełną zawartość pliku Auth/secrets.json.",
+        "data": {
+          "secrets_json": "Zawartość pliku secrets.json"
+        }
+      },
+      "individual_tokens": {
+        "title": "Metoda 2: Indywidualny token OAuth",
+        "description": "Wprowadź token OAuth i adres e-mail Google uzyskane podczas ręcznej autoryzacji.",
+        "data": {
+          "oauth_token": "Token OAuth",
+          "google_email": "Adres e-mail Google"
+        }
+      },
+      "device_selection": {
+        "title": "Wybór urządzeń i odpytywania",
+        "description": "Wybierz urządzenia do śledzenia i skonfiguruj parametry odpytywania:\n• Interwał odpytywania lokalizacji: jak często rozpoczynać nowy cykl (60–3600 sekund)\n• Opóźnienie między odpytywaniem urządzeń: odstęp między zapytaniami dla poszczególnych urządzeń w cyklu (1–60 sekund)\n\nIntegracja odpyta urządzenia sekwencyjnie, żądając danych lokalizacji dla każdego urządzenia z podanym opóźnieniem.",
+        "data": {
+          "tracked_devices": "Śledzone urządzenia",
+          "location_poll_interval": "Interwał odpytywania lokalizacji (s)",
+          "device_poll_delay": "Opóźnienie między odpytywaniem urządzeń (s)"
+        }
+      }
+    },
+    "error": {
+      "auth_failed": "Uwierzytelnianie nie powiodło się. Spróbuj ponownie.",
+      "invalid_token": "Podano nieprawidłowy token lub brakuje wymaganych pól.",
+      "invalid_json": "Nieprawidłowy format JSON w zawartości pliku secrets.json.",
+      "no_devices": "Nie znaleziono urządzeń. Upewnij się, że usługa „Znajdź moje urządzenie” jest włączona na Twoim koncie Google.",
+      "cannot_connect": "Nie udało się połączyć z interfejsem Google API. Może to być problem tymczasowy — spróbuj ponownie później.",
+      "unknown": "Wystąpił nieoczekiwany błąd."
+    },
+    "abort": {
+      "already_configured": "Google Find My Device jest już skonfigurowane.",
+      "cannot_connect": "Nie udało się połączyć z Google Find My Device."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opcje",
+        "description": "Dostosuj ustawienia śledzenia:\n• Interwał odpytywania lokalizacji: jak często pobierać pozycje (60–3600 sekund)\n• Opóźnienie między odpytywaniem urządzeń: odstęp między zapytaniami (1–60 sekund)\n• Minimalna dokładność: ignoruj pozycje gorsze niż ta wartość (25–500 metrów)\n• Próg ruchu: minimalny ruch wyzwalający aktualizację pozycji (10–200 metrów)\n\nFiltr Google Home:\n• Włącz, aby grupować wykrycia Google Home w strefie „Dom”\n• Słowa kluczowe wspierają dopasowania częściowe (oddzielone przecinkami)\n• Przykład: „nest” pasuje do „Kitchen Nest Mini”",
+        "data": {
+          "tracked_devices": "Śledzone urządzenia",
+          "location_poll_interval": "Interwał odpytywania lokalizacji (s)",
+          "device_poll_delay": "Opóźnienie między odpytywaniem urządzeń (s)",
+          "min_accuracy_threshold": "Minimalna dokładność (m)",
+          "movement_threshold": "Próg ruchu (m)",
+          "google_home_filter_enabled": "Filtruj urządzenia Google Home",
+          "google_home_filter_keywords": "Słowa kluczowe filtra (oddzielone przecinkami)",
+          "enable_stats_entities": "Twórz encje statystyczne",
+          "map_view_token_expiration": "Włącz wygasanie tokenu widoku mapy"
+        },
+        "data_description": {
+          "map_view_token_expiration": "Po włączeniu tokeny widoku mapy wygasają po 1 tygodniu. Po wyłączeniu (domyślnie) nie wygasają."
+        }
+      }
+    }
+  },
+  "services": {
+    "locate_device": {
+      "name": "Zlokalizuj urządzenie",
+      "description": "Pobierz bieżącą lokalizację urządzenia Google Find My.",
+      "fields": {
+        "device_id": {
+          "name": "ID urządzenia",
+          "description": "Identyfikator urządzenia do zlokalizowania."
+        }
+      }
+    },
+    "play_sound": {
+      "name": "Odtwórz dźwięk",
+      "description": "Odtwórz dźwięk na urządzeniu Google Find My.",
+      "fields": {
+        "device_id": {
+          "name": "ID urządzenia",
+          "description": "Identyfikator urządzenia, na którym zostanie odtworzony dźwięk."
+        }
+      }
+    }
+  }
+}

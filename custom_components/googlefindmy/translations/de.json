@@ -1,0 +1,94 @@
+{
+  "title": "Google Find My Device",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Google Find My Device – Anmeldung",
+        "description": "Wähle die Authentifizierungsmethode. Methode 1 wird empfohlen, wenn du GoogleFindMyTools auf einem Rechner mit Chrome ausführen kannst.",
+        "data": {
+          "auth_method": "Authentifizierungsmethode"
+        }
+      },
+      "secrets_json": {
+        "title": "Methode 1: GoogleFindMyTools secrets.json",
+        "description": "Führe GoogleFindMyTools (Chrome) aus, um Authentifizierungs-Tokens zu erzeugen, und füge unten den vollständigen Inhalt der Datei Auth/secrets.json ein.",
+        "data": {
+          "secrets_json": "Inhalt der secrets.json"
+        }
+      },
+      "individual_tokens": {
+        "title": "Methode 2: Einzelner OAuth-Token",
+        "description": "Gib deinen OAuth-Token und deine Google-E-Mail-Adresse aus dem manuellen Authentifizierungsprozess ein.",
+        "data": {
+          "oauth_token": "OAuth-Token",
+          "google_email": "Google-E-Mail-Adresse"
+        }
+      },
+      "device_selection": {
+        "title": "Geräte & Abfrage",
+        "description": "Wähle die zu trackenden Geräte und konfiguriere die Abfrageparameter:\n• Abfrageintervall Position: Start eines neuen Abfragezyklus (60–3600 Sekunden)\n• Verzögerung zwischen Geräteabfragen: Abstand zwischen Abfragen einzelner Geräte innerhalb eines Zyklus (1–60 Sekunden)\n\nDie Integration ruft die Geräte nacheinander ab und fordert für jedes Gerät mit der angegebenen Verzögerung Positionsdaten an.",
+        "data": {
+          "tracked_devices": "Getrackte Geräte",
+          "location_poll_interval": "Abfrageintervall Position (s)",
+          "device_poll_delay": "Verzögerung zwischen Geräteabfragen (s)"
+        }
+      }
+    },
+    "error": {
+      "auth_failed": "Anmeldung fehlgeschlagen. Bitte erneut versuchen.",
+      "invalid_token": "Ungültiger Token oder erforderliche Felder fehlen.",
+      "invalid_json": "Ungültiges JSON im Inhalt der secrets.json.",
+      "no_devices": "Keine Geräte gefunden. Bitte stelle sicher, dass „Find My Device“ im Google-Konto aktiviert ist.",
+      "cannot_connect": "Verbindung zur Google-API fehlgeschlagen. Eventuell ein temporäres Problem – bitte später erneut versuchen.",
+      "unknown": "Unerwarteter Fehler."
+    },
+    "abort": {
+      "already_configured": "Google Find My Device ist bereits konfiguriert.",
+      "cannot_connect": "Verbindung zu Google Find My Device fehlgeschlagen."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Optionen",
+        "description": "Tracking-Einstellungen anpassen:\n• Abfrageintervall Position: Wie häufig Positionen abgefragt werden (60–3600 Sekunden)\n• Verzögerung zwischen Geräteabfragen: Abstand zwischen Abfragen einzelner Geräte (1–60 Sekunden)\n• Mindestgenauigkeit: Positionen schlechter als dieser Wert ignorieren (25–500 Meter)\n• Bewegungsschwelle: Mindestbewegung, um ein Positions-Update auszulösen (10–200 Meter)\n\nGoogle-Home-Filter:\n• Aktivieren, um Google-Home-Erkennungen der Home-Zone zuzuordnen\n• Keywords unterstützen Teiltreffer (kommagetrennt)\n• Beispiel: „nest“ passt zu „Küche Nest Mini“",
+        "data": {
+          "tracked_devices": "Getrackte Geräte",
+          "location_poll_interval": "Abfrageintervall Position (s)",
+          "device_poll_delay": "Verzögerung zwischen Geräteabfragen (s)",
+          "min_accuracy_threshold": "Mindestgenauigkeit (m)",
+          "movement_threshold": "Bewegungsschwelle (m)",
+          "google_home_filter_enabled": "Google-Home-Geräte filtern",
+          "google_home_filter_keywords": "Filter-Keywords (kommagetrennt)",
+          "enable_stats_entities": "Statistik-Entitäten erstellen",
+          "map_view_token_expiration": "Ablaufendes Map-View-Token verwenden"
+        },
+        "data_description": {
+          "map_view_token_expiration": "Bei Aktivierung laufen Map-View-Tokens nach 1 Woche ab. Deaktiviert (Standard) bedeutet: kein Ablauf."
+        }
+      }
+    }
+  },
+  "services": {
+    "locate_device": {
+      "name": "Gerät lokalisieren",
+      "description": "Ermittelt die aktuelle Position eines Google-Find-My-Geräts.",
+      "fields": {
+        "device_id": {
+          "name": "Geräte-ID",
+          "description": "Die ID des zu lokalisierenden Geräts."
+        }
+      }
+    },
+    "play_sound": {
+      "name": "Ton abspielen",
+      "description": "Spielt einen Ton auf einem Google-Find-My-Gerät ab.",
+      "fields": {
+        "device_id": {
+          "name": "Geräte-ID",
+          "description": "Die ID des Geräts, auf dem der Ton abgespielt wird."
+        }
+      }
+    }
+  }
+}

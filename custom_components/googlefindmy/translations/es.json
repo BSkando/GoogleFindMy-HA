@@ -1,0 +1,94 @@
+{
+  "title": "Google Find My Device",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Autenticación de Google Find My Device",
+        "description": "Elige el método de autenticación. El método 1 se recomienda si puedes ejecutar GoogleFindMyTools en un ordenador con Chrome.",
+        "data": {
+          "auth_method": "Método de autenticación"
+        }
+      },
+      "secrets_json": {
+        "title": "Método 1: GoogleFindMyTools secrets.json",
+        "description": "Ejecuta GoogleFindMyTools (Chrome) para generar los tokens de autenticación y pega a continuación el contenido completo del archivo Auth/secrets.json.",
+        "data": {
+          "secrets_json": "Contenido del archivo secrets.json"
+        }
+      },
+      "individual_tokens": {
+        "title": "Método 2: Token OAuth individual",
+        "description": "Introduce tu token OAuth y tu dirección de correo de Google obtenidos mediante el proceso de autenticación manual.",
+        "data": {
+          "oauth_token": "Token OAuth",
+          "google_email": "Dirección de correo de Google"
+        }
+      },
+      "device_selection": {
+        "title": "Selección de dispositivos y sondeo",
+        "description": "Selecciona los dispositivos a seguir y configura los parámetros de sondeo:\n• Intervalo de sondeo de ubicación: con qué frecuencia iniciar un nuevo ciclo (60–3600 segundos)\n• Retardo entre sondeos de dispositivos: intervalo entre las consultas de cada dispositivo dentro de un ciclo (1–60 segundos)\n\nLa integración recorre los dispositivos de forma secuencial y solicita datos de ubicación para cada uno con el retardo indicado.",
+        "data": {
+          "tracked_devices": "Dispositivos seguidos",
+          "location_poll_interval": "Intervalo de sondeo de ubicación (s)",
+          "device_poll_delay": "Retardo entre sondeos de dispositivos (s)"
+        }
+      }
+    },
+    "error": {
+      "auth_failed": "Error de autenticación. Vuelve a intentarlo.",
+      "invalid_token": "Token no válido o faltan campos obligatorios.",
+      "invalid_json": "Formato JSON no válido en el contenido de secrets.json.",
+      "no_devices": "No se han encontrado dispositivos. Asegúrate de que «Encontrar mi dispositivo» esté activado en tu cuenta de Google.",
+      "cannot_connect": "No se pudo conectar con la API de Google. Puede ser un problema temporal: inténtalo de nuevo más tarde.",
+      "unknown": "Error inesperado."
+    },
+    "abort": {
+      "already_configured": "Google Find My Device ya está configurado.",
+      "cannot_connect": "No se pudo conectar con Google Find My Device."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opciones",
+        "description": "Modificar la configuración de seguimiento:\n• Intervalo de sondeo de ubicación: frecuencia de consulta de ubicaciones (60–3600 segundos)\n• Retardo entre sondeos de dispositivos: intervalo entre consultas por dispositivo (1–60 segundos)\n• Precisión mínima: ignorar ubicaciones peores que este valor (25–500 metros)\n• Umbral de movimiento: movimiento mínimo que desencadena una actualización de ubicación (10–200 metros)\n\nFiltro de Google Home:\n• Activar para agrupar las detecciones de Google Home en la zona «Hogar»\n• Las palabras clave aceptan coincidencias parciales (separadas por comas)\n• Ejemplo: «nest» coincide con «Kitchen Nest Mini»",
+        "data": {
+          "tracked_devices": "Dispositivos seguidos",
+          "location_poll_interval": "Intervalo de sondeo de ubicación (s)",
+          "device_poll_delay": "Retardo entre sondeos de dispositivos (s)",
+          "min_accuracy_threshold": "Precisión mínima (m)",
+          "movement_threshold": "Umbral de movimiento (m)",
+          "google_home_filter_enabled": "Filtrar dispositivos Google Home",
+          "google_home_filter_keywords": "Palabras clave del filtro (separadas por comas)",
+          "enable_stats_entities": "Crear entidades de estadísticas",
+          "map_view_token_expiration": "Activar caducidad del token de la vista de mapa"
+        },
+        "data_description": {
+          "map_view_token_expiration": "Si está activado, los tokens de la vista de mapa caducan tras 1 semana. Si está desactivado (por defecto), no caducan."
+        }
+      }
+    }
+  },
+  "services": {
+    "locate_device": {
+      "name": "Localizar dispositivo",
+      "description": "Obtiene la ubicación actual de un dispositivo de Google Find My.",
+      "fields": {
+        "device_id": {
+          "name": "ID del dispositivo",
+          "description": "El identificador del dispositivo que se desea localizar."
+        }
+      }
+    },
+    "play_sound": {
+      "name": "Reproducir sonido",
+      "description": "Reproduce un sonido en un dispositivo de Google Find My.",
+      "fields": {
+        "device_id": {
+          "name": "ID del dispositivo",
+          "description": "El identificador del dispositivo en el que se reproducirá el sonido."
+        }
+      }
+    }
+  }
+}

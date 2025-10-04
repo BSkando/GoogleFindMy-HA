@@ -1,0 +1,94 @@
+{
+  "title": "Google Find My Device",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Google Find My Device Authentication",
+        "description": "Choose your authentication method. Method 1 is recommended if you can run GoogleFindMyTools on a computer with Chrome.",
+        "data": {
+          "auth_method": "Authentication Method"
+        }
+      },
+      "secrets_json": {
+        "title": "Method 1: GoogleFindMyTools secrets.json",
+        "description": "Run GoogleFindMyTools (Chrome) to generate authentication tokens, then paste the full contents of the Auth/secrets.json file below.",
+        "data": {
+          "secrets_json": "Contents of secrets.json file"
+        }
+      },
+      "individual_tokens": {
+        "title": "Method 2: Individual OAuth Token",
+        "description": "Enter your OAuth token and Google email address obtained from a manual authentication process.",
+        "data": {
+          "oauth_token": "OAuth Token",
+          "google_email": "Google Email Address"
+        }
+      },
+      "device_selection": {
+        "title": "Select devices and polling",
+        "description": "Select the devices to track and configure the polling parameters:\n• Location poll interval: How often to start a new polling cycle (60–3600 seconds)\n• Device poll delay: Delay between individual device polls within a cycle (1–60 seconds)\n\nThe integration cycles through devices sequentially, requesting location data for each device with the specified delay.",
+        "data": {
+          "tracked_devices": "Tracked devices",
+          "location_poll_interval": "Location poll interval (s)",
+          "device_poll_delay": "Device poll delay (s)"
+        }
+      }
+    },
+    "error": {
+      "auth_failed": "Authentication failed. Please try again.",
+      "invalid_token": "Invalid token provided or required fields are missing.",
+      "invalid_json": "Invalid JSON format in secrets.json content.",
+      "no_devices": "No devices found. Please ensure that Find My Device is enabled on your Google account.",
+      "cannot_connect": "Failed to connect to the Google API. This may be temporary — please try again later.",
+      "unknown": "Unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "Google Find My Device is already configured.",
+      "cannot_connect": "Failed to connect to Google Find My Device."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options",
+        "description": "Modify tracking settings:\n• Location poll interval: How often to poll for locations (60–3600 seconds)\n• Device poll delay: Delay between device polls (1–60 seconds)\n• Min accuracy threshold: Ignore locations worse than this (25–500 meters)\n• Movement threshold: Minimum movement to trigger a location update (10–200 meters)\n\nGoogle Home Filter:\n• Enable to group Google Home detections into the Home zone\n• Keywords support partial matching (comma-separated)\n• Example: 'nest' matches 'Kitchen Nest Mini'",
+        "data": {
+          "tracked_devices": "Tracked devices",
+          "location_poll_interval": "Location poll interval (s)",
+          "device_poll_delay": "Device poll delay (s)",
+          "min_accuracy_threshold": "Minimum accuracy (m)",
+          "movement_threshold": "Movement threshold (m)",
+          "google_home_filter_enabled": "Filter Google Home devices",
+          "google_home_filter_keywords": "Filter keywords (comma-separated)",
+          "enable_stats_entities": "Create statistics entities",
+          "map_view_token_expiration": "Enable map view token expiration"
+        },
+        "data_description": {
+          "map_view_token_expiration": "When enabled, map view tokens expire after 1 week. When disabled (default), tokens do not expire."
+        }
+      }
+    }
+  },
+  "services": {
+    "locate_device": {
+      "name": "Locate Device",
+      "description": "Get the current location of a Google Find My device.",
+      "fields": {
+        "device_id": {
+          "name": "Device ID",
+          "description": "The ID of the device to locate."
+        }
+      }
+    },
+    "play_sound": {
+      "name": "Play Sound",
+      "description": "Play a sound on a Google Find My device.",
+      "fields": {
+        "device_id": {
+          "name": "Device ID",
+          "description": "The ID of the device on which the sound will be played."
+        }
+      }
+    }
+  }
+}
