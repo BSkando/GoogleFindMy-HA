@@ -55,22 +55,42 @@ class GoogleFindMyPlaySoundButton(CoordinatorEntity, ButtonEntity):
         from homeassistant.helpers.network import get_url
 
         try:
-            # Try to get the best available URL, preferring external access
-            base_url = get_url(self.hass, prefer_external=True, allow_cloud=True, allow_external=True, allow_internal=True)
+            # Resolve a single absolute base URL for the device registry entry.
+            # Runs outside an HTTP request, so we intentionally do NOT use require_current_request.
+            # Home Assistant selects between internal/external/cloud based on configured URLs
+            # and the 'prefer_external' hint; the stored value remains until the device/integration
+            # is reloaded or HA restarts.
+            base_url = get_url(
+                self.hass,
+                prefer_external=True,
+                allow_cloud=True,
+                allow_external=True,
+                allow_internal=True,
+            )
         except Exception:
             base_url = "http://homeassistant.local:8123"
 
         # Generate auth token for map access
         auth_token = self._get_map_token()
+        # Build relative map path (consistent with sensor.py)
+        path = self._build_map_path(self._device["id"], auth_token, redirect=False)
 
         return {
             "identifiers": {(DOMAIN, self._device["id"])},
             "name": self._device["name"],
             "manufacturer": "Google",
             "model": "Find My Device",
-            "configuration_url": f"{base_url}/api/googlefindmy/map/{self._device['id']}?token={auth_token}",
+            # Minimal change: return **relative** configuration_url.
+            # Open inside the current HA origin (works local/cloud, avoids IP/http-Mix).
+            "configuration_url": f"{base_url}{path}",
             "hw_version": self._device["id"],
         }
+
+    def _build_map_path(self, device_id: str, token: str, *, redirect: bool = False) -> str:
+        """Return the map URL *path* (no scheme/host)."""
+        if redirect:
+            return f"/api/googlefindmy/redirect_map/{device_id}?token={token}"
+        return f"/api/googlefindmy/map/{device_id}?token={token}"
 
     def _get_map_token(self) -> str:
         """Generate a simple token for map authentication.
@@ -109,7 +129,7 @@ class GoogleFindMyPlaySoundButton(CoordinatorEntity, ButtonEntity):
         device_name = self._device["name"]
 
         _LOGGER.debug(f"Play sound button pressed for {device_name} ({device_id})")
-        
+
         try:
             result = await self.coordinator.async_play_sound(device_id)
             if result:

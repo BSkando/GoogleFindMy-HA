@@ -6,27 +6,15 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from aiohttp import web
-import ipaddress  # IPv4/IPv6 checks for private/link-local/loopback
 
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
-
-
-def _is_private_host(host: str) -> bool:
-    """Return True if host is private/loopback/link-local (IPv4/IPv6) or a known local hostname."""
-    try:
-        ip = ipaddress.ip_address(host)
-        return ip.is_private or ip.is_loopback or ip.is_link_local
-    except ValueError:
-        # Not an IP literal; treat common local names as private
-        return host in ("localhost", "homeassistant.local")
 
 
 class GoogleFindMyMapView(HomeAssistantView):
@@ -42,8 +30,8 @@ class GoogleFindMyMapView(HomeAssistantView):
 
     async def get(self, request: web.Request, device_id: str) -> web.Response:
         """Generate and serve a map for the device."""
-        # Simple authentication check via query parameter
-        auth_token = request.query.get('token')
+        # Simple authentication check via query parameter (unchanged behavior)
+        auth_token = request.query.get("token")
         if not auth_token or auth_token != self._get_simple_token():
             return web.Response(
                 text="""
@@ -56,65 +44,72 @@ class GoogleFindMyMapView(HomeAssistantView):
                 </body>
                 </html>
                 """,
-                content_type='text/html',
-                status=403
+                content_type="text/html",
+                status=403,
             )
 
         try:
             # Get device name from coordinator
             coordinator_data = self.hass.data.get(DOMAIN, {})
             device_name = "Unknown Device"
-            _LOGGER.debug(f"Looking for device_id '{device_id}' in coordinator data")
+            _LOGGER.debug("Looking for device_id '%s' in coordinator data", device_id)
 
             for entry_id, coordinator in coordinator_data.items():
                 if entry_id == "config_data":
                     continue
-                if hasattr(coordinator, 'data') and coordinator.data:
-                    _LOGGER.debug(f"Coordinator {entry_id} has {len(coordinator.data)} devices")
+                if hasattr(coordinator, "data") and coordinator.data:
+                    _LOGGER.debug("Coordinator %s has %d devices", entry_id, len(coordinator.data))
                     for device in coordinator.data:
-                        device_id_in_data = device.get('id')
-                        device_name_in_data = device.get('name')
-                        _LOGGER.debug(f"Found device id='{device_id_in_data}' name='{device_name_in_data}'")
+                        device_id_in_data = device.get("id")
+                        device_name_in_data = device.get("name")
+                        _LOGGER.debug("Found device id='%s' name='%s'", device_id_in_data, device_name_in_data)
                         if device_id_in_data == device_id:
-                            device_name = device.get('name', 'Unknown Device')
-                            _LOGGER.debug(f"Matched device '{device_name}' for id '{device_id}'")
+                            device_name = device.get("name", "Unknown Device")
+                            _LOGGER.debug("Matched device '%s' for id '%s'", device_name, device_id)
                             break
                 else:
-                    _LOGGER.debug(f"Coordinator {entry_id} has no data")
+                    _LOGGER.debug("Coordinator %s has no data", entry_id)
 
             # Get location history from Home Assistant
             entity_id = f"device_tracker.{device_id.replace('-', '_').lower()}"
 
             # Try to find the actual entity ID
             entity_registry = async_get_entity_registry(self.hass)
-            _LOGGER.debug(f"Looking for device_tracker entity for device {device_id}")
-            _LOGGER.debug(f"Initial entity_id guess: {entity_id}")
+            _LOGGER.debug("Looking for device_tracker entity for device %s", device_id)
+            _LOGGER.debug("Initial entity_id guess: %s", entity_id)
 
             found_entity = False
             for entity in entity_registry.entities.values():
-                if entity.unique_id and device_id in entity.unique_id and entity.platform == "googlefindmy" and entity.entity_id.startswith("device_tracker."):
-                    _LOGGER.debug(f"Found matching entity: {entity.entity_id} with unique_id: {entity.unique_id}")
+                if (
+                    entity.unique_id
+                    and device_id in entity.unique_id
+                    and entity.platform == "googlefindmy"
+                    and entity.entity_id.startswith("device_tracker.")
+                ):
+                    _LOGGER.debug(
+                        "Found matching entity: %s with unique_id: %s", entity.entity_id, entity.unique_id
+                    )
                     entity_id = entity.entity_id
                     found_entity = True
                     break
 
             if not found_entity:
-                _LOGGER.warning(f"No GoogleFindMy device_tracker entity found for device {device_id}")
+                _LOGGER.warning("No GoogleFindMy device_tracker entity found for device %s", device_id)
             else:
-                _LOGGER.debug(f"Using entity_id: {entity_id}")
+                _LOGGER.debug("Using entity_id: %s", entity_id)
 
             # Get time range from URL parameters
             end_time = dt_util.utcnow()
             start_time = end_time - timedelta(days=7)  # default 7 days
 
             # Parse custom start/end times if provided
-            start_param = request.query.get('start')
-            end_param = request.query.get('end')
-            accuracy_param = request.query.get('accuracy', '0')
+            start_param = request.query.get("start")
+            end_param = request.query.get("end")
+            accuracy_param = request.query.get("accuracy", "0")
 
             if start_param:
                 try:
-                    start_time = datetime.fromisoformat(start_param.replace('Z', '+00:00'))
+                    start_time = datetime.fromisoformat(start_param.replace("Z", "+00:00"))
                     if start_time.tzinfo is None:
                         start_time = start_time.replace(tzinfo=dt_util.UTC)
                 except ValueError:
@@ -122,7 +117,7 @@ class GoogleFindMyMapView(HomeAssistantView):
 
             if end_param:
                 try:
-                    end_time = datetime.fromisoformat(end_param.replace('Z', '+00:00'))
+                    end_time = datetime.fromisoformat(end_param.replace("Z", "+00:00"))
                     if end_time.tzinfo is None:
                         end_time = end_time.replace(tzinfo=dt_util.UTC)
                 except ValueError:
@@ -138,61 +133,63 @@ class GoogleFindMyMapView(HomeAssistantView):
             from homeassistant.components.recorder.history import get_significant_states
 
             history = await self.hass.async_add_executor_job(
-                get_significant_states,
-                self.hass,
-                start_time,
-                end_time,
-                [entity_id]
+                get_significant_states, self.hass, start_time, end_time, [entity_id]
             )
 
             locations: list[dict[str, Any]] = []
             if entity_id in history:
                 last_seen = None
                 for state in history[entity_id]:
-                    if (state.attributes.get("latitude") is not None and
-                        state.attributes.get("longitude") is not None):
-
+                    if (
+                        state.attributes.get("latitude") is not None
+                        and state.attributes.get("longitude") is not None
+                    ):
                         # Skip duplicates based on last_seen attribute
                         current_last_seen = state.attributes.get("last_seen")
                         if current_last_seen and current_last_seen == last_seen:
                             continue
                         last_seen = current_last_seen
 
-                        locations.append({
-                            "lat": state.attributes["latitude"],
-                            "lon": state.attributes["longitude"],
-                            "accuracy": state.attributes.get("gps_accuracy", 0),
-                            "timestamp": state.last_updated.isoformat(),
-                            "last_seen": current_last_seen,
-                            "entity_id": entity_id,
-                            "state": state.state,
-                            "is_own_report": state.attributes.get("is_own_report"),
-                            "semantic_location": state.attributes.get("semantic_location")
-                        })
+                        locations.append(
+                            {
+                                "lat": state.attributes["latitude"],
+                                "lon": state.attributes["longitude"],
+                                "accuracy": state.attributes.get("gps_accuracy", 0),
+                                "timestamp": state.last_updated.isoformat(),
+                                "last_seen": current_last_seen,
+                                "entity_id": entity_id,
+                                "state": state.state,
+                                "is_own_report": state.attributes.get("is_own_report"),
+                                "semantic_location": state.attributes.get("semantic_location"),
+                            }
+                        )
 
             # Generate HTML map
-            html_content = self._generate_map_html(device_name, locations, device_id, start_time, end_time, accuracy_filter)
-
-            return web.Response(
-                text=html_content,
-                content_type="text/html",
-                charset="utf-8"
+            html_content = self._generate_map_html(
+                device_name, locations, device_id, start_time, end_time, accuracy_filter
             )
 
-        except Exception as e:
-            _LOGGER.error(f"Error generating map for device {device_id}: {e}")
-            return web.Response(
-                text=f"Error generating map: {e}",
-                status=500
-            )
+            return web.Response(text=html_content, content_type="text/html", charset="utf-8")
 
-    def _generate_map_html(self, device_name: str, locations: list[dict[str, Any]], device_id: str, start_time: datetime, end_time: datetime, accuracy_filter: int = 0) -> str:
+        except Exception as e:  # noqa: BLE001 - broad except to ensure HTML error response
+            _LOGGER.error("Error generating map for device %s: %s", device_id, e)
+            return web.Response(text=f"Error generating map: {e}", status=500)
+
+    def _generate_map_html(
+        self,
+        device_name: str,
+        locations: list[dict[str, Any]],
+        device_id: str,
+        start_time: datetime,
+        end_time: datetime,
+        accuracy_filter: int = 0,
+    ) -> str:
         """Generate HTML content for the map."""
         # Format times for display - convert to Home Assistant's local timezone
         start_local_tz = dt_util.as_local(start_time)
         end_local_tz = dt_util.as_local(end_time)
-        start_local = start_local_tz.strftime('%Y-%m-%dT%H:%M')
-        end_local = end_local_tz.strftime('%Y-%m-%dT%H:%M')
+        start_local = start_local_tz.strftime("%Y-%m-%dT%H:%M")
+        end_local = end_local_tz.strftime("%Y-%m-%dT%H:%M")
 
         if not locations:
             return f"""
@@ -295,7 +292,7 @@ class GoogleFindMyMapView(HomeAssistantView):
             timestamp_local = dt_util.as_local(timestamp_utc)
 
             # Determine report source
-            is_own_report = loc.get('is_own_report')
+            is_own_report = loc.get("is_own_report")
             if is_own_report is True:
                 report_source = "📱 Own Device"
                 report_color = "#28a745"  # Green
@@ -308,7 +305,7 @@ class GoogleFindMyMapView(HomeAssistantView):
 
             # Add semantic location if available
             semantic_info = ""
-            semantic_location = loc.get('semantic_location')
+            semantic_location = loc.get("semantic_location")
             if semantic_location:
                 semantic_info = f"<b>Location Name:</b> {semantic_location}<br>"
 
@@ -322,7 +319,8 @@ class GoogleFindMyMapView(HomeAssistantView):
             <b>Entity State:</b> {loc.get('state', 'Unknown')}<br>
             """
 
-            markers_js.append(f"""
+            markers_js.append(
+                f"""
                 var marker_{i} = L.marker([{loc['lat']}, {loc['lon']}]);
                 marker_{i}.accuracy = {accuracy};
                 marker_{i}.bindPopup(`{popup_text}`);
@@ -337,7 +335,8 @@ class GoogleFindMyMapView(HomeAssistantView):
                 }});
                 circle_{i}.accuracy = {accuracy};
                 circle_{i}.addTo(map);
-            """)
+            """
+            )
 
         markers_code = "\n".join(markers_js)
 
@@ -638,16 +637,27 @@ class GoogleFindMyMapView(HomeAssistantView):
         """
 
     def _get_simple_token(self) -> str:
-        """Generate a simple token for basic authentication."""
+        """Generate a simple token for basic authentication.
+
+        Notes:
+        - This token is intentionally simple (short hash) and checked via query param.
+        - It is a UX helper for opening the map from a device page; do not use for sensitive data.
+        """
         import hashlib
         import time
         from .const import DOMAIN, DEFAULT_MAP_VIEW_TOKEN_EXPIRATION
 
-        # Check if token expiration is enabled in config
+        # Check if token expiration is enabled — **options-first** for consistency
+        # with sensor.py/device_tracker.py/button.py. This ensures the View
+        # generates the same token as the entities when the option is toggled.
         config_entries = self.hass.config_entries.async_entries(DOMAIN)
         token_expiration_enabled = DEFAULT_MAP_VIEW_TOKEN_EXPIRATION
         if config_entries:
-            token_expiration_enabled = config_entries[0].data.get("map_view_token_expiration", DEFAULT_MAP_VIEW_TOKEN_EXPIRATION)
+            entry = config_entries[0]
+            token_expiration_enabled = entry.options.get(
+                "map_view_token_expiration",
+                entry.data.get("map_view_token_expiration", DEFAULT_MAP_VIEW_TOKEN_EXPIRATION),
+            )
 
         ha_uuid = str(self.hass.data.get("core.uuid", "ha"))
 
@@ -672,93 +682,27 @@ class GoogleFindMyMapRedirectView(HomeAssistantView):
         self.hass = hass
 
     async def get(self, request: web.Request, device_id: str) -> web.Response:
-        """Redirect to the appropriate map URL based on request origin."""
-        import socket
-        from homeassistant.helpers.network import get_url
+        """Redirect to the map path using a **relative** Location header.
 
-        # Get the auth token
-        auth_token = request.query.get('token')
+        Why relative?
+        - A relative `Location` makes the browser resolve against the **current origin**
+          (scheme/host/port) automatically — ideal behind reverse proxies or when
+          accessing HA via different base URLs (local / external / cloud).
+        - Avoids persisting or computing absolute base URLs on the server side.
+        - RFC 9110 allows a URI **reference** in `Location` (relative is valid).
+        """
+        auth_token = request.query.get("token")
         if not auth_token:
             return web.Response(text="Missing authentication token", status=400)
 
-        # Detect the appropriate base URL based on request headers and origin
-        host_header = request.headers.get('Host', '')
-        x_forwarded_host = request.headers.get('X-Forwarded-Host', '')
-        origin = request.headers.get('Origin', '')
+        # Build redirect target (encode query properly) as a **relative** path.
+        # This keeps the redirect origin-agnostic and lets the browser pick the
+        # exact scheme/host/port the user currently uses to access HA.
+        from urllib.parse import urlencode
 
-        _LOGGER.debug(f"Request headers - Host: {host_header}, X-Forwarded-Host: {x_forwarded_host}, Origin: {origin}")
+        query = urlencode({"token": auth_token})
+        redirect_url = f"/api/googlefindmy/map/{device_id}?{query}"
+        _LOGGER.debug("Redirecting (relative) to: %s", redirect_url)
 
-        # Determine if this is a cloud request or local request
-        is_cloud_request = False
-        base_url: str | None = None
-
-        # Check for Nabu Casa cloud indicators - more comprehensive detection
-        cloud_indicators = ['nabu', 'ui.nabu.casa', 'www.nabucasa.com', 'nabucasa.com', 'duckdns.org', 'remote.nabucasa.com']
-        if any(cloud_indicator in host_header.lower() for cloud_indicator in cloud_indicators):
-            is_cloud_request = True
-        elif x_forwarded_host and any(cloud_indicator in x_forwarded_host.lower() for cloud_indicator in cloud_indicators):
-            is_cloud_request = True
-        elif origin and any(cloud_indicator in origin.lower() for cloud_indicator in cloud_indicators):
-            is_cloud_request = True
-
-        # Additional checks for cloud requests
-        # Check for non-local IP addresses in Host header (could indicate external/cloud access)
-        if not is_cloud_request and host_header:
-            host_ip = host_header.split(':')[0]  # Remove port if present
-            # Check if host is not a local/private IP address
-            if not _is_private_host(host_ip):
-                is_cloud_request = True
-                _LOGGER.debug(f"Detected external IP in host header: {host_ip}, treating as cloud request")
-
-        # Prefer HA's URL helper first (best practice)
-        try:
-            if is_cloud_request:
-                # Use HA's cloud/external URL detection
-                base_url = get_url(self.hass, prefer_external=True, allow_cloud=True)
-                _LOGGER.info(f"Detected cloud request, using external URL: {base_url}")
-            else:
-                # Use HA's internal URL for local requests
-                base_url = get_url(self.hass, prefer_external=False, allow_cloud=False, allow_external=False, allow_internal=True)
-                _LOGGER.info(f"Detected local request, using internal URL: {base_url}")
-        except Exception as e:
-            _LOGGER.warning(f"URL detection with get_url failed: {e}")
-
-        if not base_url:
-            # Use local IP detection for local requests
-            try:
-                # Use socket connection method to get the actual local network IP
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                s.connect(("8.8.8.8", 80))
-                local_ip = s.getsockname()[0]
-                s.close()
-
-                # Get HA port and SSL settings from config
-                port = 8123
-                use_ssl = False
-
-                # Try to get actual port from HA configuration
-                if hasattr(self.hass, 'http') and hasattr(self.hass.http, 'server_port'):
-                    port = self.hass.http.server_port or 8123
-                    use_ssl = hasattr(self.hass.http, 'ssl_context') and self.hass.http.ssl_context is not None
-
-                protocol = "https" if use_ssl else "http"
-                base_url = f"{protocol}://{local_ip}:{port}"
-                _LOGGER.info(f"Detected local request, using local IP URL: {base_url}")
-
-            except Exception as e:
-                _LOGGER.warning(f"Local IP detection failed: {e}, falling back to HA network detection")
-                # Fallback to HA's network detection
-                try:
-                    base_url = get_url(self.hass, prefer_external=False, allow_cloud=False, allow_external=False, allow_internal=True)
-                    _LOGGER.info(f"Using HA internal URL fallback: {base_url}")
-                except Exception as fallback_e:
-                    _LOGGER.error(f"All URL detection methods failed: {fallback_e}")
-                    base_url = "http://homeassistant.local:8123"
-
-        # Build the redirect URL
-        redirect_url = f"{base_url}/api/googlefindmy/map/{device_id}?token={auth_token}"
-
-        _LOGGER.debug(f"Redirecting to: {redirect_url}")
-
-        # Return a 302 redirect response
-        return web.Response(status=302, headers={'Location': redirect_url})
+        # Use an explicit 302 redirect helper from aiohttp with a **relative** Location.
+        raise web.HTTPFound(location=redirect_url)

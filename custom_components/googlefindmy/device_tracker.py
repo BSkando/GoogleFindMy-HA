@@ -37,15 +37,61 @@ async def async_setup_entry(
 
     # Explicit typing for readability and IDE support
     entities: list[GoogleFindMyDeviceTracker] = []
+    known_ids: set[str] = set()
+
+    # --- Startup: create entities from existing data or tracked IDs (skeletons) ---
     if coordinator.data:
         for device in coordinator.data:
-            # Guard against malformed device dicts
             if device.get("id") and device.get("name"):
+                known_ids.add(device["id"])
                 entities.append(GoogleFindMyDeviceTracker(coordinator, device))
             else:
                 _LOGGER.warning("Skipping device due to missing 'id' or 'name': %s", device)
+    else:
+        # No live data yet (early startup). Create skeleton entities from configured tracked IDs.
+        tracked_ids: list[str] = getattr(coordinator, "tracked_devices", []) or []
+        name_map: dict[str, str] = getattr(coordinator, "_device_names", {})  # noqa: SLF001
+        for dev_id in tracked_ids:
+            name = name_map.get(dev_id) or f"Find My - {dev_id}"
+            known_ids.add(dev_id)
+            entities.append(GoogleFindMyDeviceTracker(coordinator, {"id": dev_id, "name": name}))
+        if tracked_ids:
+            _LOGGER.debug(
+                "Created %d skeleton device_tracker entities for restore (no live data yet)",
+                len(tracked_ids),
+            )
 
-    async_add_entities(entities, True)
+    if entities:
+        async_add_entities(entities, True)
+
+    # --- Dynamic add: attach a coordinator listener to add *new* trackers later ---
+    @callback
+    def _sync_entities_from_coordinator() -> None:
+        """Add new tracker entities when the coordinator learns about new devices."""
+        if not coordinator.data:
+            return
+
+        to_add: list[GoogleFindMyDeviceTracker] = []
+        for device in coordinator.data:
+            dev_id = device.get("id")
+            name = device.get("name")
+            if not dev_id or not name:
+                continue
+            if dev_id in known_ids:
+                continue
+            known_ids.add(dev_id)
+            to_add.append(GoogleFindMyDeviceTracker(coordinator, device))
+
+        if to_add:
+            _LOGGER.info("Adding %d newly discovered Find My tracker(s)", len(to_add))
+            async_add_entities(to_add, True)
+
+    # Register listener and clean it up on unload
+    unsub = coordinator.async_add_listener(_sync_entities_from_coordinator)
+    config_entry.async_on_unload(unsub)
+
+    # Run once in case data arrived between setup and listener registration
+    _sync_entities_from_coordinator()
 
 
 class GoogleFindMyDeviceTracker(CoordinatorEntity, TrackerEntity, RestoreEntity):
@@ -107,19 +153,16 @@ class GoogleFindMyDeviceTracker(CoordinatorEntity, TrackerEntity, RestoreEntity)
             # Prime coordinator cache used elsewhere (best-effort).
             dev_id = self._device["id"]
             try:
-                # Prefer future public API if present (forward-compatible)
                 if hasattr(self.coordinator, "prime_device_location_cache"):
                     # Expected: prime_device_location_cache(device_id: str, data: dict[str, Any]) -> None
                     self.coordinator.prime_device_location_cache(dev_id, restored)  # type: ignore[attr-defined]
                 else:
-                    # Legacy fallback: direct cache access for current coordinator
                     mapping = getattr(self.coordinator, "_device_location_data", None)  # noqa: SLF001
                     if isinstance(mapping, dict):
                         slot = mapping.get(dev_id, {})
                         slot.update(restored)
                         mapping[dev_id] = slot
                     else:
-                        # Extremely defensive: create cache if missing (unlikely)
                         setattr(self.coordinator, "_device_location_data", {dev_id: restored})  # noqa: SLF001
             except Exception as err:  # noqa: BLE001
                 _LOGGER.debug("Failed to seed coordinator cache for %s: %s", self.entity_id, err)
@@ -136,7 +179,7 @@ class GoogleFindMyDeviceTracker(CoordinatorEntity, TrackerEntity, RestoreEntity)
         """
         # Generate auth token and build path first
         auth_token = self._get_map_token()
-        path = self._build_map_path(self._device["id"], auth_token, redirect=True)
+        path = self._build_map_path(self._device["id"], auth_token, redirect=False)
 
         # Today: still return absolute URL; redirect endpoint handles origin correctly
         try:
@@ -160,7 +203,7 @@ class GoogleFindMyDeviceTracker(CoordinatorEntity, TrackerEntity, RestoreEntity)
             hw_version=self._device["id"],  # Show device ID as hardware version for easy copying
         )
 
-    def _build_map_path(self, device_id: str, token: str, *, redirect: bool = True) -> str:
+    def _build_map_path(self, device_id: str, token: str, *, redirect: bool = False) -> str:
         """Return the map URL *path* (no scheme/host)."""
         if redirect:
             return f"/api/googlefindmy/redirect_map/{device_id}?token={token}"
@@ -170,7 +213,6 @@ class GoogleFindMyDeviceTracker(CoordinatorEntity, TrackerEntity, RestoreEntity)
     def _current_device_data(self) -> dict[str, Any] | None:
         """Get current device data from coordinator's location cache."""
         dev_id = self._device["id"]
-        # Prefer future public API if present; otherwise legacy fallback
         if hasattr(self.coordinator, "get_device_location_data"):
             # Expected: get_device_location_data(device_id: str) -> dict[str, Any] | None
             try:
@@ -186,12 +228,20 @@ class GoogleFindMyDeviceTracker(CoordinatorEntity, TrackerEntity, RestoreEntity)
 
     @property
     def available(self) -> bool:
-        """Return True if entity has valid location data."""
-        if device_data := self._current_device_data:
-            return (
-                device_data.get("latitude") is not None and device_data.get("longitude") is not None
-            ) or device_data.get("semantic_name") is not None
-        return False
+        """Return True if entity has valid location data.
+
+        If coordinator has no data yet, but we restored a valid location,
+        expose the entity as available to avoid 'unavailable' after reboot.
+        """
+        device_data = self._current_device_data
+        if device_data:
+            if (
+                device_data.get("latitude") is not None
+                and device_data.get("longitude") is not None
+            ) or device_data.get("semantic_name") is not None:
+                return True
+        # Fallback to restored data (seeded in async_added_to_hass)
+        return self._last_good_accuracy_data is not None
 
     @property
     def latitude(self) -> float | None:
@@ -236,7 +286,6 @@ class GoogleFindMyDeviceTracker(CoordinatorEntity, TrackerEntity, RestoreEntity)
                 attributes["is_own_report"] = is_own
             if semantic_name := device_data.get("semantic_name"):
                 attributes["semantic_location"] = semantic_name
-            # removed 'polling_status' to avoid duplicating status fields
         return attributes
 
     def _get_map_token(self) -> str:
@@ -268,7 +317,15 @@ class GoogleFindMyDeviceTracker(CoordinatorEntity, TrackerEntity, RestoreEntity)
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
-        # Options-first, with safe fallback to previous mechanism
+        # Update display name if the coordinator learned a better one
+        try:
+            name_map: dict[str, str] = getattr(self.coordinator, "_device_names", {})  # noqa: SLF001
+            new_name = name_map.get(self._device["id"])
+            if new_name and new_name != self._attr_name:
+                self._attr_name = new_name
+        except Exception:  # noqa: BLE001
+            pass
+
         config_entry = getattr(self.coordinator, "config_entry", None)
         if config_entry:
             min_accuracy_threshold = config_entry.options.get("min_accuracy_threshold", 0)
@@ -277,7 +334,8 @@ class GoogleFindMyDeviceTracker(CoordinatorEntity, TrackerEntity, RestoreEntity)
             cfg = self.hass.data.get(DOMAIN, {}).get("config_data", {})
             min_accuracy_threshold = cfg.get("min_accuracy_threshold", 0)
 
-        if not (device_data := self._current_device_data):
+        device_data = self._current_device_data
+        if not device_data:
             self.async_write_ha_state()
             return
 
