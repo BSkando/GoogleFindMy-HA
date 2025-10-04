@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import asyncio  # required to run async coroutine from sync context
 from typing import Any
 
 from custom_components.googlefindmy.Auth.token_cache import save_oauth_token, load_oauth_token
@@ -144,13 +145,15 @@ class GoogleFindMyAPI:
             raise
 
     def get_device_location(self, device_id: str, device_name: str) -> dict[str, Any]:
-        """Get location data for a specific device using individual request."""
+        """Get location data for a specific device using individual request (sync wrapper for async call).
+
+        This method runs in an executor thread. It must not be called from the main event loop.
+        """
         try:
             _LOGGER.info(f"API v3.0: Requesting location for device {device_name} ({device_id})")
-            
-            # Use the original location request approach
-            _LOGGER.debug(f"About to call get_location_data_for_device for {device_name}")
-            location_data = get_location_data_for_device(device_id, device_name)
+            _LOGGER.debug(f"About to call get_location_data_for_device for {device_name} (sync wrapper)")
+            # FIX: run the coroutine in this worker thread to avoid 'never awaited' warnings
+            location_data = asyncio.run(get_location_data_for_device(device_id, device_name))
             _LOGGER.debug(f"get_location_data_for_device returned: {location_data}")
             
             if location_data and len(location_data) > 0:
@@ -160,7 +163,14 @@ class GoogleFindMyAPI:
             else:
                 _LOGGER.warning(f"API v3.0: No location data returned for {device_name}")
                 return {}
-                
+        except RuntimeError as loop_err:
+            # Defensive: called from a running loop (incorrect usage)
+            _LOGGER.error(
+                "get_device_location() was called from an active event loop. "
+                "Use async_get_device_location() instead. Error: %s",
+                loop_err,
+            )
+            return {}
         except Exception as err:
             _LOGGER.debug("Failed to get location for device %s (%s): %s", device_name, device_id, err)
             import traceback
@@ -172,7 +182,7 @@ class GoogleFindMyAPI:
         try:
             _LOGGER.info(f"API v3.0 Async: Requesting location for device {device_name} ({device_id})")
             
-            # Use the async location request approach
+            # Use the async location request approach (properly awaited)
             location_data = await get_location_data_for_device(device_id, device_name)
             
             if location_data and len(location_data) > 0:
@@ -190,12 +200,12 @@ class GoogleFindMyAPI:
             return {}
 
     def locate_device(self, device_id: str) -> dict[str, Any]:
-        """Get location data for a device."""
+        """Get location data for a device (sync wrapper that avoids un-awaited coroutine)."""
         try:
             # Find device name from ID (simplified for now)
             device_name = device_id  # This should be improved
-            location_data = get_location_data_for_device(device_id, device_name)
-            return location_data
+            # Reuse the sync wrapper to correctly execute the async location request
+            return self.get_device_location(device_id, device_name)
         except Exception as err:
             _LOGGER.debug("Failed to locate device %s: %s", device_id, err)
             raise
