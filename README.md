@@ -3,7 +3,7 @@
 >[!CAUTION]
 > ## **V1.7 Semi-Breaking Change**
 >
-> After installing this update, you must delete your existing configuration and re-add the integration.  This is due to major architectural hanges.  Location history should not be affected.
+> After installing this update, you must delete your existing configuration and re-add the integration.  This is due to major architectural changes.  Location history should not be affected.
 
 ---
 
