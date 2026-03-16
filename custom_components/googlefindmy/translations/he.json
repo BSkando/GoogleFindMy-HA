@@ -1,0 +1,235 @@
+{
+  "title": "Google Find My Device",
+  "config": {
+    "step": {
+      "user": {
+        "title": "אימות Google Find My Device",
+        "description": "בחירת שיטת האימות שלך. שיטה 1 מומלצת אם ניתן להריץ את GoogleFindMyTools במחשב עם Chrome.",
+        "data": {
+          "auth_method": "שיטת אימות"
+        }
+      },
+      "secrets_json": {
+        "title": "שיטה 1: קובץ secrets.json של GoogleFindMyTools",
+        "description": "יש להריץ את GoogleFindMyTools (ב-Chrome) כדי לייצר טוקנים לאימות, ולאחר מכן להדביק כאן את התוכן המלא של הקובץ Auth/secrets.json.",
+        "data": {
+          "secrets_json": "תוכן קובץ secrets.json"
+        }
+      },
+      "individual_tokens": {
+        "title": "שיטה 2: טוקן OAuth בודד",
+        "description": "יש להזין את טוקן ה-OAuth וכתובת האימייל של Google שהושגו בתהליך אימות ידני.",
+        "data": {
+          "oauth_token": "טוקן OAuth",
+          "google_email": "כתובת אימייל Google"
+        }
+      },
+      "device_selection": {
+        "title": "בחירת התקנים ותדירות סריקה",
+        "description": "התקנים חדשים שנתגלו יופיעו כמושבתים וניתן יהיה להפעיל אותם בהגדרות המכשיר. הגדרת פרמטרי הסריקה הכלליים:\n• מרווח סריקת מיקום: כמה זמן בין מחזורי סריקה חדשים (60–3600 שניות)\n• עיכוב בין סריקות התקנים: עיכוב בין סריקת התקנים בודדים בתוך מחזור (1–60 שניות)",
+        "data": {
+          "location_poll_interval": "מרווח סריקת מיקום (שניות)",
+          "device_poll_delay": "עיכוב בין סריקות התקנים (שניות)",
+          "min_accuracy_threshold": "סף דיוק מינימלי (מטרים)",
+          "movement_threshold": "סף תנועה (מטרים)",
+          "google_home_filter_enabled": "סינון התקני Google Home",
+          "google_home_filter_keywords": "מילות מפתח לסינון (מופרדות בפסיקים)",
+          "enable_stats_entities": "יצירת ישויות סטטיסטיקה",
+          "map_view_token_expiration": "אפשר תפוגת טוקן לתצוגת מפה"
+        }
+      },
+      "reauth_confirm": {
+        "title": "אימות מחדש",
+        "description": "נראה שהאישורים שלך לא תקפים או פג תוקף. נא לספק אישורים חדשים להלן.\n\nטיפ: ניתן להדביק את התוכן המלא של secrets.json טרי **או** לספק טוקן OAuth חדש ואימייל."
+      }
+    },
+    "error": {
+      "auth_failed": "האימות נכשל. נא לנסות שוב.",
+      "invalid_token": "טוקן/אימייל לא תקין או שחסרים שדות נדרשים.",
+      "invalid_json": "פורמט JSON לא תקין בתוכן secrets.json.",
+      "no_devices": "לא נמצאו התקנים. יש לוודא ששירות Find My Device מופעל בחשבון Google שלך.",
+      "cannot_connect": "נכשל החיבור אל API של Google. ייתכן שזה זמני - נא לנסות שוב מאוחר יותר.",
+      "choose_one": "נא לספק שיטת אישורים אחת בלבד.",
+      "required": "שדה חובה.",
+      "unknown": "אירעה שגיאה בלתי צפויה."
+    },
+    "abort": {
+      "already_configured": "Google Find My Device כבר מוגדר.",
+      "cannot_connect": "נכשל החיבור ל-Google Find My Device.",
+      "reauth_successful": "אימות מחדש הצליח."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "תצורה",
+        "description": "מה ברצונך להגדיר?",
+        "menu_options": {
+          "credentials": "עדכון אישורים",
+          "settings": "שינוי הגדרות",
+          "visibility": "נראות התקנים"
+        }
+      },
+      "credentials": {
+        "title": "עדכון אישורים (אופציונלי)",
+        "description": "עדכון אישורים מבלי לחשוף ערכים קיימים. יש לספק שיטה אחת בלבד:\n\n• ולהדביק את התוכן המלא של secrets.json חדש\n**או**\n• הזן טוקן OAuth חדש ואימייל Google.\n\nאם סופקו, האישורים יאומתו ויישמרו; השילוב יטען מחדש מבלי לשנות את שמות הישויות.",
+        "data": {
+          "secrets_json": "secrets.json חדש (תוכן מלא)",
+          "oauth_token": "טוקן OAuth חדש",
+          "google_email": "אימייל Google",
+          "new_secrets_json": "secrets.json חדש (תוכן מלא)",
+          "new_oauth_token": "טוקן OAuth חדש",
+          "new_google_email": "אימייל Google"
+        }
+      },
+      "settings": {
+        "title": "אפשרויות",
+        "description": "התאמת הגדרות מיקום:\n• מרווח סריקת מיקום: כמה זמן בין סריקות מיקום (60–3600 שניות)\n• עיכוב בין סריקות התקנים: עיכוב בין סריקות התקנים (1–60 שניות)\n• דיוק מינימלי: התעלמות ממיקומים עם דיוק גרוע יותר מערך זה (25–500 מטרים)\n• סף תנועה: תנועה מינימלית הנדרשת לעדכון מיקום (10–200 מטרים)\n\nסינון Google Home:\n• הפעל כדי לשייך זיהויים מהתקני Google Home לאזור הבית\n• תמיכה בהתאמה חלקית במילות מפתח (מופרדות בפסיקים)\n• דוגמה: “nest” יתאים ל-“Kitchen Nest Mini”",
+        "data": {
+          "location_poll_interval": "מרווח סריקת מיקום (שניות)",
+          "device_poll_delay": "עיכוב בין סריקות מכשירים (שניות)",
+          "min_accuracy_threshold": "דיוק מינימלי (מטרים)",
+          "movement_threshold": "סף תנועה (מטרים)",
+          "google_home_filter_enabled": "סינון התקני Google Home",
+          "google_home_filter_keywords": "מילות מפתח לסינון (מופרדות בפסיקים)",
+          "enable_stats_entities": "יצירת ישויות סטטיסטיקה",
+          "map_view_token_expiration": "אפשר תפוגת טוקן לתצוגת מפה"
+        },
+        "data_description": {
+          "map_view_token_expiration": "כאשר מופעל, טוקני תצוגת מפה פגים לאחר שבוע. כאשר מושבת (ברירת מחדל), הטוקנים לא פגים."
+        }
+      },
+      "visibility": {
+        "title": "נראות התקנים",
+        "description": "שחזור התקנים שבעבר הוסתרו כדי להפוך אותם לנראים שוב. יש לבחור התקן אחד או יותר לשחזור ולשמור.",
+        "data": {
+          "unignore_devices": "התקנים לשחזור"
+        }
+      }
+    },
+    "error": {
+      "invalid_json": "פורמט JSON לא תקין בתוכן secrets.json.",
+      "invalid": "האימות נכשל. אנא בדוק את הקלט שלך.",
+      "cannot_connect": "נכשל החיבור ל-API של Google.",
+      "choose_one": "נא לספק שיטת אישורים אחת בלבד.",
+      "required": "שדה זה נדרש.",
+      "invalid_token": "אישורים לא תקינים (טוקן/אימייל). נא לבדוק פורמט ותוכן."
+    },
+    "abort": {
+      "reconfigure_successful": "הגדרה מחדש הצליחה.",
+      "no_ignored_devices": "אין התקנים מוסתרים לשחזור."
+    }
+  },
+  "services": {
+    "locate_device": {
+      "name": "איתור התקן",
+      "description": "קבלת המיקום הנוכחי של התקן Google Find My.",
+      "fields": {
+        "device_id": {
+          "name": "התקן",
+          "description": "בחירת התקן Google Find My (או העבר ID קנוני דרך כלי המפתחים)."
+        }
+      }
+    },
+    "play_sound": {
+      "name": "השמעת צליל",
+      "description": "השמע צליל על התקן Google Find My.",
+      "fields": {
+        "device_id": {
+          "name": "התקן",
+          "description": "בחירת התקן Google Find My (או העבר ID קנוני דרך כלי המפתחים)."
+        }
+      }
+    },
+    "stop_sound": {
+      "name": "עצור צליל",
+      "description": "עצור את הצליל על התקן Google Find My.",
+      "fields": {
+        "device_id": {
+          "name": "התקן",
+          "description": "בחירת התקן Google Find My (או העבר ID קנוני דרך כלי המפתחים)."
+        }
+      }
+    },
+    "refresh_device_urls": {
+      "name": "רענון כתובות התקנים",
+      "description": "רענון כתובות התצורה של התקני Google Find My כך שיפנו לתצוגת המפה המשולבת.",
+      "fields": {}
+    },
+    "locate_device_external": {
+      "name": "איתור התקן (חיצוני)",
+      "description": "איתור התקן באמצעות העוזר החיצוני; מפנה לפעולת האיתור הרגילה.",
+      "fields": {
+        "device_id": {
+          "name": "התקן",
+          "description": "בחירת התקן Google Find My (או העבר ID קנוני דרך כלי המפתחים)."
+        },
+        "device_name": {
+          "name": "שם התקן (אופציונלי)",
+          "description": "שם קריא לאדם לצורך לוגים (אופציונלי)."
+        }
+      }
+    },
+    "rebuild_registry": {
+      "name": "בנייה מחדש / העברת רישום",
+      "description": "תחזוקה: הרצת העברה רכה של נתונים→אפשרויות או בנייה מחדש ישויות/התקנים עבור שילוב זה.",
+      "fields": {
+        "mode": {
+          "name": "מצב",
+          "description": "בחירת 'בנייה מחדש' כדי להסיר ישויות/התקנים ולטעון מחדש; 'העברה' רק מחיל מחדש את ההעברה הרכה של נתונים→אפשרויות."
+        },
+        "device_ids": {
+          "name": "התקנים (אופציונלי)",
+          "description": "הגבלת הפעולה להתקנים ספציפיים. יש להשאיר ריק כדי לפנות לכל התקני Google Find My."
+        }
+      }
+    }
+  },
+  "entity": {
+    "button": {
+      "play_sound": {
+        "name": "השמעת צליל"
+      },
+      "stop_sound": {
+        "name": "הפסקת צליל"
+      },
+      "locate_device": {
+        "name": "איתור כעת"
+      }
+    },
+    "binary_sensor": {
+      "polling": {
+        "name": "סריקה פעילה"
+      }
+    },
+    "sensor": {
+      "last_seen": {
+        "name": "נראה לאחרונה"
+      },
+      "stat_background_updates": {
+        "name": "עדכונים ברקע"
+      },
+      "stat_polled_updates": {
+        "name": "עדכונים מסריקה פעילה"
+      },
+      "stat_crowd_sourced_updates": {
+        "name": "עדכונים ממקורות קהל"
+      },
+      "stat_history_fallback_used": {
+        "name": "חזרה להיסטוריה"
+      },
+      "stat_timeouts": {
+        "name": "פסקי זמן"
+      },
+      "stat_invalid_coords": {
+        "name": "קואורדינטות לא תקינות"
+      },
+      "stat_low_quality_dropped": {
+        "name": "נזרקו בגלל דיוק נמוך"
+      },
+      "stat_non_significant_dropped": {
+        "name": "נזרקו עדכונים לא משמעותיים"
+      }
+    }
+  }
+}
