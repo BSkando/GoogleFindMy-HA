@@ -1,0 +1,235 @@
+{
+  "title": "Google Encontrar Meu Dispositivo",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Autenticação do Google Encontrar Meu Dispositivo",
+        "description": "Escolha seu método de autenticação. O Método 1 é recomendado se você puder executar o GoogleFindMyTools em um computador com Chrome.",
+        "data": {
+          "auth_method": "Método de autenticação"
+        }
+      },
+      "secrets_json": {
+        "title": "Método 1: secrets.json do GoogleFindMyTools",
+        "description": "Execute o GoogleFindMyTools (Chrome) para gerar os tokens de autenticação, depois cole abaixo o conteúdo completo do arquivo Auth/secrets.json.",
+        "data": {
+          "secrets_json": "Conteúdo do arquivo secrets.json"
+        }
+      },
+      "individual_tokens": {
+        "title": "Método 2: Token OAuth individual",
+        "description": "Insira seu token OAuth e o endereço de e-mail do Google obtidos por meio de um processo manual de autenticação.",
+        "data": {
+          "oauth_token": "Token OAuth",
+          "google_email": "Endereço de e-mail do Google"
+        }
+      },
+      "device_selection": {
+        "title": "Selecionar dispositivos e polling",
+        "description": "Dispositivos recém-descobertos aparecem desativados e podem ser ativados nas configurações do dispositivo. Configure os parâmetros gerais de polling:\n• Intervalo de polling de localização: Com que frequência iniciar um novo ciclo de polling (60–3600 segundos)\n• Atraso de polling do dispositivo: Atraso entre consultas individuais de dispositivos dentro de um ciclo (1–60 segundos)",
+        "data": {
+          "location_poll_interval": "Intervalo de polling de localização (s)",
+          "device_poll_delay": "Atraso de polling do dispositivo (s)",
+          "min_accuracy_threshold": "Precisão mínima (m)",
+          "movement_threshold": "Limite de movimento (m)",
+          "google_home_filter_enabled": "Filtrar dispositivos Google Home",
+          "google_home_filter_keywords": "Palavras-chave de filtro (separadas por vírgula)",
+          "enable_stats_entities": "Criar entidades de estatísticas",
+          "map_view_token_expiration": "Ativar expiração do token de visualização do mapa"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reautenticar",
+        "description": "Suas credenciais parecem inválidas ou expiradas. Forneça novas credenciais abaixo.\n\nDica: Você pode colar o conteúdo completo de um novo secrets.json **ou** fornecer um novo token OAuth e e-mail."
+      }
+    },
+    "error": {
+      "auth_failed": "Falha na autenticação. Tente novamente.",
+      "invalid_token": "Token/e-mail inválido fornecido ou campos obrigatórios ausentes.",
+      "invalid_json": "Formato JSON inválido no conteúdo do secrets.json.",
+      "no_devices": "Nenhum dispositivo encontrado. Certifique-se de que o Encontrar Meu Dispositivo está ativado na sua conta Google.",
+      "cannot_connect": "Falha ao conectar à API do Google. Isso pode ser temporário — tente novamente mais tarde.",
+      "choose_one": "Forneça apenas um método de credencial.",
+      "required": "Este campo é obrigatório.",
+      "unknown": "Ocorreu um erro inesperado."
+    },
+    "abort": {
+      "already_configured": "O Google Encontrar Meu Dispositivo já está configurado.",
+      "cannot_connect": "Falha ao conectar ao Google Encontrar Meu Dispositivo.",
+      "reauth_successful": "Reautenticação bem-sucedida."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configuração",
+        "description": "O que você gostaria de configurar?",
+        "menu_options": {
+          "credentials": "Atualizar credenciais",
+          "settings": "Modificar configurações",
+          "visibility": "Visibilidade dos dispositivos"
+        }
+      },
+      "credentials": {
+        "title": "Atualizar credenciais (opcional)",
+        "description": "Atualize as credenciais sem expor os valores existentes. Forneça apenas um método:\n\n• Cole o conteúdo completo de um novo **secrets.json**\n**ou**\n• Insira um novo **token OAuth** e **e-mail do Google**.\n\nSe fornecidas, as credenciais serão validadas e armazenadas; a integração será recarregada sem alterar os nomes das suas entidades.",
+        "data": {
+          "secrets_json": "Novo secrets.json (conteúdo completo)",
+          "oauth_token": "Novo token OAuth",
+          "google_email": "E-mail do Google",
+          "new_secrets_json": "Novo secrets.json (conteúdo completo)",
+          "new_oauth_token": "Novo token OAuth",
+          "new_google_email": "E-mail do Google"
+        }
+      },
+      "settings": {
+        "title": "Opções",
+        "description": "Ajuste as configurações de localização:\n• Intervalo de polling de localização: Com que frequência buscar localizações (60–3600 segundos)\n• Atraso de polling do dispositivo: Atraso entre consultas de dispositivos (1–60 segundos)\n• Precisão mínima: Ignorar localizações com precisão pior que este valor (25–500 metros)\n• Limite de movimento: Movimento mínimo necessário para acionar uma atualização de localização (10–200 metros)\n\nFiltro Google Home:\n• Ative para associar detecções de dispositivos Google Home à zona Home\n• Palavras-chave suportam correspondência parcial (separadas por vírgula)\n• Exemplo: “nest” corresponde a “Kitchen Nest Mini”",
+        "data": {
+          "location_poll_interval": "Intervalo de polling de localização (s)",
+          "device_poll_delay": "Atraso de polling do dispositivo (s)",
+          "min_accuracy_threshold": "Precisão mínima (m)",
+          "movement_threshold": "Limite de movimento (m)",
+          "google_home_filter_enabled": "Filtrar dispositivos Google Home",
+          "google_home_filter_keywords": "Palavras-chave de filtro (separadas por vírgula)",
+          "enable_stats_entities": "Criar entidades de estatísticas",
+          "map_view_token_expiration": "Ativar expiração do token de visualização do mapa"
+        },
+        "data_description": {
+          "map_view_token_expiration": "Quando ativado, os tokens de visualização do mapa expiram após 1 semana. Quando desativado (padrão), os tokens não expiram."
+        }
+      },
+      "visibility": {
+        "title": "Visibilidade dos dispositivos",
+        "description": "Restaure dispositivos anteriormente ignorados para torná-los visíveis novamente. Selecione um ou mais dispositivos para restaurar e salve.",
+        "data": {
+          "unignore_devices": "Dispositivos para restaurar"
+        }
+      }
+    },
+    "error": {
+      "invalid_json": "Formato JSON inválido no conteúdo do secrets.json.",
+      "invalid": "Validação falhou. Verifique sua entrada.",
+      "cannot_connect": "Falha ao conectar à API do Google.",
+      "choose_one": "Forneça exatamente um método de credencial.",
+      "required": "Este campo é obrigatório.",
+      "invalid_token": "Credenciais inválidas (token/e-mail). Verifique o formato e o conteúdo."
+    },
+    "abort": {
+      "reconfigure_successful": "Reconfiguração bem-sucedida.",
+      "no_ignored_devices": "Não há dispositivos ignorados para restaurar."
+    }
+  },
+  "services": {
+    "locate_device": {
+      "name": "Localizar dispositivo",
+      "description": "Obter a localização atual de um dispositivo do Google Encontrar Meu Dispositivo.",
+      "fields": {
+        "device_id": {
+          "name": "Dispositivo",
+          "description": "Selecione um dispositivo do Google Encontrar Meu Dispositivo (ou passe um ID canônico via Ferramentas de Desenvolvedor)."
+        }
+      }
+    },
+    "play_sound": {
+      "name": "Reproduzir som",
+      "description": "Reproduzir um som em um dispositivo do Google Encontrar Meu Dispositivo.",
+      "fields": {
+        "device_id": {
+          "name": "Dispositivo",
+          "description": "Selecione um dispositivo do Google Encontrar Meu Dispositivo (ou passe um ID canônico via Ferramentas de Desenvolvedor)."
+        }
+      }
+    },
+    "stop_sound": {
+      "name": "Parar som",
+      "description": "Parar o som em um dispositivo do Google Encontrar Meu Dispositivo.",
+      "fields": {
+        "device_id": {
+          "name": "Dispositivo",
+          "description": "Selecione um dispositivo do Google Encontrar Meu Dispositivo (ou passe um ID canônico via Ferramentas de Desenvolvedor)."
+        }
+      }
+    },
+    "refresh_device_urls": {
+      "name": "Atualizar URLs dos dispositivos",
+      "description": "Atualiza as URLs de configuração dos dispositivos do Google Encontrar Meu Dispositivo para apontar para a visualização integrada do mapa.",
+      "fields": {}
+    },
+    "locate_device_external": {
+      "name": "Localizar dispositivo (externo)",
+      "description": "Localiza um dispositivo usando o auxiliar externo; delega para a operação normal de localização.",
+      "fields": {
+        "device_id": {
+          "name": "Dispositivo",
+          "description": "Selecione um dispositivo do Google Encontrar Meu Dispositivo (ou passe um ID canônico via Ferramentas de Desenvolvedor)."
+        },
+        "device_name": {
+          "name": "Nome do dispositivo (opcional)",
+          "description": "Um nome legível opcional para registro."
+        }
+      }
+    },
+    "rebuild_registry": {
+      "name": "Reconstruir / Migrar registro",
+      "description": "Manutenção: Executa uma migração suave de dados→opções ou reconstrói entidades/dispositivos para esta integração.",
+      "fields": {
+        "mode": {
+          "name": "Modo",
+          "description": "Escolha 'Reconstruir' para remover entidades/dispositivos e recarregar; 'Migrar' apenas reaplica a migração suave de dados→opções."
+        },
+        "device_ids": {
+          "name": "Dispositivos (opcional)",
+          "description": "Limite a operação a dispositivos específicos. Deixe vazio para atingir todos os dispositivos do Google Encontrar Meu Dispositivo."
+        }
+      }
+    }
+  },
+  "entity": {
+    "button": {
+      "play_sound": {
+        "name": "Reproduzir som"
+      },
+      "stop_sound": {
+        "name": "Parar som"
+      },
+      "locate_device": {
+        "name": "Localizar agora"
+      }
+    },
+    "binary_sensor": {
+      "polling": {
+        "name": "Polling"
+      }
+    },
+    "sensor": {
+      "last_seen": {
+        "name": "Última vez visto"
+      },
+      "stat_background_updates": {
+        "name": "Atualizações em segundo plano"
+      },
+      "stat_polled_updates": {
+        "name": "Atualizações por polling"
+      },
+      "stat_crowd_sourced_updates": {
+        "name": "Atualizações colaborativas"
+      },
+      "stat_history_fallback_used": {
+        "name": "Fallbacks históricos"
+      },
+      "stat_timeouts": {
+        "name": "Timeouts"
+      },
+      "stat_invalid_coords": {
+        "name": "Coordenadas inválidas"
+      },
+      "stat_low_quality_dropped": {
+        "name": "Baixa precisão descartada"
+      },
+      "stat_non_significant_dropped": {
+        "name": "Atualizações não significativas descartadas"
+      }
+    }
+  }
+}
