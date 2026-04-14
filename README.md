@@ -109,6 +109,7 @@ The integration provides a couple of Home Assistant Actions for use with automat
 - Extended timeout allows up to 60 seconds for device response
 - Check firewall settings for Firebase Cloud Messaging
 - Review FCM debug logs for connection details
+- Ensure port 5228 is forwarded if you run this behind reverse-proxy, inside KVM or any other virtual environment not directly exposed.
 
 ### Rate Limiting
 The integration respects Google's rate limits by:
