@@ -95,6 +95,7 @@ from .const import (
     DEFAULT_MAP_VIEW_TOKEN_EXPIRATION,
     DEFAULT_OPTIONS,
     DEFAULT_SEMANTIC_DETECTION_RADIUS,
+    DEFAULT_SHOW_LOCATION_AGE,
     DEFAULT_STALE_THRESHOLD,
     # Core domain & credential keys
     DOMAIN,
@@ -108,6 +109,7 @@ from .const import (
     OPT_MAP_VIEW_TOKEN_EXPIRATION,
     OPT_OPTIONS_SCHEMA_VERSION,
     OPT_SEMANTIC_LOCATIONS,
+    OPT_SHOW_LOCATION_AGE,
     OPT_STALE_THRESHOLD,
     OPTION_KEYS,
     SERVICE_FEATURE_PLATFORMS,
@@ -5316,6 +5318,7 @@ class OptionsFlowHandler(OptionsFlowBase, _OptionsFlowMixin):  # type: ignore[mi
             ),
             OPT_CONTRIBUTOR_MODE: _get(OPT_CONTRIBUTOR_MODE, DEFAULT_CONTRIBUTOR_MODE),
             OPT_STALE_THRESHOLD: _get(OPT_STALE_THRESHOLD, DEFAULT_STALE_THRESHOLD),
+            OPT_SHOW_LOCATION_AGE: _get(OPT_SHOW_LOCATION_AGE, DEFAULT_SHOW_LOCATION_AGE),
         }
         if (
             OPT_GOOGLE_HOME_FILTER_ENABLED is not None
@@ -5433,6 +5436,7 @@ class OptionsFlowHandler(OptionsFlowBase, _OptionsFlowMixin):  # type: ignore[mi
             vol.Optional(OPT_STALE_THRESHOLD),
             vol.All(vol.Coerce(int), vol.Range(min=300, max=86400)),
         )
+        _register(vol.Optional(OPT_SHOW_LOCATION_AGE), bool)
 
         base_schema = vol.Schema(fields)
         schema_with_defaults = self.add_suggested_values_to_schema(base_schema, current)

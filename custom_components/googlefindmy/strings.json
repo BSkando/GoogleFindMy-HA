@@ -260,6 +260,7 @@
           "location_poll_interval": "Location poll interval (s)",
           "device_poll_delay": "Device poll delay (s)",
           "stale_threshold": "Stale threshold (s)",
+          "show_location_age": "Show location age attribute",
           "google_home_filter_enabled": "Filter Google Home devices",
           "google_home_filter_keywords": "Filter keywords (comma-separated)",
           "enable_stats_entities": "Create statistics entities",
@@ -270,6 +271,7 @@
         },
         "data_description": {
           "stale_threshold": "After this many seconds without a location update, the tracker state becomes unknown. Use the 'Last Location' entity to always see the last known position. Default: 1800 (30 minutes).",
+          "show_location_age": "When enabled (default), a 'location_age' attribute (rounded to 1 minute) is added to each tracker entity. Disable to eliminate all database writes for stationary devices. The absolute 'last_seen' attribute and sensor.*_last_seen entities are always available.",
           "delete_caches_on_remove": "Remove cached tokens and device metadata when this entry is deleted.",
           "map_view_token_expiration": "When enabled, map view tokens expire after 1 week. When disabled (default), tokens do not expire.",
           "contributor_mode": "Choose how your device contributes to Google's network (High-traffic areas by default, or All areas for crowdsourced reporting).",

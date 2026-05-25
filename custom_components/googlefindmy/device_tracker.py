@@ -44,8 +44,10 @@ from . import EntityRecoveryManager, _extract_email_from_entry
 from .const import (
     CONF_OAUTH_TOKEN,
     DATA_SECRET_BUNDLE,
+    DEFAULT_SHOW_LOCATION_AGE,
     DEFAULT_STALE_THRESHOLD,
     DOMAIN,
+    OPT_SHOW_LOCATION_AGE,
     OPT_STALE_THRESHOLD,
     TRACKER_SUBENTRY_KEY,
 )
@@ -1142,10 +1144,18 @@ class GoogleFindMyDeviceTracker(GoogleFindMyDeviceEntity, TrackerEntity, Restore
         attributes["google_device_id"] = self.device_id
 
         location_age = self._get_location_age()
-        if location_age is not None:
-            # Round location_age to the nearest 5 minutes (300s) to suppress database writes
-            # from redundant sub-second/minute updates when the device is stationary.
-            attributes["location_age"] = int(round(location_age / 300.0) * 300)
+        show_location_age: bool = bool(
+            self.coordinator.config_entry.options.get(
+                OPT_SHOW_LOCATION_AGE, DEFAULT_SHOW_LOCATION_AGE
+            )
+        )
+        if show_location_age and location_age is not None:
+            # Round to the nearest 1 minute (60 s) to reduce unnecessary database
+            # writes for stationary devices while staying close to the real value.
+            attributes["location_age"] = int(round(location_age / 60.0) * 60)
+        # When show_location_age is False the attribute is omitted entirely.
+        # Absolute timestamps remain available via the "last_seen" attribute
+        # and the sensor.*_last_seen entity.
         attributes["location_status"] = self._get_location_status()
 
         if stale:
