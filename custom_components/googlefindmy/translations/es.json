@@ -266,14 +266,16 @@
           "delete_caches_on_remove": "Borrar cachés al eliminar la entrada",
           "map_view_token_expiration": "Activar caducidad del token de la vista de mapa",
           "contributor_mode": "Modo de contribución de ubicaciones",
-          "subentry": "Grupo de funciones"
+          "subentry": "Grupo de funciones",
+          "show_location_age": "Mostrar atributo de antigüedad de la ubicación"
         },
         "data_description": {
           "stale_threshold": "Tras este número de segundos sin una actualización de ubicación, el estado del rastreador pasa a desconocido. Usa la entidad 'Última ubicación' para ver siempre la última posición conocida. Por defecto: 1800 (30 minutos).",
           "delete_caches_on_remove": "Borra los tokens almacenados en caché y los metadatos de los dispositivos cuando se elimina esta entrada.",
           "map_view_token_expiration": "Si está activado, los tokens de la vista de mapa caducan tras 1 semana. Si está desactivado (por defecto), no caducan.",
           "contributor_mode": "Elige cómo contribuye tu dispositivo a la red de Google (Todas las zonas por defecto para aportes colaborativos o solo Zonas de alto tránsito).",
-          "subentry": "Guarda estas opciones en el grupo de funciones seleccionado. Consulta [Subentradas y grupos de funciones]({subentries_docs_url}) para ver ejemplos."
+          "subentry": "Guarda estas opciones en el grupo de funciones seleccionado. Consulta [Subentradas y grupos de funciones]({subentries_docs_url}) para ver ejemplos.",
+          "show_location_age": "Cuando está habilitado (por defecto), se agrega un atributo 'location_age' (redondeado a 1 minuto) a cada entidad de rastreo. Deshabilítelo para eliminar todas las escrituras en la base de datos de los dispositivos estacionarios. El atributo absoluto 'last_seen' y las entidades sensor.*_last_seen siempre están disponibles."
         }
       },
       "visibility": {

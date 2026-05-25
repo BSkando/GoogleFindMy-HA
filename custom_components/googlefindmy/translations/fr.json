@@ -266,14 +266,16 @@
           "delete_caches_on_remove": "Supprimer les caches lors de la suppression de l’entrée",
           "map_view_token_expiration": "Activer l’expiration du jeton de la vue carte",
           "contributor_mode": "Mode de contribution de localisation",
-          "subentry": "Groupe de fonctionnalités"
+          "subentry": "Groupe de fonctionnalités",
+          "show_location_age": "Afficher l'attribut d'ancienneté de l'emplacement"
         },
         "data_description": {
           "stale_threshold": "Après ce délai en secondes sans mise à jour de position, l'état du traceur passe à inconnu. Utilisez l'entité 'Dernière position' pour toujours voir la dernière position connue. Par défaut : 1800 (30 minutes).",
           "delete_caches_on_remove": "Supprime les jetons mis en cache et les métadonnées des appareils lors de la suppression de cette entrée.",
           "map_view_token_expiration": "Lorsqu'elle est activée, les jetons de la vue carte expirent après 1 semaine. Lorsqu'elle est désactivée (par défaut), ils n'expirent pas.",
           "contributor_mode": "Choisissez comment votre appareil contribue au réseau Google (par défaut Toutes les zones pour une contribution participative ou uniquement les zones à forte affluence).",
-          "subentry": "Enregistrez ces options pour le groupe de fonctionnalités sélectionné. Consultez [Sous-entrées et groupes de fonctionnalités]({subentries_docs_url}) pour des exemples."
+          "subentry": "Enregistrez ces options pour le groupe de fonctionnalités sélectionné. Consultez [Sous-entrées et groupes de fonctionnalités]({subentries_docs_url}) pour des exemples.",
+          "show_location_age": "Lorsqu'il est activé (par défaut), un attribut « location_age » (arrondi à 1 minute) est ajouté à chaque entité de suivi. Désactivez-le pour éliminer toutes les écritures dans la base de données pour les appareils fixes. L'attribut absolu « last_seen » et les entités sensor.*_last_seen sont toujours disponibles."
         }
       },
       "visibility": {

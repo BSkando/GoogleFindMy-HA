@@ -266,14 +266,16 @@
           "delete_caches_on_remove": "Elimina cache alla rimozione dell’elemento",
           "map_view_token_expiration": "Abilita scadenza dei token della vista mappa",
           "contributor_mode": "Modalità di contributo posizione",
-          "subentry": "Gruppo di funzionalità"
+          "subentry": "Gruppo di funzionalità",
+          "show_location_age": "Mostra attributo età della posizione"
         },
         "data_description": {
           "stale_threshold": "Dopo questo numero di secondi senza aggiornamento di posizione, lo stato del tracker diventa sconosciuto. Usa l'entità 'Ultima posizione' per vedere sempre l'ultima posizione nota. Predefinito: 1800 (30 minuti).",
           "delete_caches_on_remove": "Elimina i token memorizzati in cache e i metadati dei dispositivi quando questa voce viene rimossa.",
           "map_view_token_expiration": "Se abilitato, i token della vista mappa scadono dopo 1 settimana. Se disabilitato (predefinito), non scadono.",
           "contributor_mode": "Scegli come il dispositivo contribuisce alla rete di Google (per impostazione predefinita Tutte le aree per un contributo collaborativo oppure solo Aree ad alto traffico).",
-          "subentry": "Salva queste opzioni nel gruppo di funzionalità selezionato. Consulta [Sotto-voci e gruppi di funzionalità]({subentries_docs_url}) per esempi pratici."
+          "subentry": "Salva queste opzioni nel gruppo di funzionalità selezionato. Consulta [Sotto-voci e gruppi di funzionalità]({subentries_docs_url}) per esempi pratici.",
+          "show_location_age": "Se abilitato (impostazione predefinita), un attributo 'location_age' (arrotondato a 1 minuto) viene aggiunto a ogni entità tracciatore. Disabilitalo per eliminare tutte le scritture nel database per i dispositivi fissi. L'attributo assoluto 'last_seen' e le entità sensor.*_last_seen sono sempre disponibili."
         }
       },
       "visibility": {

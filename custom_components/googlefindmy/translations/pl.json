@@ -266,14 +266,16 @@
           "delete_caches_on_remove": "Usuń pamięć podręczną podczas usuwania wpisu",
           "map_view_token_expiration": "Włącz wygasanie tokenu widoku mapy",
           "contributor_mode": "Tryb raportowania lokalizacji",
-          "subentry": "Grupa funkcji"
+          "subentry": "Grupa funkcji",
+          "show_location_age": "Pokaż atrybut wieku lokalizacji"
         },
         "data_description": {
           "stale_threshold": "Po upływie tej liczby sekund bez aktualizacji lokalizacji, status trackera zmienia się na nieznany. Użyj encji 'Ostatnia lokalizacja', aby zawsze widzieć ostatnią znaną pozycję. Domyślnie: 1800 (30 minut).",
           "delete_caches_on_remove": "Usuwa buforowane tokeny i metadane urządzeń podczas usuwania tego wpisu.",
           "map_view_token_expiration": "Po włączeniu tokeny widoku mapy wygasają po 1 tygodniu. Po wyłączeniu (domyślnie) nie wygasają.",
           "contributor_mode": "Wybierz, jak urządzenie współpracuje z siecią Google (domyślnie Wszystkie obszary w trybie crowdsourcingu lub tylko obszary o dużym ruchu).",
-          "subentry": "Zapisz te opcje w wybranej grupie funkcji. Zobacz [Podpozycje i grupy funkcji]({subentries_docs_url}), aby poznać przykłady."
+          "subentry": "Zapisz te opcje w wybranej grupie funkcji. Zobacz [Podpozycje i grupy funkcji]({subentries_docs_url}), aby poznać przykłady.",
+          "show_location_age": "Gdy jest włączony (domyślnie), atrybut 'location_age' (zaokrąglony do 1 minuty) jest dodawany do każdej encji lokalizatora. Wyłącz, aby wyeliminować wszystkie zapisy do bazy danych dla urządzeń stacjonarnych. Atrybut bezwzględny 'last_seen' i encje sensor.*_last_seen są zawsze dostępne."
         }
       },
       "visibility": {

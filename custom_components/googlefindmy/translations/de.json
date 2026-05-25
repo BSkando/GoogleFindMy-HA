@@ -266,14 +266,16 @@
           "delete_caches_on_remove": "Caches beim Entfernen löschen",
           "map_view_token_expiration": "Ablauf von Kartenansicht-Tokens aktivieren",
           "contributor_mode": "Modus für Standortmeldungen",
-          "subentry": "Funktionsgruppe"
+          "subentry": "Funktionsgruppe",
+          "show_location_age": "Attribut für Standortalter anzeigen"
         },
         "data_description": {
           "stale_threshold": "Nach dieser Zeit (in Sekunden) ohne Standortaktualisierung wird der Tracker-Status unbekannt. Verwende die Entität 'Letzter Standort', um immer die letzte bekannte Position zu sehen. Standard: 1800 (30 Minuten).",
           "delete_caches_on_remove": "Löscht zwischengespeicherte Tokens und Gerätemetadaten, wenn dieser Eintrag entfernt wird.",
           "map_view_token_expiration": "Wenn aktiviert, laufen die Token für die Kartenansicht nach 1 Woche ab. Wenn deaktiviert (Standard), laufen die Token nicht ab.",
           "contributor_mode": "Lege fest, wie dein Gerät zum Google-Netzwerk beiträgt (standardmäßig Alle Bereiche für Crowdsourcing oder nur stark frequentierte Bereiche).",
-          "subentry": "Speichern Sie diese Optionen in der ausgewählten Funktionsgruppe. Beispiele finden Sie unter [Subeinträge und Funktionsgruppen]({subentries_docs_url})."
+          "subentry": "Speichern Sie diese Optionen in der ausgewählten Funktionsgruppe. Beispiele finden Sie unter [Subeinträge und Funktionsgruppen]({subentries_docs_url}).",
+          "show_location_age": "Wenn aktiviert (Standard), wird jeder Tracker-Entität ein 'location_age'-Attribut (auf 1 Minute gerundet) hinzugefügt. Deaktivieren, um alle Datenbank-Schreibvorgänge für stationäre Geräte zu eliminieren. Das absolute 'last_seen'-Attribut und sensor.*_last_seen-Entitäten sind immer verfügbar."
         }
       },
       "visibility": {

@@ -266,14 +266,16 @@
           "delete_caches_on_remove": "Caches verwijderen bij verwijderen item",
           "map_view_token_expiration": "Kaartweergave-tokenverloopdatum inschakelen",
           "contributor_mode": "Locatiebijdragermodus",
-          "subentry": "Functiegroep"
+          "subentry": "Functiegroep",
+          "show_location_age": "Locatie-leeftijd attribuut weergeven"
         },
         "data_description": {
           "stale_threshold": "Wanneer een locatie ouder is dan deze drempel (in seconden), wordt de trackerstatus 'onbekend'. Gebruik de entiteit 'Laatste locatie' om altijd de laatst bekende positie te zien. Standaard: 1800 (30 minuten).",
           "delete_caches_on_remove": "Verwijder gecachete tokens en apparaatmetadata wanneer dit item wordt verwijderd.",
           "map_view_token_expiration": "Indien ingeschakeld, verlopen kaartweergavetokens na 1 week. Indien uitgeschakeld (standaard), verlopen tokens niet.",
           "contributor_mode": "Kies hoe je apparaat bijdraagt aan het Google-netwerk (standaard Alle gebieden voor crowdsourced rapportage, of alleen drukbezochte gebieden).",
-          "subentry": "Sla deze opties op in de geselecteerde functiegroep. Zie [Subentries en functiegroepen]({subentries_docs_url}) voor voorbeelden."
+          "subentry": "Sla deze opties op in de geselecteerde functiegroep. Zie [Subentries en functiegroepen]({subentries_docs_url}) voor voorbeelden.",
+          "show_location_age": "Wanneer ingeschakeld (standaard), wordt een 'location_age'-attribuut (afgerond op 1 minuut) toegevoegd aan elke tracker-entiteit. Schakel uit om alle database-schrijfacties voor stationaire apparaten te elimineren. Het absolute 'last_seen'-attribuut en sensor.*_last_seen-entiteiten zijn altijd beschikbaar."
         }
       },
       "visibility": {
