@@ -1871,9 +1871,24 @@ class GoogleFindMyCoordinator(
             devices_stub.append({"id": dev_id, "name": name})
 
         snapshot = self._build_snapshot_from_cache(devices_stub, wall_now=wall_now)
-        self._refresh_subentry_index(devices_stub)
-        self._store_subentry_snapshots(snapshot)
-        self.async_set_updated_data(snapshot)
+
+        # Merge this push snapshot with the existing self.data (all devices)
+        merged_snapshot = list(snapshot)
+        if self.data:
+            merged_dict = {
+                entry["device_id"]: entry
+                for entry in self.data
+                if isinstance(entry, dict) and "device_id" in entry
+            }
+            for entry in snapshot:
+                if isinstance(entry, dict) and "device_id" in entry:
+                    merged_dict[entry["device_id"]] = entry
+            merged_snapshot = list(merged_dict.values())
+
+        # Refresh index and store snapshots using the complete merged list of all devices
+        self._refresh_subentry_index(None)
+        self._store_subentry_snapshots(merged_snapshot)
+        self.async_set_updated_data(merged_snapshot)
         _LOGGER.debug(
             "Pushed snapshot for %d device(s) via push_updated()", len(snapshot)
         )

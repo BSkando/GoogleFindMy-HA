@@ -1143,7 +1143,9 @@ class GoogleFindMyDeviceTracker(GoogleFindMyDeviceEntity, TrackerEntity, Restore
 
         location_age = self._get_location_age()
         if location_age is not None:
-            attributes["location_age"] = round(location_age)
+            # Round location_age to the nearest 5 minutes (300s) to suppress database writes
+            # from redundant sub-second/minute updates when the device is stationary.
+            attributes["location_age"] = int(round(location_age / 300.0) * 300)
         attributes["location_status"] = self._get_location_status()
 
         if stale:
