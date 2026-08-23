@@ -50,6 +50,7 @@ async def async_submit_start_sound_request(
     gcm_registration_id: str,
     *,
     session: Optional[ClientSession] = None,
+    cache: Optional[any] = None,
 ) -> Optional[tuple[str, str]]:
     """Submit a 'Play Sound' action using the shared async Nova client.
 
@@ -70,7 +71,7 @@ async def async_submit_start_sound_request(
     hex_payload, request_uuid = start_sound_request(canonic_device_id, gcm_registration_id)
     try:
         # The async Nova client manages session reuse internally; do not pass session through.
-        response_hex = await async_nova_request(NOVA_ACTION_API_SCOPE, hex_payload)
+        response_hex = await async_nova_request(NOVA_ACTION_API_SCOPE, hex_payload, cache=cache)
         return (response_hex, request_uuid) if response_hex is not None else None
     except asyncio.CancelledError:
         raise

@@ -49,6 +49,7 @@ async def async_submit_stop_sound_request(
     *,
     request_uuid: Optional[str] = None,
     session: Optional[ClientSession] = None,
+    cache: Optional[any] = None,
 ) -> Optional[str]:
     """Submit a 'Stop Sound' action using the shared async Nova client.
 
@@ -71,7 +72,7 @@ async def async_submit_stop_sound_request(
     hex_payload = stop_sound_request(canonic_device_id, gcm_registration_id, request_uuid)
     try:
         # The async Nova client manages session reuse internally; do not pass session through.
-        return await async_nova_request(NOVA_ACTION_API_SCOPE, hex_payload)
+        return await async_nova_request(NOVA_ACTION_API_SCOPE, hex_payload, cache=cache)
     except asyncio.CancelledError:
         raise
     except NovaRateLimitError:
