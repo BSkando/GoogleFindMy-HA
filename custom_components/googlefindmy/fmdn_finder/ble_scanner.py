@@ -151,13 +151,21 @@ async def async_setup_ble_scanner(hass: HomeAssistant) -> bool:
     # avoids requesting active scans (no extra power draw).
     #
     # Note: HA's async_register_callback does not support service_data UUID
-    # filtering natively, so we pass no matcher and filter ourselves.
-    # The overhead is minimal — the callback returns immediately for
-    # non-FMDN advertisements after a single dict lookup.
+    # filtering natively, so we filter ourselves inside the callback.
+    #
+    # A falsy matcher (e.g. None) is NOT "match everything" — HA's
+    # BluetoothManager treats it as {"connectable": True}
+    # (homeassistant/components/bluetooth/manager.py), which silently drops
+    # every advertisement relayed through a non-connectable source. ESPHome
+    # and Shelly Bluetooth proxies register as non-connectable, so this
+    # callback never fired for any proxy-heard tracker — only advertisements
+    # picked up by a connectable local adapter got through. Explicitly
+    # passing connectable=False disables that filter, so both local-radio
+    # and proxy-relayed advertisements reach us.
     unsub: CALLBACK_TYPE = async_register_callback(
         hass,
         _fmdn_advertisement_callback,
-        None,  # No matcher — we filter inside the callback
+        {"connectable": False},
         BluetoothScanningMode.PASSIVE,
     )
 
