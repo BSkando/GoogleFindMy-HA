@@ -128,6 +128,7 @@ from .const import (
     coerce_ignored_mapping,
     service_device_identifier,
 )
+from .device_registry_helpers import async_get_device_by_identifiers_compat
 from .email_utils import normalize_email, normalize_email_or_default, unique_account_id
 from .integration_modules import (
     import_integration_api_module,
@@ -4071,16 +4072,11 @@ class ConfigFlow(
                 (DOMAIN, f"{entry.entry_id}:{service_config_subentry_id}:service")
             )
 
-        get_device = getattr(dev_reg, "async_get_device", None)
-        device: Any | None = None
-        if callable(get_device):
-            try:
-                device = get_device(identifiers=identifiers)
-            except TypeError:
-                try:
-                    device = get_device(identifiers)
-                except TypeError:  # pragma: no cover - defensive guard
-                    device = None
+        device = async_get_device_by_identifiers_compat(
+            dev_reg,
+            tuple(identifiers),
+            config_entry_id=entry.entry_id,
+        )
 
         if device is None:
             return

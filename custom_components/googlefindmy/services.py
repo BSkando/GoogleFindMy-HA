@@ -51,6 +51,7 @@ from .const import (
     map_token_secret_seed,
     service_device_identifier,
 )
+from .device_registry_helpers import async_get_device_by_identifier_compat
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -349,7 +350,11 @@ async def async_rebuild_device_registry(hass: HomeAssistant, call: ServiceCall) 
 
         # 1. Find the correct Service Device ID
         service_device_ident = service_device_identifier(entry_id)
-        service_device = dev_reg.async_get_device(identifiers={service_device_ident})
+        service_device = async_get_device_by_identifier_compat(
+            dev_reg,
+            service_device_ident,
+            config_entry_id=entry_id,
+        )
         service_device_id = getattr(service_device, "id", None)
         service_meta = None
         get_metadata = getattr(coordinator, "get_subentry_metadata", None)
@@ -372,8 +377,10 @@ async def async_rebuild_device_registry(hass: HomeAssistant, call: ServiceCall) 
             # Try to ensure it exists before continuing
             try:
                 coordinator._ensure_service_device_exists()
-                service_device = dev_reg.async_get_device(
-                    identifiers={service_device_ident}
+                service_device = async_get_device_by_identifier_compat(
+                    dev_reg,
+                    service_device_ident,
+                    config_entry_id=entry_id,
                 )
                 service_device_id = getattr(service_device, "id", None)
                 if not service_device_id:

@@ -54,6 +54,10 @@ from ..const import (
     TRACKER_SUBENTRY_KEY,
     service_device_identifier,
 )
+from ..device_registry_helpers import (
+    async_get_device_by_identifier_compat,
+    async_get_device_by_identifiers_compat,
+)
 from ._mixin_typing import _MixinBase
 from .helpers.registry import (
     build_canonical_unique_id as _build_canonical_unique_id_impl,
@@ -686,13 +690,11 @@ class RegistryOperations(_MixinBase):
             )
             return _refresh_service_device_entry(device)
 
-        get_device = getattr(dev_reg, "async_get_device", None)
-        device = None
-        if callable(get_device):
-            try:
-                device = get_device(identifiers=identifiers)
-            except TypeError:
-                device = None
+        device = async_get_device_by_identifiers_compat(
+            dev_reg,
+            tuple(identifiers),
+            config_entry_id=entry.entry_id,
+        )
 
         def _refresh_service_device_entry(candidate: Any) -> Any:
             """Return a fresh copy of the service device entry when possible."""
@@ -1390,7 +1392,6 @@ class RegistryOperations(_MixinBase):
             )
             return 0
         update_device = getattr(dev_reg, "async_update_device", None)
-        get_device = getattr(dev_reg, "async_get_device", None)
         get_device_by_id = getattr(dev_reg, "async_get", None)
         created_or_updated = 0
 
@@ -1401,11 +1402,11 @@ class RegistryOperations(_MixinBase):
         hub_device_id: str | None = None
         hub_device_names: set[str] = set()
         hub_devices_by_name: dict[str, Any] = {}
-        if callable(get_device):
-            try:
-                hub_device = get_device(identifiers={parent_identifier})
-            except TypeError:
-                hub_device = None
+        hub_device = async_get_device_by_identifier_compat(
+            dev_reg,
+            parent_identifier,
+            config_entry_id=entry_id,
+        )
         if hub_device is not None:
             hub_device_id = getattr(hub_device, "id", None)
             _hub_base_name = getattr(hub_device, "name_by_user", None) or getattr(
@@ -1650,20 +1651,18 @@ class RegistryOperations(_MixinBase):
             legacy_ident = (DOMAIN, dev_id)
 
             # Preferred: device already known by namespaced identifier?
-            dev = None
-            if callable(get_device):
-                try:
-                    dev = get_device(identifiers={ns_ident})
-                except TypeError:
-                    dev = None
+            dev = async_get_device_by_identifier_compat(
+                dev_reg,
+                ns_ident,
+                config_entry_id=entry_id,
+            )
             if dev is None:
                 # Legacy present?
-                legacy_dev = None
-                if callable(get_device):
-                    try:
-                        legacy_dev = get_device(identifiers={legacy_ident})
-                    except TypeError:
-                        legacy_dev = None
+                legacy_dev = async_get_device_by_identifier_compat(
+                    dev_reg,
+                    legacy_ident,
+                    config_entry_id=entry_id,
+                )
                 if legacy_dev is not None:
                     # If legacy device belongs to THIS entry, migrate by adding namespaced ident.
                     if entry_id in legacy_dev.config_entries:
