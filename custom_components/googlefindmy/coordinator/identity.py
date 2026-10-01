@@ -29,6 +29,7 @@ from ..const import (
     ISSUE_AUTH_EXPIRED_KEY,
     issue_id_for,
 )
+from ..device_registry_helpers import async_get_device_by_identifiers_compat
 from ..KeyBackup.cloud_key_decryptor import decrypt_eik
 from ._mixin_typing import _MixinBase
 from .helpers.identity import (
@@ -237,7 +238,11 @@ class IdentityOperations(_MixinBase):
                 (DOMAIN, f"{entry_id}:{device_id}"),
                 (DOMAIN, device_id),
             }
-            device = dev_reg.async_get_device(identifiers=identifiers)
+            device = async_get_device_by_identifiers_compat(
+                dev_reg,
+                tuple(identifiers),
+                config_entry_id=entry_id,
+            )
             if device:
                 registry_id = device.id
 

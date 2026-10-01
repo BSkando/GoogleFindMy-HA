@@ -212,6 +212,7 @@ from .const import (
 from .const import (
     CONFIG_ENTRY_VERSION as CONFIG_ENTRY_VERSION,
 )
+from .device_registry_helpers import async_get_device_by_identifier_compat
 from .email_utils import normalize_email, unique_account_id
 from .ha_typing import CloudDiscoveryRuntime, callback
 from .SpotApi.spot_grpc_transport import SPOT_GRPC_TRANSPORT
@@ -3794,19 +3795,11 @@ async def _async_relink_entities_for_entry(  # noqa: PLR0913
     ) -> dr.DeviceEntry | Any | None:
         device: dr.DeviceEntry | Any | None
 
-        get_device = getattr(device_registry, "async_get_device", None)
-        if callable(get_device):
-            try:
-                device = get_device(identifiers={identifier})
-            except TypeError:
-                try:
-                    device = cast(
-                        Callable[[Collection[tuple[str, str]]], Any], get_device
-                    )({identifier})
-                except TypeError:
-                    device = None
-        else:
-            device = None
+        device = async_get_device_by_identifier_compat(
+            device_registry,
+            identifier,
+            config_entry_id=entry_id,
+        )
 
         if device is None:
             devices_iterable = getattr(device_registry, "devices", {})

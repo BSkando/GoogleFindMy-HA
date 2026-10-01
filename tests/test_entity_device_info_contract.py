@@ -204,7 +204,7 @@ def test_device_info_configuration_url_absent_without_base_url(
 
 
 @pytest.mark.asyncio
-async def test_integration_device_info_uses_service_device(
+async def test_integration_device_info_uses_service_device(  # noqa: PLR0917
     hass: HomeAssistant,
     device_registry: dr.DeviceRegistry,
     entity_registry: er.EntityRegistry,
@@ -352,7 +352,10 @@ async def test_integration_device_info_uses_service_device(
         if entry_obj is not entry or "binary_sensor" not in normalized:
             return
         identifier = service_device_identifier(entry_obj.entry_id)
-        service_device = device_registry.async_get_device({identifier})
+        service_device = device_registry.async_get_device_by_identifier(
+            identifier,
+            entry_obj.entry_id,
+        )
         if service_device is None:
             return
         for sensor_key in ("auth_status", "polling"):
@@ -408,7 +411,10 @@ async def test_integration_device_info_uses_service_device(
         assert isinstance(identifier, str) and identifier
 
     service_identifier = service_device_identifier(entry.entry_id)
-    service_device = device_registry.async_get_device({service_identifier})
+    service_device = device_registry.async_get_device_by_identifier(
+        service_identifier,
+        entry.entry_id,
+    )
     assert service_device is not None
 
     async def _register_service_entities(

@@ -213,7 +213,7 @@ async def _patch_integration_runtime(  # noqa: PLR0915
 
 
 @pytest.mark.asyncio
-async def test_devices_and_entities_registered(  # noqa: PLR0913, PLR0915
+async def test_devices_and_entities_registered(  # noqa: PLR0913, PLR0915, PLR0917
     hass: HomeAssistant,
     device_registry: dr.DeviceRegistry,
     entity_registry: er.EntityRegistry,
@@ -327,7 +327,10 @@ async def test_devices_and_entities_registered(  # noqa: PLR0913, PLR0915
             DOMAIN,
             f"{entry.entry_id}:{tracker_subentry_id}:{device['id']}",
         )
-        device_entry = device_registry.async_get_device({identifier})
+        device_entry = device_registry.async_get_device_by_identifier(
+            identifier,
+            entry.entry_id,
+        )
         assert device_entry is not None, f"Device {device['id']} missing from registry"
         assert device_entry.entry_type != dr.DeviceEntryType.SERVICE
 
@@ -342,7 +345,10 @@ async def test_devices_and_entities_registered(  # noqa: PLR0913, PLR0915
     assert tracker_entities, "Tracker entities should be registered for devices"
 
     service_identifier = service_device_identifier(entry.entry_id)
-    service_device = device_registry.async_get_device({service_identifier})
+    service_device = device_registry.async_get_device_by_identifier(
+        service_identifier,
+        entry.entry_id,
+    )
     assert service_device is not None, "Integration service device missing"
     assert service_device.entry_type == dr.DeviceEntryType.SERVICE
 
