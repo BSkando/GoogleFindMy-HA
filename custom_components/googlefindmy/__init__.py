@@ -5630,11 +5630,22 @@ def _credential_fingerprint(data: Mapping[str, Any] | None) -> str:
     """
 
     container: Mapping[str, Any] = data if isinstance(data, Mapping) else {}
-    material = json.dumps(
-        {key: container.get(key) for key in _CREDENTIAL_KEYS},
-        sort_keys=True,
-        default=repr,
-    )
+    values: dict[str, Any] = {key: container.get(key) for key in _CREDENTIAL_KEYS}
+    # The FCM registration is derived material that the receiver refreshes in
+    # place and writes back into the bundle (``FcmReceiverHA`` keeps the entry
+    # durable for a regenerated token). The live cache already carries the
+    # refreshed value when that write lands, so it must not schedule a reload:
+    # a reload would tear down the receiver that just obtained the registration
+    # and repeat the handshake for nothing. Every other bundle member counts.
+    # Assumption: FCM credentials are machine-generated, never typed by the
+    # user, so excluding this member cannot hide a user-initiated change; do not
+    # "fix" it back, that would restore the reload loop above.
+    bundle = values.get(DATA_SECRET_BUNDLE)
+    if isinstance(bundle, Mapping):
+        values[DATA_SECRET_BUNDLE] = {
+            key: value for key, value in bundle.items() if key != "fcm_credentials"
+        }
+    material = json.dumps(values, sort_keys=True, default=repr)
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 

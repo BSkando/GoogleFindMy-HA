@@ -123,6 +123,7 @@ else:
 # Integration-level tunables (safe fallbacks if missing)
 try:
     from custom_components.googlefindmy.const import (
+        DATA_SECRET_BUNDLE,
         DOMAIN,
         FCM_ABORT_ON_SEQ_ERROR_COUNT,
         FCM_CLIENT_HEARTBEAT_INTERVAL_S,
@@ -149,6 +150,7 @@ except ImportError:  # pragma: no cover
     FCM_ZOMBIE_RECONNECT_BACKOFF_BASE_S = 60
     FCM_ZOMBIE_RECONNECT_BACKOFF_CAP_S = 900
     FCM_ZOMBIE_MAX_RECONNECTS = 5
+    DATA_SECRET_BUNDLE = "secrets_data"
     DOMAIN = "googlefindmy"
     OPT_IGNORED_DEVICES = "ignored_devices"
 
@@ -3471,9 +3473,82 @@ class FcmReceiverHA:
         )
         _LOGGER.info("[entry=%s] FCM credentials updated", entry_id)
 
+    def _persist_credentials_to_entry(
+        self, entry_id: str, creds: Mapping[str, Any]
+    ) -> None:
+        """Write a refreshed FCM registration back into the config entry.
+
+        The config entry, not the token cache, is the durable source of truth:
+        ``async_setup_entry`` re-seeds the entry's secrets bundle into the cache
+        on every start, so a credential that only lives in the cache is
+        overwritten by the bundle's older copy on the next reload or restart.
+        A registration obtained by a later (re-)registration is exactly such a
+        value, and it is worthless if the next start restores the dead
+        registration it replaced.
+
+        Only the ``fcm_credentials`` member of an existing bundle is rewritten,
+        together with the top-level copy the config flow may have left beside
+        it. An entry without a bundle (individual-token sign-in) has nothing the
+        seed would clobber, and a missing bundle is not invented here. The
+        payload is the entry data read at write time, so a concurrent change to
+        another key is not rolled back.
+
+        ``async_update_entry`` mutates the in-memory entry and schedules the
+        debounced store write; a reload in between reads the updated entry, so
+        no await is needed here.
+        """
+        # The caller-side gate lives in ``_on_credentials_updated_for_entry``;
+        # re-check it here because that check ran before the persistence task
+        # was dispatched, and an entry torn down in between must not be written
+        # again (TOCTOU).
+        if entry_id in self._unregistered:
+            return
+        hass = self._hass
+        entries = getattr(hass, "config_entries", None) if hass is not None else None
+        lookup = getattr(entries, "async_get_entry", None)
+        update = getattr(entries, "async_update_entry", None)
+        if not callable(lookup) or not callable(update):
+            return
+        entry = lookup(entry_id)
+        if entry is None:
+            return
+        data = getattr(entry, "data", None)
+        if not isinstance(data, Mapping):
+            return
+        bundle = data.get(DATA_SECRET_BUNDLE)
+        if not isinstance(bundle, Mapping):
+            return
+        updated_bundle = dict(bundle)
+        updated_bundle["fcm_credentials"] = dict(creds)
+        updated_data = dict(data)
+        updated_data[DATA_SECRET_BUNDLE] = updated_bundle
+        # The config flow also stores the same value at the top level of the
+        # entry data. Refresh that copy where it exists so the entry does not
+        # carry two contradictory registrations; a missing copy is not created
+        # here, because the seed reads the bundle and nothing reads this key.
+        if "fcm_credentials" in updated_data:
+            updated_data["fcm_credentials"] = dict(creds)
+        try:
+            update(entry, data=updated_data)
+        except Exception as err:  # noqa: BLE001 - durability is best-effort
+            _LOGGER.debug(
+                "[entry=%s] Failed to persist the refreshed FCM registration to "
+                "the config entry: %s",
+                entry_id,
+                describe_exception(err),
+            )
+        else:
+            _LOGGER.info(
+                "[entry=%s] Persisted the refreshed FCM registration to the "
+                "config entry",
+                entry_id,
+            )
+
     async def _async_save_credentials_for_entry(self, entry_id: str) -> None:
-        """Persist current credentials to the entry's TokenCache (best-effort)."""
+        """Persist current credentials to the entry and its TokenCache."""
         creds = self.creds.get(entry_id)
+        if isinstance(creds, Mapping):
+            self._persist_credentials_to_entry(entry_id, creds)
         cache = self._entry_caches.get(entry_id)
         if cache is not None:
             try:
