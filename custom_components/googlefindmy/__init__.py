@@ -4923,13 +4923,24 @@ async def _async_relink_button_devices(hass: HomeAssistant, entry: ConfigEntry) 
     )
 
 
+# Unique-id suffixes of binary sensors that belong to one tracker device rather
+# than to the service device (today only the per-device UWT mode sensor). The
+# relink anchors them like tracker sensors. A device-scoped binary sensor whose
+# suffix is missing here is moved to the service device on every start, where the
+# duplicate cleanup then deletes it as a sibling of the other trackers' sensors;
+# tests/test_relink_uwt_mode_anchor.py fails when a new one is added without it.
+_DEVICE_SCOPED_BINARY_SENSOR_SUFFIXES: Final[tuple[str, ...]] = ("_uwt_mode",)
+
+
 async def _async_relink_subentry_entities(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> None:
     """Attach tracker/service entities to devices with matching subentry metadata.
 
     Tracker sensors and device trackers migrate to their tracker device while
-    service sensors and binary sensors remain anchored to the service device.
+    service sensors and binary sensors remain anchored to the service device,
+    except device-scoped binary sensors such as UWT mode, which follow their
+    tracker (``_DEVICE_SCOPED_BINARY_SENSOR_SUFFIXES``).
     The routine skips existing correct links, tolerates legacy unique ID shapes
     that omit subentry prefixes, and ignores unrelated platforms so callers can
     safely invoke it during reloads without disturbing non-integration entities.
@@ -5158,10 +5169,33 @@ async def _async_relink_subentry_entities(
     ) -> tuple[dr.DeviceEntry | Any, str | None] | None:
         domain = getattr(entity_entry, "domain", None)
         if domain == "binary_sensor":
-            service_device = _resolve_service_device(lookup_device)
-            if service_device is None:
+            binary_unique_id = getattr(entity_entry, "unique_id", None)
+            if not (
+                isinstance(binary_unique_id, str)
+                and binary_unique_id.endswith(_DEVICE_SCOPED_BINARY_SENSOR_SUFFIXES)
+            ):
+                service_device = _resolve_service_device(lookup_device)
+                if service_device is None:
+                    return None
+                return service_device, service_subentry_id
+
+            # Device-scoped binary sensor: anchor it to its tracker. When the
+            # tracker cannot be resolved, leave the entity where it is rather
+            # than moving it to the service device.
+            subentry_id, google_device_id = _extract_tracker_binding_from_sensor(
+                entity_entry
+            )
+            if google_device_id is None:
                 return None
-            return service_device, service_subentry_id
+            subentry_id = subentry_id or tracker_subentry_id
+            tracker_device = _find_tracker_device(
+                lookup_device=lookup_device,
+                subentry_id=subentry_id,
+                google_device_id=google_device_id,
+            )
+            if tracker_device is None:
+                return None
+            return tracker_device, subentry_id
 
         if domain == "sensor":
             sensor_binding = _extract_tracker_binding_from_sensor(entity_entry)
