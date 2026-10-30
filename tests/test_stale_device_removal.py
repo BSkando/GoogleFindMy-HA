@@ -862,6 +862,56 @@ async def test_two_consecutive_fresh_misses_are_required(
 
 
 # ---------------------------------------------------------------------------
+# Coupling with unload (T9)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_device_deleted_in_the_account_leaves_after_a_reload(
+    hass: Any, gfmy: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T9: a reload keeps the remaining devices, S removes the deleted one.
+
+    Unload no longer purges the registry, so a device deleted in the Google
+    account while Home Assistant reloads must still go. The new coordinator
+    starts with an empty miss counter and removes it after its own two fresh
+    lists; the device that stays keeps its ids and user settings.
+    """
+    from homeassistant.helpers import area_registry as ar
+
+    w = _World(hass, monkeypatch)
+    await w.fresh([_dev("AAAA"), _dev("BBBB")])
+    entity_a = w.add_entity("AAAA")
+    entity_b = w.add_entity("BBBB")
+    area = ar.async_get(hass).async_get_or_create("Hall")
+    w.ent_reg.async_update_entity(entity_a, name="Keys", area_id=area.id)
+    device_a = w.trackers()["AAAA"]
+    w.dev_reg.async_update_device(device_a.id, name_by_user="My keys")
+    entity_a_id = w.ent_reg.async_get(entity_a).id
+
+    # Reload: the real parent unload, then the setup half with a new coordinator.
+    monkeypatch.setattr(
+        hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)
+    )
+    assert await gfmy._async_unload_parent_entry(hass, w.entry) is True
+    w.restart()
+    await w.fresh([_dev("AAAA")])
+    w.add_entity("AAAA")  # the platform adds the entity of the listed device
+    await w.fresh([_dev("AAAA")])
+
+    trackers = w.trackers()
+    assert "BBBB" not in trackers, "device deleted in the account survived a reload"
+    assert w.ent_reg.async_get(entity_b) is None
+    assert trackers["AAAA"].id == device_a.id
+    assert trackers["AAAA"].name_by_user == "My keys"
+    kept = w.ent_reg.async_get(entity_a)
+    assert kept is not None
+    assert kept.id == entity_a_id
+    assert kept.name == "Keys"
+    assert kept.area_id == area.id
+
+
+# ---------------------------------------------------------------------------
 # Review round AP8: F1 (return reloads once), F5 (refused removal), F8 (S-R3d)
 # ---------------------------------------------------------------------------
 

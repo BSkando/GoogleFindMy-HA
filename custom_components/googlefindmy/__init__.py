@@ -3558,7 +3558,13 @@ async def _async_purge_unloaded_subentry_registrations(
     config_subentry_id: str | None,
     entry_type: str | None,
 ) -> tuple[int, int]:
-    """Remove registry entries for a subentry that never finished loading."""
+    """Remove the registry entries of one subentry.
+
+    Callers: the unload of a subentry whose platforms never loaded, and the
+    ``rebuild`` mode of the ``rebuild_registry`` service between unload and
+    setup (``_async_purge_entry_registrations``). A normal unload keeps the
+    registry entries.
+    """
 
     if not parent_entry_id or not config_subentry_id:
         return (0, 0)
@@ -3679,6 +3685,37 @@ async def _async_purge_unloaded_subentry_registrations(
             removed_devices,
         )
 
+    return removed_entities, removed_devices
+
+
+async def _async_purge_entry_registrations(
+    hass: HomeAssistant, entry: MyConfigEntry
+) -> tuple[int, int]:
+    """Remove the registry entries of every subentry of an unloaded ``entry``.
+
+    Used by the ``rebuild`` mode of the ``rebuild_registry`` service, which
+    promises to remove entities and devices before the reload. The unload
+    itself keeps them, so the service passes this through its context.
+    """
+
+    removed_entities = 0
+    removed_devices = 0
+    for subentry in _collect_entry_subentries(entry):
+        identifier = _resolve_config_subentry_identifier(subentry)
+        if not isinstance(identifier, str) or not identifier:
+            continue
+        entry_type = None
+        data_obj = getattr(subentry, "data", None)
+        if isinstance(data_obj, Mapping):
+            entry_type = data_obj.get("subentry_type") or data_obj.get("group_key")
+        entities, devices = await _async_purge_unloaded_subentry_registrations(
+            hass,
+            parent_entry_id=entry.entry_id,
+            config_subentry_id=identifier,
+            entry_type=entry_type,
+        )
+        removed_entities += entities
+        removed_devices += devices
     return removed_entities, removed_devices
 
 
@@ -7532,6 +7569,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
                 "migrate_unique_ids": _async_migrate_unique_ids,
                 "relink_button_devices": _async_relink_button_devices,
                 "relink_subentry_entities": _async_relink_subentry_entities,
+                "purge_entry_registrations": _async_purge_entry_registrations,
                 "coalesce_account_entries": async_coalesce_account_entries,
                 "extract_normalized_email": _extract_email_from_entry,
             }
@@ -10118,15 +10156,16 @@ async def _async_unload_parent_entry(hass: HomeAssistant, entry: MyConfigEntry) 
             )
             if isinstance(identifier, str) and identifier and callable(forward_unload):
                 if inspect.iscoroutinefunction(forward_unload):
+                    # Keep the registry entries. Core keeps them across a
+                    # reload or a disable, and cleans them up itself when a
+                    # subentry or the entry is removed (async_remove_subentry,
+                    # entry removal). The purge is only for subentries whose
+                    # platforms never loaded (ValueError below and in
+                    # _async_unload_subentry). Devices that leave the Google
+                    # account are removed by the coordinator (stale devices).
                     _LOGGER.debug(
                         "[%s] Home Assistant manages coroutine-based subentry unloads; skipping manual forward calls",  # noqa: G004
                         identifier,
-                    )
-                    await _async_purge_unloaded_subentry_registrations(
-                        hass,
-                        parent_entry_id=entry.entry_id,
-                        config_subentry_id=identifier,
-                        entry_type=entry_type,
                     )
                     return True
 

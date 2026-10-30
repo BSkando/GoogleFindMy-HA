@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from typing import Any
 
 import voluptuous as vol
@@ -36,6 +36,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.network import NoURLAvailableError, get_url
 from homeassistant.helpers.service import async_register_admin_service
 
+from .Auth.log_safety import describe_exception
 from .const import (
     DEFAULT_MAP_VIEW_TOKEN_EXPIRATION,
     DOMAIN,
@@ -883,6 +884,8 @@ async def async_register_services(hass: HomeAssistant, ctx: dict[str, Any]) -> N
         - "migrate_unique_ids": Callable[[HomeAssistant, Any], Any]
         - "relink_button_devices": Callable[[HomeAssistant, Any], Any]
         - "relink_subentry_entities": Callable[[HomeAssistant, Any], Any]
+        - "purge_entry_registrations": Callable[[HomeAssistant, ConfigEntry], Awaitable[tuple[int, int]]]
+          # rebuild mode, between unload and setup
         - "coalesce_account_entries": Callable[[HomeAssistant, ConfigEntry], Awaitable[ConfigEntry]]
         - "extract_normalized_email": Callable[[ConfigEntry], str | None]
 
@@ -1694,9 +1697,63 @@ async def async_register_services(hass: HomeAssistant, ctx: dict[str, Any]) -> N
         )
 
         _LOGGER.info(reload_log_context)
+
+        # The rebuild mode removes entities and devices before the setup
+        # (services.yaml). Unloading keeps registry entries, so the purge runs
+        # here, between unload and setup, as a reload would order them.
+        purge_entry = ctx.get("purge_entry_registrations")
+        if mode == "rebuild" and not callable(purge_entry):
+            _LOGGER.warning(
+                "Registry purge unavailable; reloading without removing entities"
+            )
+
+        async def _rebuild_entry(
+            entry_id: str,
+            purge: Callable[[HomeAssistant, Any], Awaitable[tuple[int, int]]],
+        ) -> None:
+            if not await hass.config_entries.async_unload(entry_id):
+                _LOGGER.error(
+                    "Config entry %s could not be unloaded; registry entries kept",
+                    entry_id,
+                )
+                return
+            entry = hass.config_entries.async_get_entry(entry_id)
+            if entry is None:
+                return
+            try:
+                removed_entities, removed_devices = await purge(hass, entry)
+            except Exception as err:  # noqa: BLE001 - the entry is unloaded already
+                # The unload has happened, so an active entry is set up again
+                # whatever the purge did; otherwise it stays unloaded until a
+                # manual reload or a restart. Class only (AGENTS.md section 5).
+                _LOGGER.error(
+                    "Removing the registry entries of config entry %s failed (%s); "
+                    "setting it up again",
+                    entry_id,
+                    type(err).__name__,
+                )
+                _LOGGER.debug(
+                    "Purge error detail for config entry %s: %s",
+                    entry_id,
+                    describe_exception(err),
+                )
+            else:
+                _LOGGER.info(
+                    "Removed %d entities and %d devices of config entry %s",
+                    removed_entities,
+                    removed_devices,
+                    entry_id,
+                )
+            if getattr(entry, "disabled_by", None):
+                return
+            await hass.config_entries.async_setup(entry_id)
+
         for entry_id in target_entry_ids:
             try:
-                await hass.config_entries.async_reload(entry_id)
+                if mode == "rebuild" and callable(purge_entry):
+                    await _rebuild_entry(entry_id, purge_entry)
+                else:
+                    await hass.config_entries.async_reload(entry_id)
             except Exception as err:
                 _LOGGER.error("Error reloading config entry %s: %s", entry_id, err)
 
