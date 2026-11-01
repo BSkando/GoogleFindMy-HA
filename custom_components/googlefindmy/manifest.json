@@ -30,5 +30,5 @@
     "pycryptodomex>=3.23.0",
     "pyscrypt>=1.6.2"
   ],
-  "version": "1.15.28"
+  "version": "1.15.29"
 }
