@@ -165,8 +165,11 @@ except ImportError:  # pragma: no cover
 # Readiness budget (seconds) for a fresh FCM identity to reach the STARTED
 # state after a (re)connect.  Derived from the library's connection-retry
 # count rather than a fixed value: a brand-new identity's first MCS connect
-# can take the full retry budget (FCM_CONNECTION_RETRY_COUNT attempts at
-# ~_FCM_READY_WAIT_PER_ATTEMPT_S each) plus a small margin.  SINGLE SOURCE OF
+# can take the retry budget of a reachable endpoint
+# (FCM_CONNECTION_RETRY_COUNT attempts at ~_FCM_READY_WAIT_PER_ATTEMPT_S each)
+# plus a small margin.  When every attempt runs into MCS_CONNECT_TIMEOUT_S the
+# library needs up to 78.6 s, which this budget deliberately does not cover:
+# it then fails closed instead of holding the first-locate lock.  SINGLE SOURCE OF
 # TRUTH shared by the manual-/first-locate path and the zombie-starvation
 # watchdog so the two readiness budgets can never drift.  The watchdog in
 # particular must NOT wait the full FCM_DATA_STARVATION_S (900s) here: its
@@ -1732,7 +1735,7 @@ class FcmReceiverHA:
                     # state. The cap is meant to detect a poison-message
                     # crash loop (client connects, decodes, dies, repeat),
                     # NOT ordinary connectivity outages where ``_listen()``
-                    # exhausts its 5 connection retries (~15-20s) without
+                    # exhausts its 5 connection retries (up to 78.6 s) without
                     # ever reaching ``STARTED``. Without this gate, a normal
                     # MCS-unreachable / Google outage would cap the
                     # supervisor after 10 brief connection-failure runs and
@@ -1865,7 +1868,7 @@ class FcmReceiverHA:
                     # ensures the cap is specific to the poison-message
                     # scenario (client connects, decodes, dies, repeat) and
                     # excludes pre-start connection/login failures. A burst
-                    # of MCS-unreachable failures (5 retries x ~3-4s each)
+                    # of MCS-unreachable failures (5 retries, up to 78.6 s)
                     # would otherwise be counted as short-run crashes and
                     # permanently disable FCM push after one ordinary
                     # network outage. Pre-start failures leave the counter
@@ -4210,7 +4213,7 @@ class FcmReceiverHA:
         library assigns ``run_state = STARTED`` — not the supervisor's
         ``last_start_monotonic``, which is recorded *before* ``pc.start()`` and
         before the listener reaches STARTED.  The readiness gate deliberately
-        allows a fresh MCS connection ~15-20s to reach STARTED; measuring the
+        allows a fresh MCS connection its readiness budget to reach STARTED; measuring the
         churn window from the supervisor start would let a slow-but-fresh session
         age past ``_CHURN_WINDOW_S`` before its first STARTED observation and skip
         the very reconnect this heals (Codex #1150 follow-up).  Being per-client,
@@ -4629,7 +4632,7 @@ class FcmReceiverHA:
                 # Derive the readiness budget from the library's connection-retry
                 # count instead of a fixed 15.0s.  A brand-new FCM identity's
                 # first MCS connect can take the full retry budget
-                # (FCM_CONNECTION_RETRY_COUNT attempts, ~15-20s per the note near
+                # (FCM_CONNECTION_RETRY_COUNT attempts, up to 78.6 s per the note near
                 # _listen()); a hard-coded 15.0s under-covered that window and let
                 # the gate expire before STARTED on the very first run.  Adding a
                 # small margin keeps a fresh registration from being abandoned

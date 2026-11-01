@@ -70,5 +70,10 @@ DOORBELLS_ENDPOINT = "/clients_api/doorbots/{0}"
 MCS_VERSION = 41
 MCS_HOST = "mtalk.google.com"
 MCS_PORT = 5228
+# RFC 8305 section 5 recommended delay; matches aiohttp's default in Home Assistant.
+MCS_HAPPY_EYEBALLS_DELAY_S = 0.25
+# Limit per attempt for DNS, TCP and TLS. 5 attempts x 12 s + at most 18.6 s backoff
+# = 78.6 s stays below FCM_IDLE_RESET_AFTER_S (90 s); 15 s would exceed it.
+MCS_CONNECT_TIMEOUT_S = 12.0
 MCS_SELECTIVE_ACK_ID = 12
 MCS_STREAM_ACK_ID = 13
