@@ -166,9 +166,9 @@ def make_client(
 async def close_client(client: FcmPushClient) -> None:
     """Close the stream the connect left open."""
     writer = client.writer
-    if writer is not None:
-        writer.close()
-        await writer.wait_closed()
+    assert writer is not None
+    writer.close()
+    await writer.wait_closed()
 
 
 async def run_bounded(task: asyncio.Task[bool]) -> tuple[bool, float]:
@@ -541,6 +541,29 @@ async def test_diagnostics_failed_attempt_has_no_success_line(
     assert sum(m.startswith("Connecting to MCS endpoint") for m in messages) == 1
     assert not any(m.startswith("Connected to MCS endpoint") for m in messages)
     assert not any(V6_DEAD_A in m for m in messages)
+
+
+async def test_run_bounded_fails_and_cancels_a_hanging_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A hang must turn the test red and leave no task behind, not stall the suite."""
+    monkeypatch.setattr(f"{__name__}.REACH_BOUND_S", 0.01)
+    cancelled = asyncio.Event()
+
+    async def hang() -> bool:
+        never: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+        try:
+            return await never
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    task = asyncio.create_task(hang())
+    await asyncio.sleep(0)
+    with pytest.raises(AssertionError, match="still hanging"):
+        await run_bounded(task)
+    assert cancelled.is_set()
+    assert task.cancelled()
 
 
 async def test_helper_hang_is_real_without_happy_eyeballs(
