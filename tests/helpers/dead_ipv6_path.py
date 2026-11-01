@@ -7,9 +7,10 @@ calls: ``getaddrinfo`` returns a scripted address list, and ``sock_connect``
 never returns for a listed address. All other addresses reach the real socket,
 so a loopback server still sees a real connection.
 
-``hung_addresses`` and ``hung_sockets`` record what was entered, and
-``abandoned_hangs`` counts hangs that stayed stuck until asyncio cancelled them. A
-test asserts on them, because a hang that was never entered proves nothing.
+``hung_addresses`` and ``hung_sockets`` record what was entered, ``entered`` lets a
+test wait for that without a clock, and ``abandoned_hangs`` counts hangs that stayed
+stuck until asyncio cancelled them. A test asserts on them, because a hang that was
+never entered proves nothing.
 """
 
 from __future__ import annotations
@@ -47,6 +48,7 @@ class DeadPath:
 
     hung_addresses: list[str] = field(default_factory=list)
     hung_sockets: list[socket.socket] = field(default_factory=list)
+    entered: asyncio.Event = field(default_factory=asyncio.Event)
     abandoned_hangs: int = 0
     resolver_entered: bool = False
 
@@ -73,6 +75,7 @@ def install_dead_path(
         if address[0] in dead:
             state.hung_addresses.append(address[0])
             state.hung_sockets.append(sock)
+            state.entered.set()
             try:
                 await asyncio.Event().wait()
             except asyncio.CancelledError:

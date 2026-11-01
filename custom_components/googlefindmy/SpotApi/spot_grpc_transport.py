@@ -1,15 +1,15 @@
+# custom_components/googlefindmy/SpotApi/spot_grpc_transport.py
 from __future__ import annotations
 
 import asyncio
 import logging
 import ssl
-from typing import TYPE_CHECKING, Final, override
+from functools import cache
+from typing import Final, override
 
 from grpclib.client import Channel as _GrpclibChannel
 from grpclib.encoding.base import CodecBase
-
-if TYPE_CHECKING:
-    from grpclib.protocol import H2Protocol
+from grpclib.protocol import H2Protocol
 
 __all__ = [
     "RawCodec",
@@ -22,6 +22,12 @@ _LOGGER = logging.getLogger(__name__)
 
 # RFC 8305 section 5 recommended delay; matches aiohttp's default in Home Assistant.
 _HAPPY_EYEBALLS_DELAY_S: Final[float] = 0.25
+
+
+@cache
+def _warn_without_happy_eyeballs() -> None:
+    """Warn once per process: every reconnect would otherwise repeat the line."""
+    _LOGGER.warning("grpclib internals changed; connecting without Happy Eyeballs")
 
 
 def is_ssl_transport_teardown_error(exc: BaseException) -> bool:
@@ -104,7 +110,9 @@ class Channel(_GrpclibChannel):
 
     grpclib offers no public parameter, so this overrides a private method.
     TCP only; the transport never passes ``path``. If grpclib's private
-    attributes change, fall back to its own sequential connect.
+    attributes change, fall back to its own sequential connect. If grpclib renames
+    the method, it stops calling this override; ``SpotGrpcTransport.get_channel``
+    warns about that.
     """
 
     @override
@@ -119,17 +127,21 @@ class Channel(_GrpclibChannel):
                 else None
             )
         except AttributeError:
-            _LOGGER.warning(
-                "grpclib internals changed; connecting without Happy Eyeballs"
-            )
+            _warn_without_happy_eyeballs()
             return await super()._create_connection()
-        _, protocol = await asyncio.get_running_loop().create_connection(
+        transport, protocol = await asyncio.get_running_loop().create_connection(
             factory,
             host,
             port,
             ssl=ssl_context,
             server_hostname=server_hostname,
             happy_eyeballs_delay=_HAPPY_EYEBALLS_DELAY_S,
+        )
+        _LOGGER.debug(
+            "Connected to Spot endpoint (%s,%s) over %s",
+            host,
+            port,
+            transport.get_extra_info("socket").family.name,
         )
         return protocol
 
@@ -202,6 +214,8 @@ class SpotGrpcTransport:
             if self._channel is not None:
                 return self._channel
 
+            if not hasattr(_GrpclibChannel, "_create_connection"):
+                _warn_without_happy_eyeballs()
             ssl_ctx = await self._get_ssl_context() if self._use_ssl else None
             self._channel = Channel(
                 self._host, self._port, ssl=ssl_ctx, codec=self._codec

@@ -6,8 +6,10 @@ packets every attempt hung on the AAAA address until the request deadline, and
 IPv4 was never tried. These tests drive the public gRPC call path against a
 loopback HTTP/2 server; only the resolver and the dead addresses are scripted
 (``tests/helpers/dead_ipv6_path.py``). What the server received carries every
-success claim. They run in real time on purpose: the behavior under test is the
-timing itself, and deadlines are short so that no test waits for long.
+success claim. asyncio's real timers stay, because the traffic is real loopback
+traffic that a frozen clock would stall. No result depends on how fast they run:
+REACH_DEADLINE_S only turns a hang into a red test, and the short deadline is set
+only for attempts that must time out.
 """
 
 from __future__ import annotations
@@ -19,11 +21,11 @@ import logging
 import socket
 import ssl
 import textwrap
-import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from types import SimpleNamespace
+from typing import Any, Self, cast
 from unittest.mock import AsyncMock
 
 import grpclib.client
@@ -34,6 +36,8 @@ import pytest
 import pytest_asyncio
 from grpclib.client import UnaryUnaryMethod
 from grpclib.config import Configuration
+from grpclib.const import Status
+from grpclib.exceptions import GRPCError, StreamTerminatedError
 
 from custom_components.googlefindmy.Auth.token_cache import TokenCache
 from custom_components.googlefindmy.SpotApi import spot_grpc_transport, spot_request
@@ -64,11 +68,11 @@ V6_DEAD_B = "2001:db8::b"
 V6_DEAD_C = "2001:db8::c"
 V4_DEAD = "192.0.2.1"
 DEAD_ADDRESSES = frozenset({V4_DEAD, V6_DEAD_A, V6_DEAD_B, V6_DEAD_C})
-# A connect that hangs misses this deadline, which is the red result on the
-# unfixed code.
-REACH_DEADLINE_S = 2.0
-# Up to here the delay of 0.25 s has run out and the second address has connected.
-REACH_MAX_ELAPSED_S = 1.5
+# A failure bound, not a timing claim: only a hanging connect misses this deadline,
+# which is the red result on the unfixed code. The delay itself is pinned exactly
+# in test_arguments_match_upstream_plus_delay.
+REACH_DEADLINE_S = 10.0
+# Only for attempts that hang on a dead path and must time out.
 SHORT_DEADLINE_S = 0.1
 # The token lookup that reads the cache is patched out.
 UNUSED_CACHE = cast(TokenCache, object())
@@ -218,6 +222,14 @@ async def join_default_executor() -> AsyncIterator[None]:
     await asyncio.get_running_loop().shutdown_default_executor()
 
 
+@pytest.fixture(autouse=True)
+def forget_logged_warning() -> Iterator[None]:
+    """The fallback warning is logged once per process, so each test starts fresh."""
+    spot_grpc_transport._warn_without_happy_eyeballs.cache_clear()
+    yield
+    spot_grpc_transport._warn_without_happy_eyeballs.cache_clear()
+
+
 def tls_server_context(tmp_path: Path, host: str) -> tuple[Path, ssl.SSLContext]:
     """Return a certificate path and a server context that negotiates ``h2``."""
     cert_path, server = self_signed_server_context(tmp_path, host)
@@ -322,13 +334,11 @@ async def test_live_ipv4_is_reached_behind_dead_ipv6(
         dead=DEAD_ADDRESSES,
     )
     channel = await transport.get_channel()
-    started = time.monotonic()
     try:
         reply = await call_ping(channel, REACH_DEADLINE_S)
     finally:
         await transport.async_close()
 
-    assert time.monotonic() - started < REACH_MAX_ELAPSED_S
     assert reply == b"ok"
     assert_request_arrived(server, use_ssl=use_ssl)
     assert server.peer_families == [socket.AF_INET]
@@ -400,9 +410,10 @@ class ConnectionSpy:
     calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = field(default_factory=list)
     protocol: object = field(default_factory=object)
 
-    async def __call__(self, *args: Any, **kwargs: Any) -> tuple[None, object]:
+    async def __call__(self, *args: Any, **kwargs: Any) -> tuple[object, object]:
         self.calls.append((args, kwargs))
-        return None, self.protocol
+        socket_info = SimpleNamespace(family=socket.AF_INET)
+        return SimpleNamespace(get_extra_info=lambda _name: socket_info), self.protocol
 
 
 ARGUMENT_CASES = [
@@ -533,22 +544,27 @@ FALLBACK_CASES = [
     pytest.param("_ssl", False, id="ssl"),
     # _config is only read for a TLS channel.
     pytest.param("_config", True, id="config"),
+    pytest.param("_protocol_factory", False, id="protocol-factory"),
 ]
 
 
 async def test_fallback_case_set_is_complete() -> None:
     """The case set must not shrink unnoticed."""
-    assert len(FALLBACK_CASES) == 4
+    assert len(FALLBACK_CASES) == 5
 
 
-@pytest.mark.parametrize(("attribute", "use_ssl"), FALLBACK_CASES)
-async def test_missing_private_attribute_falls_back_with_warning(
-    attribute: str,
-    use_ssl: bool,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Changed grpclib internals mean the old connect, and a visible warning."""
+FALLBACK_WARNING = "grpclib internals changed; connecting without Happy Eyeballs"
+
+
+def warning_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """Return the logged warnings."""
+    return [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+
+
+def channel_with_patched_upstream(
+    monkeypatch: pytest.MonkeyPatch, *, use_ssl: bool
+) -> tuple[Channel, object, AsyncMock, ConnectionSpy]:
+    """Build a channel whose upstream connect and loop connect are recorded."""
     marker = object()
     upstream = AsyncMock(return_value=marker)
     monkeypatch.setattr(grpclib.client.Channel, "_create_connection", upstream)
@@ -560,17 +576,137 @@ async def test_missing_private_attribute_falls_back_with_warning(
         ssl=ssl.create_default_context() if use_ssl else None,
         codec=RawCodec(),
     )
-    delattr(channel, attribute)
+    return channel, marker, upstream, connection_spy
+
+
+@pytest.mark.parametrize(("attribute", "use_ssl"), FALLBACK_CASES)
+async def test_missing_private_attribute_falls_back_with_warning(
+    attribute: str,
+    use_ssl: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Changed grpclib internals mean the old connect, and a visible warning."""
+    channel, marker, upstream, connection_spy = channel_with_patched_upstream(
+        monkeypatch, use_ssl=use_ssl
+    )
+    if attribute in vars(channel):
+        delattr(channel, attribute)
+    else:
+        monkeypatch.delattr(grpclib.client.Channel, attribute)
 
     with caplog.at_level(logging.WARNING, logger=spot_grpc_transport.__name__):
         assert await channel._create_connection() is marker
 
     upstream.assert_awaited_once()
     assert connection_spy.calls == []
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert [r.getMessage() for r in warnings] == [
-        "grpclib internals changed; connecting without Happy Eyeballs"
+    assert warning_lines(caplog) == [FALLBACK_WARNING]
+
+
+async def test_missing_target_name_option_falls_back_with_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The option on the configuration object is a private dependency as well."""
+    channel, marker, upstream, connection_spy = channel_with_patched_upstream(
+        monkeypatch, use_ssl=True
+    )
+    channel._config = SimpleNamespace()  # type: ignore[assignment]
+
+    with caplog.at_level(logging.WARNING, logger=spot_grpc_transport.__name__):
+        assert await channel._create_connection() is marker
+
+    upstream.assert_awaited_once()
+    assert connection_spy.calls == []
+    assert warning_lines(caplog) == [FALLBACK_WARNING]
+
+
+async def test_repeated_fallback_warns_once(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Every reconnect takes the fallback, and the log must not fill up with it."""
+    channel, marker, upstream, _ = channel_with_patched_upstream(
+        monkeypatch, use_ssl=False
+    )
+    del channel._host
+
+    with caplog.at_level(logging.WARNING, logger=spot_grpc_transport.__name__):
+        assert await channel._create_connection() is marker
+        assert await channel._create_connection() is marker
+
+    assert upstream.await_count == 2
+    assert warning_lines(caplog) == [FALLBACK_WARNING]
+
+
+async def test_renamed_upstream_method_warns_when_the_channel_is_created(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """grpclib would stop calling the override, so nothing else could notice."""
+    monkeypatch.delattr(grpclib.client.Channel, "_create_connection")
+    transport = SpotGrpcTransport(host=TEST_HOST, port=443, use_ssl=False)
+    try:
+        with caplog.at_level(logging.WARNING, logger=spot_grpc_transport.__name__):
+            await transport.get_channel()
+    finally:
+        await transport.async_close()
+
+    assert warning_lines(caplog) == [FALLBACK_WARNING]
+
+
+async def test_control_intact_upstream_method_does_not_warn(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Control: an unchanged grpclib stays silent at channel creation."""
+    transport = SpotGrpcTransport(host=TEST_HOST, port=443, use_ssl=False)
+    try:
+        with caplog.at_level(logging.WARNING, logger=spot_grpc_transport.__name__):
+            await transport.get_channel()
+    finally:
+        await transport.async_close()
+
+    assert warning_lines(caplog) == []
+
+
+FAMILY_LOG_CASES = [
+    pytest.param(V4_LIVE, v4_info, "AF_INET", True, id="ipv4-tls"),
+    pytest.param(V6_LIVE, v6_info, "AF_INET6", False, id="ipv6-plain"),
+]
+
+
+@pytest.mark.parametrize(("address", "info", "family", "use_ssl"), FAMILY_LOG_CASES)
+async def test_connected_line_names_true_family_and_no_address(
+    address: str,
+    info: Callable[[str, int], AddressInfo],
+    family: str,
+    use_ssl: bool,
+    grpc_server: ServerFactory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The log shows the connected family, never an IP address."""
+    server, transport = await _start_for(
+        use_ssl, grpc_server, tmp_path, monkeypatch, host=address
+    )
+    install_dead_path(
+        monkeypatch, asyncio.get_running_loop(), [info(address, server.port)]
+    )
+    channel = await transport.get_channel()
+    try:
+        with caplog.at_level(logging.DEBUG, logger=spot_grpc_transport.__name__):
+            assert await call_ping(channel, REACH_DEADLINE_S) == b"ok"
+    finally:
+        await transport.async_close()
+
+    connected = [
+        r.getMessage()
+        for r in caplog.records
+        if r.getMessage().startswith("Connected to Spot endpoint")
     ]
+    assert connected == [f"Connected to Spot endpoint ({TEST_HOST},443) over {family}"]
+    assert not any(address in r.getMessage() for r in caplog.records)
 
 
 async def test_control_network_error_does_not_fall_back(
@@ -662,12 +798,12 @@ async def test_single_timeout_then_success_keeps_the_channel(
     transport = SpotGrpcTransport(host=TEST_HOST, port=443, use_ssl=False)
     probe = ResetProbe(transport, state)
     probe.install(monkeypatch)
-    patch_request_budget(
-        monkeypatch,
-        before_retry=lambda: install_dead_path(
-            monkeypatch, loop, [v4_info(V4_LIVE, server.port)]
-        ),
-    )
+
+    def path_heals() -> None:
+        install_dead_path(monkeypatch, loop, [v4_info(V4_LIVE, server.port)])
+        monkeypatch.setattr(spot_request, "_SPOT_REQUEST_TIMEOUT_S", REACH_DEADLINE_S)
+
+    patch_request_budget(monkeypatch, before_retry=path_heals)
     channel = await transport.get_channel()
     try:
         reply = await spot_request.async_spot_request(
@@ -765,3 +901,170 @@ async def test_late_reset_leaves_a_channel_another_caller_rebuilt_open(
     # Two requests over one connection: the channel stayed open between them.
     assert server.requests == [b"ping", b"ping"]
     assert server.connections == 1
+
+
+class ScriptedMethod:
+    """Stand in for ``UnaryUnaryMethod`` and fail each attempt as scripted."""
+
+    script: list[Callable[[], Awaitable[BaseException]]] = []
+    channels: list[object] = []
+
+    def __init__(self, channel: object, *_args: Any) -> None:
+        self.channel = channel
+
+    def open(self, **_kwargs: Any) -> Self:
+        return self
+
+    async def __aenter__(self) -> None:
+        type(self).channels.append(self.channel)
+        raise await type(self).script.pop(0)()
+
+    async def __aexit__(self, *_exc: object) -> None:
+        return None
+
+
+def script_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+    *steps: Callable[[], Awaitable[BaseException]],
+) -> type[ScriptedMethod]:
+    """Install ``ScriptedMethod`` so that each step yields one attempt's failure."""
+    monkeypatch.setattr(ScriptedMethod, "script", list(steps))
+    monkeypatch.setattr(ScriptedMethod, "channels", [])
+    monkeypatch.setattr(spot_request, "UnaryUnaryMethod", ScriptedMethod)
+    return ScriptedMethod
+
+
+def fails_with(failure: BaseException) -> Callable[[], Awaitable[BaseException]]:
+    """Return a script step that only yields ``failure``."""
+
+    async def step() -> BaseException:
+        return failure
+
+    return step
+
+
+REBUILT_CASES = [
+    pytest.param(
+        StreamTerminatedError("stream lost"),
+        "Fatal transport error",
+        id="stream-terminated",
+    ),
+    pytest.param(
+        AttributeError("'NoneType' object has no attribute '_write_appdata'"),
+        "SSL transport teardown",
+        id="ssl-teardown",
+    ),
+    pytest.param(OSError("network down"), "Transport error", id="os-error"),
+    pytest.param(TimeoutError(), "Timeout after retries", id="timeout"),
+]
+
+
+async def test_rebuilt_case_set_is_complete() -> None:
+    """Every reset in the request path has a case; the set must not shrink."""
+    source = inspect.getsource(spot_request.async_spot_request)
+    assert source.count("active_transport.reset(expected=channel)") == len(
+        REBUILT_CASES
+    )
+    assert source.count("active_transport.reset(") == len(REBUILT_CASES)
+
+
+@pytest.mark.parametrize(("failure", "message"), REBUILT_CASES)
+async def test_failed_request_leaves_a_channel_another_caller_rebuilt_open(
+    failure: BaseException,
+    message: str,
+    grpc_server: ServerFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Parallel requests failing on an old channel must not close its replacement.
+
+    Without the check each late failure closed the channel just rebuilt, and many
+    parallel requests turned one dead channel into a chain of reconnects.
+    """
+    server = await grpc_server()
+    transport = SpotGrpcTransport(host=V4_LIVE, port=server.port, use_ssl=False)
+    replacements: list[grpclib.client.Channel] = []
+
+    async def rebuilt_while_in_flight() -> BaseException:
+        await transport.reset()
+        replacements.append(await transport.get_channel())
+        assert await call_ping(replacements[0], REACH_DEADLINE_S) == b"ok"
+        return failure
+
+    patch_request_budget(monkeypatch)
+    monkeypatch.setattr(spot_request, "_SPOT_MAX_RETRIES", 0)
+    script_attempts(monkeypatch, rebuilt_while_in_flight)
+    try:
+        with pytest.raises(SpotNetworkError, match=message):
+            await spot_request.async_spot_request(
+                "Test", b"ping", cache=UNUSED_CACHE, transport=transport
+            )
+
+        assert await transport.get_channel() is replacements[0]
+        assert await call_ping(replacements[0], REACH_DEADLINE_S) == b"ok"
+    finally:
+        await transport.async_close()
+
+    # Two requests over one connection: the replacement stayed open between them.
+    assert server.requests == [b"ping", b"ping"]
+    assert server.connections == 1
+
+
+async def test_single_timeout_after_other_failures_keeps_the_channel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The budget is shared, but one timeout proves no dead channel."""
+    transport = SpotGrpcTransport(host=TEST_HOST, port=443, use_ssl=False)
+    patch_request_budget(monkeypatch)
+    method = script_attempts(
+        monkeypatch,
+        fails_with(GRPCError(Status.UNAVAILABLE)),
+        fails_with(GRPCError(Status.UNAVAILABLE)),
+        fails_with(GRPCError(Status.UNAVAILABLE)),
+        fails_with(TimeoutError()),
+    )
+    channel = await transport.get_channel()
+    try:
+        with pytest.raises(SpotNetworkError, match="Timeout after retries"):
+            await spot_request.async_spot_request(
+                "Test", b"ping", cache=UNUSED_CACHE, transport=transport
+            )
+        assert await transport.get_channel() is channel
+    finally:
+        await transport.async_close()
+
+    assert method.channels == [channel] * 4
+
+
+async def test_timeouts_across_a_replacement_keep_the_new_channel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Timeouts on the old channel say nothing about the one that replaced it."""
+    transport = SpotGrpcTransport(host=TEST_HOST, port=443, use_ssl=False)
+    replacements: list[grpclib.client.Channel] = []
+
+    async def replaced_then_timeout() -> BaseException:
+        await transport.reset()
+        replacements.append(await transport.get_channel())
+        return TimeoutError()
+
+    patch_request_budget(monkeypatch)
+    method = script_attempts(
+        monkeypatch,
+        fails_with(TimeoutError()),
+        replaced_then_timeout,
+        fails_with(TimeoutError()),
+        fails_with(TimeoutError()),
+    )
+    channel = await transport.get_channel()
+    try:
+        with pytest.raises(SpotNetworkError, match="Timeout after retries"):
+            await spot_request.async_spot_request(
+                "Test", b"ping", cache=UNUSED_CACHE, transport=transport
+            )
+        assert await transport.get_channel() is replacements[0]
+    finally:
+        await transport.async_close()
+
+    # The replacement arrives during the second attempt, which still ran on the old
+    # channel, so only the last two timeouts count for the new one.
+    assert method.channels == [channel, channel, replacements[0], replacements[0]]

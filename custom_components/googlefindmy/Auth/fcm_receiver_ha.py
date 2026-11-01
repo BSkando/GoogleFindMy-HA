@@ -4631,9 +4631,9 @@ class FcmReceiverHA:
             if pc is not None:
                 # Derive the readiness budget from the library's connection-retry
                 # count instead of a fixed 15.0s.  A brand-new FCM identity's
-                # first MCS connect can take the full retry budget
-                # (FCM_CONNECTION_RETRY_COUNT attempts, up to 78.6 s per the note near
-                # _listen()); a hard-coded 15.0s under-covered that window and let
+                # first MCS connect can take the retry budget of a reachable endpoint
+                # (see the note above _max_ready_wait_s); a hard-coded 15.0s
+                # under-covered that window and let
                 # the gate expire before STARTED on the very first run.  Adding a
                 # small margin keeps a fresh registration from being abandoned
                 # prematurely, which is the root of the deterministic first-run

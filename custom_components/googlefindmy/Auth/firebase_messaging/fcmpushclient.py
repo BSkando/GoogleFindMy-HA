@@ -312,9 +312,9 @@ class FcmPushClient[NotificationContextT]:  # pylint:disable=too-many-instance-a
         # ``persistent_ids`` and ``_first_data_message_delivered`` resets).
         # Consumers measure "session age since STARTED" from this instead of the
         # supervisor's pre-start timestamp, which is recorded before ``start()``
-        # and can trail the actual STARTED transition by the connection budget
-        # (up to 78.6 s when every attempt fails; ``MCS_CONNECT_TIMEOUT_S`` in
-        # ``const.py``). ``None`` until the client first reaches STARTED.
+        # and can trail the actual STARTED transition by the attempts that fail
+        # first (each limited by ``MCS_CONNECT_TIMEOUT_S`` in ``const.py``).
+        # ``None`` until the client first reaches STARTED.
         self._started_monotonic: float | None = None
         # First-locate reconnect "has delivered" proof, kept *separate* from
         # ``persistent_ids``. ``persistent_ids`` must record every selective-acked

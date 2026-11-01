@@ -1,13 +1,15 @@
 # tests/test_fcmpushclient_connect_happy_eyeballs.py
-"""The MCS connect survives a dead IPv6 path and always ends inside its limit.
+"""The MCS connect survives a dead IPv6 path, and its socket work ends inside the limit.
 
 On a host whose IPv6 route exists but drops packets, the sequential connect hung
 on the AAAA address until the kernel gave up, and the idle watchdog restarted the
 client first, so IPv4 was never tried. These tests drive the real ``_connect``
 against loopback servers; only the resolver and the dead addresses are scripted
 (``tests/helpers/dead_ipv6_path.py``). A server-side observation carries every
-success claim. They run in real time on purpose: the behavior under test is the
-timing itself, and the limit is patched down so that no test waits for 12 s.
+success claim. asyncio's real timers stay, because the traffic is real loopback
+traffic that a frozen clock would stall. No result depends on how fast they run:
+REACH_BOUND_S only turns a hang into a red test, the limit is patched down so that
+no test waits for 12 s, and a limit can only be overrun, never undercut, by load.
 """
 
 from __future__ import annotations
@@ -47,11 +49,13 @@ V6_DEAD_A = "2001:db8::a"
 V6_DEAD_B = "2001:db8::b"
 V6_DEAD_C = "2001:db8::c"
 DEAD_ADDRESSES = frozenset({V4_DEAD, V6_DEAD_A, V6_DEAD_B, V6_DEAD_C})
-# Failure bound of a single test. A connect that hangs misses it, which is the
-# red result on the unfixed code. A bound by asyncio.timeout would raise the same
-# type as the limit under test and hide a missing limit.
-REACH_BOUND_S = 2.0
-PATCHED_LIMIT_S = 0.3
+# Failure bound of a single test, not a timing claim: only a hang reaches it, which
+# is the red result on the unfixed code. A bound by asyncio.timeout would raise the
+# same type as the limit under test and hide a missing limit.
+REACH_BOUND_S = 10.0
+PATCHED_LIMIT_S = 0.5
+# How long a hang must hold. Load can only extend this window, so it cannot flake.
+HANG_WINDOW_S = 0.1
 # Taken before any test patches the name the client resolves on the ssl module.
 REAL_CREATE_DEFAULT_CONTEXT = ssl.create_default_context
 
@@ -235,10 +239,9 @@ async def test_live_ipv4_is_reached_behind_dead_ipv6(
 
     monkeypatch.setattr(loop, "create_connection", spy)
 
-    connected, elapsed = await run_bounded(start_connect(client, eager=eager))
+    connected, _ = await run_bounded(start_connect(client, eager=eager))
 
     assert connected is True
-    assert elapsed < REACH_BOUND_S
     assert state.hung_addresses[0] == V6_DEAD_A
     assert state.abandoned_hangs == len(state.hung_addresses)
     assert spy_kwargs["happy_eyeballs_delay"] == 0.25
@@ -358,6 +361,10 @@ async def test_limit_ends_all_dead_addresses(
     monkeypatch.setattr(
         fcmpushclient, "MCS_CONNECT_TIMEOUT_S", PATCHED_LIMIT_S, raising=False
     )
+    # Every address must be entered before the limit, whatever the load.
+    monkeypatch.setattr(
+        fcmpushclient, "MCS_HAPPY_EYEBALLS_DELAY_S", 0.001, raising=False
+    )
     infos = [
         v4_info(addr, 5228) if addr == V4_DEAD else v6_info(addr, 5228) for addr in dead
     ]
@@ -418,15 +425,25 @@ async def test_limit_ends_silent_tls_peer(
     assert state.hung_addresses == []
 
 
+def _lower_bound(low: float, _high: float) -> float:
+    return low
+
+
+def _upper_bound(_low: float, high: float) -> float:
+    return high
+
+
 @pytest.mark.parametrize(
-    ("jitter", "expected_total"),
+    ("uniform", "expected_total"),
     [
-        pytest.param(0.10, 77.05, id="lowest_jitter"),
-        pytest.param(0.20, 78.6, id="highest_jitter"),
+        pytest.param(_lower_bound, 77.05, id="lowest_jitter"),
+        pytest.param(_upper_bound, 78.6, id="highest_jitter"),
     ],
 )
 async def test_five_failed_attempts_end_before_watchdog(
-    monkeypatch: pytest.MonkeyPatch, jitter: float, expected_total: float
+    monkeypatch: pytest.MonkeyPatch,
+    uniform: Callable[[float, float], float],
+    expected_total: float,
 ) -> None:
     """The real retry loop gives up before the idle watchdog restarts the client."""
     assert mcs_const.MCS_HAPPY_EYEBALLS_DELAY_S == 0.25
@@ -456,7 +473,8 @@ async def test_five_failed_attempts_end_before_watchdog(
         clock += delay
 
     monkeypatch.setattr(client, "_connect", failed_attempt)
-    monkeypatch.setattr(random, "uniform", lambda _low, _high: jitter)
+    # The stub answers with the bounds the code asks for, so a wider range shows.
+    monkeypatch.setattr(random, "uniform", uniform)
     with monkeypatch.context() as scoped:
         scoped.setattr(fcmpushclient.asyncio, "sleep", fake_sleep)
         result = await client._connect_with_retry()
@@ -582,7 +600,8 @@ async def test_helper_hang_is_real_without_happy_eyeballs(
             ssl=certificate.client_context(),
         )
     )
-    done, _ = await asyncio.wait({task}, timeout=PATCHED_LIMIT_S)
+    await asyncio.wait_for(state.entered.wait(), REACH_BOUND_S)
+    done, _ = await asyncio.wait({task}, timeout=HANG_WINDOW_S)
     assert done == set()
     assert state.hung_addresses == [V6_DEAD_A]
     assert server.handshakes == 0
