@@ -108,6 +108,11 @@ class _MixinBase:
     _empty_location_streak: dict[str, int]
     _last_device_list: list[dict[str, Any]]
     _empty_list_streak: int
+    _stale_device_misses: dict[str, int]
+    _stale_removed_google_ids: set[str]
+    _stale_name_baseline: dict[str, Mapping[tuple[str, str], int]]
+    _stale_removal_attempts: dict[str, int]
+    _stale_removal_given_up: set[str]
     _last_list_poll_mono: float
     _last_nonempty_wall: float
     _force_device_list_refresh: bool
@@ -308,6 +313,19 @@ class _MixinBase:
         raise NotImplementedError
 
     def _sync_owner_index(self, devices: list[dict[str, Any]] | None) -> None:
+        raise NotImplementedError
+
+    def _remove_stale_devices(
+        self,
+        fresh_list_ids: set[str],
+        *,
+        dropped_candidates: int,
+        canonicless_warn: int,
+        canonicless_names: Mapping[tuple[str, str], int] | None = None,
+    ) -> int:
+        raise NotImplementedError
+
+    def purge_device(self, device_id: str) -> None:
         raise NotImplementedError
 
     def _find_tracker_entity_entry(self, device_id: str) -> Any:

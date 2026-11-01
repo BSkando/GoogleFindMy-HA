@@ -271,6 +271,9 @@ rules:
     - id: stale-devices
       status: done
       evidence:
+        - "custom_components/googlefindmy/coordinator/helpers/registry.py:plan_stale_device_removals"
+        - "custom_components/googlefindmy/coordinator/registry.py:RegistryOperations._remove_stale_devices"
+        - "tests/test_stale_device_removal.py"
         - "custom_components/googlefindmy/__init__.py:async_remove_config_entry_device"
 
   platinum:

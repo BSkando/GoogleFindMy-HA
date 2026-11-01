@@ -48,6 +48,7 @@ from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from .._reauth_reason import ReauthReasonCode
 from ..Auth.fcm_receiver_ha import CRASH_LOOP_FATAL_PREFIX
+from ..Auth.log_safety import describe_exception
 from ..const import (
     DEVICE_LIST_POLL_INTERVAL,
     DOMAIN,
@@ -69,6 +70,7 @@ from ..NovaApi.nova_request import (
     NovaAuthPermanentError,
     is_credential_rejection,
 )
+from ..ProtoDecoders import decoder
 from ..SpotApi.GetEidInfoForE2eeDevices.get_eid_info_request import (
     SpotApiEmptyResponseError,
 )
@@ -1307,6 +1309,11 @@ class PollingOperations(_MixinBase):
                 use_cached_list = not list_due and bool(self._last_device_list)
 
             filtered_devices: list[dict[str, Any]]
+            # Set only below, for a list fetched in this cycle that is not empty.
+            # Cached, deferred and accepted-empty lists prove nothing about which
+            # devices left the account (stale-device rules S-R1, S-R2).
+            fresh_list_ids: set[str] | None = None
+            dropped_candidates = 0
             if use_cached_list:
                 filtered_devices = list(self._last_device_list)
                 self._set_api_status(ApiStatus.OK)
@@ -1381,6 +1388,7 @@ class PollingOperations(_MixinBase):
                     dev_id_raw = candidate.get("id")
                     if not isinstance(dev_id_raw, str) or not dev_id_raw.strip():
                         _LOGGER.debug("Skipping device without valid id: %r", candidate)
+                        dropped_candidates += 1
                         continue
                     dev_id = dev_id_raw.strip()
                     if dev_id in _logged_ids:
@@ -1418,6 +1426,7 @@ class PollingOperations(_MixinBase):
                     self._empty_list_streak = 0
                     self._last_device_list = list(filtered_devices)
                     self._last_list_poll_mono = list_check_mono
+                    fresh_list_ids = {dev["id"] for dev in filtered_devices}
 
             # Presence TTL derives from the effective poll cadence
             effective_interval = max(
@@ -1537,6 +1546,37 @@ class PollingOperations(_MixinBase):
                 _LOGGER.debug(
                     "Device Registry ensured/updated for %d device(s).", created
                 )
+
+            # 2.6) Remove tracker devices that left the Google account
+            # (Integration Quality Scale rule ``stale-devices``). After the
+            # ensure step, so creation and removal see the same registry. A
+            # failure here must never fail the update cycle (S-R7).
+            if fresh_list_ids is not None:
+                try:
+                    self._remove_stale_devices(
+                        fresh_list_ids,
+                        dropped_candidates=dropped_candidates,
+                        canonicless_warn=int(
+                            self.stats.get("canonicless_drop_warn", 0)
+                        ),
+                        canonicless_names=decoder.get_canonicless_name_counts(
+                            self._entry_id() or ""
+                        ),
+                    )
+                except Exception as err:  # noqa: BLE001 - S-R7, logged once
+                    # Polling record (AGENTS.md section 5): the exception text
+                    # can carry account data, which no level may log, so INFO
+                    # and above name its class and DEBUG the log-safe summary.
+                    _LOGGER.warning(
+                        "[%s] Removing devices that left the Google account failed (%s)",
+                        self._entry_id() or "unknown",
+                        type(err).__name__,
+                    )
+                    _LOGGER.debug(
+                        "[%s] Stale-device removal error detail: %s",
+                        self._entry_id() or "unknown",
+                        describe_exception(err),
+                    )
 
             # 3) Decide whether to trigger a poll cycle (monotonic clock)
             # Build list of devices to POLL:

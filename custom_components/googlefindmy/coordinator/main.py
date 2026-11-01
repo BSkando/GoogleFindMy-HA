@@ -797,6 +797,21 @@ class GoogleFindMyCoordinator(
         # Minimal hardening state (empty-list quorum)
         self._last_device_list: list[dict[str, Any]] = []
         self._empty_list_streak: int = 0
+        # Stale-device removal: consecutive fresh lists each tracker device was
+        # missing from, keyed by device registry id. Volatile on purpose: a
+        # restart starts the count again, which only delays a removal.
+        self._stale_device_misses: dict[str, int] = {}
+        # Google ids removed as stale; one of them in a fresh list reloads the
+        # entry once so the platforms set up its entities again (S-R6).
+        self._stale_removed_google_ids: set[str] = set()
+        # Canonicless drop counts per name and kind of the last counting list
+        # that carried each Google id, so a shared name protects only a new
+        # drop (S-R3d, R2-6, R3-5).
+        self._stale_name_baseline: dict[str, Mapping[tuple[str, str], int]] = {}
+        # Refused or failed removals per device registry id, and the devices
+        # given up after STALE_REMOVAL_MAX_ATTEMPTS until the next setup.
+        self._stale_removal_attempts: dict[str, int] = {}
+        self._stale_removal_given_up: set[str] = set()
 
         # Polling state
         self._poll_lock = asyncio.Lock()

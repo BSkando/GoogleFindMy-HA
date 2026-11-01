@@ -14,8 +14,9 @@ from __future__ import annotations
 
 import inspect
 import logging
+import re
 from collections.abc import Callable, Collection, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Final, Literal
 
@@ -38,6 +39,8 @@ __all__ = [
     "DeviceRegistryOperation",
     "NotGivenType",
     "OwnershipIntent",
+    "STALE_REMOVAL_REQUIRED_MISSES",
+    "StaleDevicePlan",
     "build_canonical_unique_id",
     "build_entity_unique_id_candidates",
     "build_legacy_device_registry_kwargs",
@@ -58,6 +61,7 @@ __all__ = [
     "normalize_device_name",
     "parse_device_identifier",
     "plan_device_ownership",
+    "plan_stale_device_removals",
     "read_device_ownership",
     "resolve_device_by_identifiers",
     "resolve_tracker_subentry_candidate",
@@ -1112,6 +1116,273 @@ def extract_subentry_links(device: Any, entry_id: str | None) -> set[str | None]
         return {None}
 
     return set()
+
+
+# ---------------------------------------------------------------------------
+# Stale devices: tracker devices that left the Google account
+# ---------------------------------------------------------------------------
+
+#: Consecutive fresh device lists a tracker device must be missing from before
+#: it is removed. One miss is not enough: a single truncated fetch can drop a
+#: tracker as a ``benign`` canonicless device without any other trace.
+STALE_REMOVAL_REQUIRED_MISSES: Final = 2
+
+#: Removal attempts a device gets before it is left alone until the next
+#: setup: the first one and one retry. ``_apply_device_ownership`` logs a
+#: DETACH it refuses as an error, so an unbounded retry could add one error
+#: per device list.
+STALE_REMOVAL_MAX_ATTEMPTS: Final = 2
+
+#: The tail the registry sync adds to a tracker name that collides with a hub
+#: name: `` (<last 6 characters of the subentry, device or entry id>)``.
+_HUB_COLLISION_SUFFIX: Final = re.compile(r" \([^()]{1,6}\)$")
+
+
+@dataclass(frozen=True)
+class StaleDevicePlan:
+    """Outcome of :func:`plan_stale_device_removals`.
+
+    Attributes:
+        remove: ``(device, google_ids)`` pairs to remove now.
+        first_misses: ``(device, misses)`` pairs missing from this list but not
+            yet often enough to be removed.
+        misses: The miss counter to keep for the next fresh list, keyed by
+            device registry id. Devices that are listed again drop out of it.
+        skipped_reason: Set when this list must not count at all; the counter
+            is then returned unchanged.
+        name_baseline: The drop counts to keep for the next fresh list, keyed
+            by Google id: for every id of a counting list, the canonicless drop
+            counts of that list per normalized name and kind (S-R3d).
+    """
+
+    remove: tuple[tuple[Any, frozenset[str]], ...] = ()
+    first_misses: tuple[tuple[Any, int], ...] = ()
+    misses: dict[str, int] = field(default_factory=dict)
+    skipped_reason: str | None = None
+    name_baseline: dict[str, Mapping[tuple[str, str], int]] = field(
+        default_factory=dict
+    )
+
+
+def _normalized_name_counts(
+    raw: Mapping[tuple[str, str], int],
+) -> dict[tuple[str, str], int]:
+    """Fold raw ``(name, kind)`` drops into ``normalize_device_name`` keys.
+
+    The kind stays part of the key: two devices of one name but different
+    kinds are two counts (R3-5).
+    """
+    counts: dict[tuple[str, str], int] = {}
+    for item, count in raw.items():
+        if not isinstance(item, tuple) or len(item) != 2:
+            continue
+        name, kind = item
+        key = normalize_device_name(name)
+        if key is None or not isinstance(kind, str) or not kind:
+            continue
+        if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+            continue
+        counts[(key, kind)] = counts.get((key, kind), 0) + count
+    return counts
+
+
+def _registry_name_keys(device: Any) -> frozenset[str]:
+    """Return the normalized names a canonicless drop of ``device`` can carry.
+
+    The registry ``name`` follows the Google name (the sync keeps it current
+    also under a user name, as core does), stripped of edge spaces. The hub
+    collision suffix is the one change the sync makes to it, so the name
+    without it counts as well.
+    """
+    name = getattr(device, "name", None)
+    if not isinstance(name, str):
+        return frozenset()
+    keys = {
+        normalize_device_name(name),
+        normalize_device_name(_HUB_COLLISION_SUFFIX.sub("", name)),
+    }
+    return frozenset(key for key in keys if key is not None)
+
+
+def _is_still_listed_by_name(
+    device: Any,
+    google_ids: frozenset[str],
+    dropped: Mapping[tuple[str, str], int],
+    name_baseline: Mapping[str, Mapping[tuple[str, str], int]],
+) -> bool:
+    """S-R3d: tell whether a canonicless drop stands for ``device``.
+
+    A drop under the device's name stands for it when that name has more
+    drops of one kind now than in the last counting list that still carried
+    the device with its id; a drop that was already there belongs to another
+    device of the same name (R2-6). Counting per kind keeps a role swap
+    visible: when a phone of the tracker's name gets its id in the same
+    listing in which the tracker loses its own, the drop moves from
+    ``android`` to another kind and is new (R3-5). Without such a list
+    (after a restart) the name alone decides, which keeps a device that may
+    still be in the account.
+    """
+    names = _registry_name_keys(device)
+    for (key, kind), now in dropped.items():
+        if key not in names or now <= 0:
+            continue
+        before = [
+            name_baseline[google_id].get((key, kind), 0)
+            for google_id in google_ids
+            if google_id in name_baseline
+        ]
+        if not before or now > min(before):
+            return True
+    return False
+
+
+def _device_google_ids(device: Any, domain: str) -> frozenset[str]:
+    """Return every Google id one device carries.
+
+    The id is the last ``:`` segment of each identifier of ``domain``: the
+    namespaced ``<entry>:<id>``, the subentry form ``<entry>:<subentry>:<id>``
+    and the legacy bare ``<id>`` all end in it. A device merged from two
+    trackers of the same name carries two ids; all of them are returned, so a
+    caller never depends on the iteration order of the identifier set.
+    """
+    ids: set[str] = set()
+    for identifier in getattr(device, "identifiers", None) or ():
+        if not isinstance(identifier, (tuple, list)) or len(identifier) != 2:
+            continue
+        ident_domain, ident_value = identifier
+        if ident_domain != domain or not isinstance(ident_value, str):
+            continue
+        google_id = ident_value.rsplit(":", 1)[-1].strip()
+        if google_id:
+            ids.add(google_id)
+    return frozenset(ids)
+
+
+def plan_stale_device_removals(  # noqa: PLR0913 - one parameter per protection rule
+    devices: Iterable[Any],
+    *,
+    entry_id: str | None,
+    domain: str,
+    service_identifiers: Collection[tuple[str, str]],
+    fresh_list_ids: Collection[str] | None,
+    dropped_candidates: int,
+    canonicless_warn: int,
+    canonicless_names: Mapping[tuple[str, str], int],
+    previous_misses: Mapping[str, int],
+    name_baseline: Mapping[str, Mapping[tuple[str, str], int]] | None = None,
+    required_misses: int = STALE_REMOVAL_REQUIRED_MISSES,
+) -> StaleDevicePlan:
+    """Decide which tracker devices left the Google account.
+
+    Pure: no ``hass``, no registry access, no I/O. The caller passes the
+    devices of its config entry and the device list it fetched in this cycle,
+    and executes the returned plan. Integration Quality Scale rule
+    ``stale-devices``: when the service delivers a complete device list, the
+    integration removes devices missing from it itself.
+
+    A list only counts when it is fresh, not empty and complete:
+
+    * ``fresh_list_ids`` is ``None`` or empty (cached, deferred or accepted
+      empty list): nothing is planned (S-R1, S-R2).
+    * ``dropped_candidates > 0``: the fetch held entries without a valid id,
+      so the list is incomplete (S-R3a).
+    * ``canonicless_warn > 0``: the decoder dropped a tracker-like device
+      without canonical id (S-R3b). ``benign`` drops do not block; live they
+      occur on every fetch (S-R3c).
+
+    Per device:
+
+    * the service device is never a candidate (S-R4);
+    * only devices with a link to ``entry_id`` are candidates (S-R5);
+    * a device without a readable Google id is never removed, and one is
+      removed only when *none* of its ids is listed (S-R8);
+    * a device whose name the decoder dropped from this fetch for lack of a
+      canonical id is still in the account and counts as listed (S-R3d). The
+      class tally behind S-R3b misses it: a phone or an accessory without an
+      ``information`` block drops as ``benign`` even when it was a tracker
+      device before, and the decoder flags that transition for one fetch only.
+      Names compare normalized and without the hub collision suffix, and a
+      drop counts for the device only when its name has more drops of one
+      kind than in the last counting list that carried the device (R2-1,
+      R2-6, R3-5). Two devices of one name and one kind that swap roles in
+      one listing stay indistinguishable; different names in the Find Hub
+      app tell them apart;
+    * it must be missing from ``required_misses`` consecutive counting lists
+      (S-R9).
+
+    Args:
+        devices: Device registry entries of this config entry.
+        entry_id: The config entry the devices belong to.
+        domain: The integration domain of the identifiers.
+        service_identifiers: Identifiers that mark the service device.
+        fresh_list_ids: Google ids of the list fetched in this cycle.
+        dropped_candidates: List entries without a valid id in this fetch.
+        canonicless_warn: The decoder's ``warn`` drop count for this fetch.
+        canonicless_names: ``(raw name, kind)`` of the devices the decoder
+            dropped from this fetch for lack of a canonical id, whatever
+            their class, with the number of drops under each.
+        previous_misses: The counter returned by the previous call.
+        name_baseline: The ``name_baseline`` returned by the previous call.
+        required_misses: Consecutive misses that remove a device.
+
+    Returns:
+        The plan; see :class:`StaleDevicePlan`.
+    """
+    baseline = dict(name_baseline or {})
+    skipped_reason: str | None = None
+    if not entry_id or not fresh_list_ids:
+        skipped_reason = "no_fresh_list"
+    elif dropped_candidates > 0:
+        skipped_reason = "dropped_candidates"
+    elif canonicless_warn > 0:
+        skipped_reason = "canonicless_warn"
+    if skipped_reason is not None:
+        return StaleDevicePlan(
+            misses=dict(previous_misses),
+            skipped_reason=skipped_reason,
+            name_baseline=baseline,
+        )
+
+    listed = frozenset(fresh_list_ids or ())
+    dropped = _normalized_name_counts(canonicless_names)
+    service = frozenset(service_identifiers)
+    remove: list[tuple[Any, frozenset[str]]] = []
+    first_misses: list[tuple[Any, int]] = []
+    misses: dict[str, int] = {}
+    for device in devices:
+        device_id = getattr(device, "id", None)
+        if not isinstance(device_id, str) or not device_id:
+            continue
+        if getattr(device, "entry_type", None) is not None or service.intersection(
+            getattr(device, "identifiers", None) or ()
+        ):
+            continue
+        if not extract_subentry_links(device, entry_id):
+            continue
+        google_ids = _device_google_ids(device, domain)
+        if not google_ids or google_ids & listed:
+            continue
+        if _is_still_listed_by_name(device, google_ids, dropped, baseline):
+            continue
+        count = previous_misses.get(device_id, 0) + 1
+        if count >= required_misses:
+            remove.append((device, google_ids))
+        else:
+            misses[device_id] = count
+            first_misses.append((device, count))
+    next_baseline = {
+        google_id: counts
+        for google_id, counts in baseline.items()
+        if not any(google_id in ids for _device, ids in remove)
+    }
+    for google_id in listed:
+        next_baseline[google_id] = dropped
+    return StaleDevicePlan(
+        remove=tuple(remove),
+        first_misses=tuple(first_misses),
+        misses=misses,
+        name_baseline=next_baseline,
+    )
 
 
 # ---------------------------------------------------------------------------

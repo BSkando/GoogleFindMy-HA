@@ -86,6 +86,23 @@ _visible_device_names_by_entry: dict[str, set[str]] = {}
 # untouched (CQS). The coordinator reads it per poll via get_canonicless_counts.
 _canonicless_counts_by_entry: dict[str, dict[str, int]] = {}
 
+# Names of the devices dropped for lack of a canonical id on the LAST main poll,
+# per entry scope and regardless of class, each with the number of drops under it
+# (two devices can share a name). The stale-device removal reads them: a tracker
+# that Google still lists, only without a canonical id, is still in the account and
+# must not be removed as missing, and the count tells a new drop from one that was
+# already there. Each drop is keyed by ``(name, kind)``, the kind being the class of
+# the device Google reports (CANONICLESS_KIND_*), so a phone and a tracker of one
+# name that swap roles in one listing do not cancel out. Written and cleared together
+# with the tally above; read via get_canonicless_name_counts.
+_canonicless_name_counts_by_entry: dict[str, dict[tuple[str, str], int]] = {}
+
+#: Kinds of a canonicless drop, from the device type Google reports for the device
+#: (``identifierInformation.type``) and whether it carries an ``information`` block.
+CANONICLESS_KIND_ANDROID = "android"
+CANONICLESS_KIND_NO_INFORMATION = "no_information"
+CANONICLESS_KIND_TRACKER = "tracker"
+
 
 def get_canonicless_counts(entry_id: str) -> dict[str, int]:
     """Return the last main-poll canonicless drop tally for an entry scope.
@@ -103,6 +120,21 @@ def get_canonicless_counts(entry_id: str) -> dict[str, int]:
     return dict(counts)
 
 
+def get_canonicless_name_counts(entry_id: str) -> dict[tuple[str, str], int]:
+    """Return the names dropped for lack of a canonical id on the last main poll.
+
+    Args:
+        entry_id: The entry scope (``cache.entry_id`` or ``"<no-entry>"``).
+
+    Returns:
+        Each ``(raw device name, kind)`` with the number of drops under it,
+        the kind being one of the ``CANONICLESS_KIND_*`` values; empty for an
+        entry without a recorded main poll. A copy, so callers cannot change
+        the recorded tally.
+    """
+    return dict(_canonicless_name_counts_by_entry.get(entry_id, {}))
+
+
 def _reset_canonicless_warning_state(entry_id: str | None = None) -> None:
     """Clear the canonicless-device warning guard and the visibility-transition map.
 
@@ -117,10 +149,12 @@ def _reset_canonicless_warning_state(entry_id: str | None = None) -> None:
         _last_canonicless_count_by_entry.clear()
         _visible_device_names_by_entry.clear()
         _canonicless_counts_by_entry.clear()
+        _canonicless_name_counts_by_entry.clear()
         return
     _last_canonicless_count_by_entry.pop(entry_id, None)
     _visible_device_names_by_entry.pop(entry_id, None)
     _canonicless_counts_by_entry.pop(entry_id, None)
+    _canonicless_name_counts_by_entry.pop(entry_id, None)
 
 
 _text_format_module: Any | None = None
@@ -999,6 +1033,8 @@ def get_devices_with_location(
     canonicless_total = 0
     canonicless_benign = 0
     canonicless_warn = 0
+    # Names and kinds behind those drops, for the stale-device removal (S-R3d).
+    canonicless_names: dict[tuple[str, str], int] = {}
 
     # Names emitted (visible) in THIS run, captured to rebuild the visibility-transition
     # map after the loop. Compared against the previous run's set, never the running one.
@@ -1383,6 +1419,15 @@ def get_devices_with_location(
             # class (no was_visible component). Deliberately decoupled from the
             # warn_worthy logic below so the aggregate is deterministic per poll.
             canonicless_total += 1
+            if device_name:
+                if is_android_device:
+                    kind = CANONICLESS_KIND_ANDROID
+                elif not has_information_block:
+                    kind = CANONICLESS_KIND_NO_INFORMATION
+                else:
+                    kind = CANONICLESS_KIND_TRACKER
+                key = (device_name, kind)
+                canonicless_names[key] = canonicless_names.get(key, 0) + 1
             if benign:
                 canonicless_benign += 1
             else:
@@ -1432,6 +1477,7 @@ def get_devices_with_location(
             "benign": canonicless_benign,
             "warn": canonicless_warn,
         }
+        _canonicless_name_counts_by_entry[entry_scope] = canonicless_names
 
         if canonicless_count:
             # Default-visible aggregate: report only how many devices are affected, never

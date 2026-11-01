@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock
 import pytest
 from homeassistant.core import ServiceCall
 
+from custom_components import googlefindmy as integration
 from custom_components.googlefindmy import _async_unload_parent_entry, dr, er, services
 from custom_components.googlefindmy.const import (
     DOMAIN,
@@ -418,7 +419,12 @@ async def test_rebuild_registry_detaches_orphaned_tracker(
 async def test_rebuild_registry_reload_skips_subentry_keyword_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Treat missing ``config_subentry_id`` support as a successful unload."""
+    """Treat missing ``config_subentry_id`` support as a successful unload.
+
+    T8: unloading a loaded entry keeps its registry entries, so the ``rebuild``
+    mode removes them itself between unload and setup (``services.yaml``:
+    "remove entities/devices and reload").
+    """
 
     subentry_id = "tracker-subentry"
     subentry = SimpleNamespace(
@@ -528,16 +534,32 @@ async def test_rebuild_registry_reload_skips_subentry_keyword_fallback(
         raising=False,
     )
 
-    async def _reload(entry_id: str) -> bool:
-        manager.reload_calls.append(entry_id)
+    steps: list[str] = []
+
+    async def _unload(entry_id: str) -> bool:
+        steps.append("unload")
         return await _async_unload_parent_entry(hass, entry)
 
-    manager.async_reload = _reload  # type: ignore[assignment]
+    async def _setup(entry_id: str) -> bool:
+        steps.append("setup")
+        return True
 
-    handler = await _register_rebuild_service(hass, {})
+    purge_entry = integration._async_purge_entry_registrations
+
+    async def _purge(hass_obj: Any, entry_obj: Any) -> tuple[int, int]:
+        steps.append("purge")
+        return await purge_entry(hass_obj, entry_obj)
+
+    manager.async_unload = _unload  # type: ignore[attr-defined]
+    manager.async_setup = _setup  # type: ignore[method-assign]
+
+    handler = await _register_rebuild_service(
+        hass, {"purge_entry_registrations": _purge}
+    )
     await handler(ServiceCall({services.ATTR_ENTRY_ID: entry.entry_id}))
 
-    assert manager.reload_calls == [entry.entry_id]
+    assert steps == ["unload", "purge", "setup"]
+    assert manager.reload_calls == []
     assert entity_registry.removed == [entity_entry.entity_id]
     assert not tracker_device.config_entries_subentries.get(entry.entry_id)
     assert device_registry.updated == [
@@ -549,6 +571,133 @@ async def test_rebuild_registry_reload_skips_subentry_keyword_fallback(
             },
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_rebuild_registry_migrate_mode_does_not_purge() -> None:
+    """T8: the ``migrate`` mode keeps registry entries and only reloads."""
+
+    entry = FakeConfigEntry(entry_id="migrate-entry")
+    manager = FakeConfigEntriesManager([entry])
+    hass = FakeHass(manager)
+    purge = AsyncMock(return_value=(0, 0))
+
+    handler = await _register_rebuild_service(
+        hass, {"purge_entry_registrations": purge}
+    )
+    await handler(
+        ServiceCall({services.ATTR_ENTRY_ID: entry.entry_id, "mode": "migrate"})
+    )
+
+    purge.assert_not_awaited()
+    assert manager.reload_calls == [entry.entry_id]
+
+
+@pytest.mark.asyncio
+async def test_rebuild_registry_keeps_entries_when_unload_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """T8: no purge and no setup when the entry could not be unloaded."""
+
+    entry = FakeConfigEntry(entry_id="stuck-entry")
+    manager = FakeConfigEntriesManager([entry])
+    hass = FakeHass(manager)
+    manager.async_unload = AsyncMock(return_value=False)  # type: ignore[attr-defined]
+    purge = AsyncMock(return_value=(0, 0))
+
+    handler = await _register_rebuild_service(
+        hass, {"purge_entry_registrations": purge}
+    )
+    caplog.set_level(logging.ERROR)
+    await handler(ServiceCall({services.ATTR_ENTRY_ID: entry.entry_id}))
+
+    purge.assert_not_awaited()
+    assert manager.setup_calls == []
+    assert manager.reload_calls == []
+    assert any(
+        "could not be unloaded" in record.getMessage() for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_rebuild_registry_stops_when_entry_vanished_after_unload() -> None:
+    """T8: an entry removed during its unload is neither purged nor set up."""
+
+    entry = FakeConfigEntry(entry_id="vanishing-entry")
+    manager = FakeConfigEntriesManager([entry])
+    hass = FakeHass(manager)
+
+    async def _unload(entry_id: str) -> bool:
+        manager._entries = [e for e in manager._entries if e.entry_id != entry_id]
+        return True
+
+    manager.async_unload = _unload  # type: ignore[attr-defined]
+    purge = AsyncMock(return_value=(0, 0))
+
+    handler = await _register_rebuild_service(
+        hass, {"purge_entry_registrations": purge}
+    )
+    await handler(ServiceCall({services.ATTR_ENTRY_ID: entry.entry_id}))
+
+    purge.assert_not_awaited()
+    assert manager.setup_calls == []
+
+
+@pytest.mark.asyncio
+async def test_rebuild_registry_purges_but_does_not_set_up_disabled_entry() -> None:
+    """T8: a disabled entry is purged and stays unloaded, as a reload would leave it."""
+
+    class _DisabledEntry(FakeConfigEntry):
+        disabled_by = "user"
+
+    entry = _DisabledEntry(entry_id="disabled-entry")
+    manager = FakeConfigEntriesManager([entry])
+    hass = FakeHass(manager)
+    manager.async_unload = AsyncMock(return_value=True)  # type: ignore[attr-defined]
+    purge = AsyncMock(return_value=(1, 1))
+
+    handler = await _register_rebuild_service(
+        hass, {"purge_entry_registrations": purge}
+    )
+    await handler(ServiceCall({services.ATTR_ENTRY_ID: entry.entry_id}))
+
+    purge.assert_awaited_once_with(hass, entry)
+    assert manager.setup_calls == []
+    assert manager.reload_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disabled", [False, True], ids=["active", "disabled"])
+async def test_failed_purge_still_sets_the_entry_up_again(
+    caplog: pytest.LogCaptureFixture, disabled: bool
+) -> None:
+    """B9 (R2-8): a purge that fails after the unload does not strand the entry.
+
+    The unload has already happened, so an active entry must be set up again,
+    or it stays unloaded until someone reloads it by hand or HA restarts. A
+    disabled entry stays unloaded as before. The failure is logged without
+    the exception text (AGENTS.md section 5).
+    """
+
+    class _Entry(FakeConfigEntry):
+        disabled_by = "user" if disabled else None
+
+    entry = _Entry(entry_id="purge-fails")
+    manager = FakeConfigEntriesManager([entry])
+    hass = FakeHass(manager)
+    manager.async_unload = AsyncMock(return_value=True)  # type: ignore[attr-defined]
+    purge = AsyncMock(side_effect=RuntimeError("owner someone@example.com"))
+
+    handler = await _register_rebuild_service(
+        hass, {"purge_entry_registrations": purge}
+    )
+    caplog.set_level(logging.DEBUG)
+    await handler(ServiceCall({services.ATTR_ENTRY_ID: entry.entry_id}))
+
+    purge.assert_awaited_once_with(hass, entry)
+    assert manager.setup_calls == ([] if disabled else [entry.entry_id])
+    assert not any("someone@example.com" in r.getMessage() for r in caplog.records)
+    assert any("RuntimeError" in r.getMessage() for r in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -1251,3 +1400,43 @@ def test_attr_entry_id_matches_rebuild_registry_service_field() -> None:
 
     assert services.ATTR_ENTRY_ID == "entry_id"
     assert services.ATTR_ENTRY_ID in schema[SERVICE_REBUILD_REGISTRY]["fields"]
+
+
+def test_docs_describe_what_the_rebuild_mode_does() -> None:
+    """F2/F6: README and AGENTS.md describe the purge of mode ``rebuild``.
+
+    The handler purges entities and devices between unload and setup through
+    ``purge_entry_registrations`` and leaves a disabled entry unloaded
+    (``test_rebuild_registry_purges_but_does_not_set_up_disabled_entry``).
+    Both documents used to describe a plain reload.
+    """
+    import inspect
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    handler = inspect.getsource(services)
+    assert '"purge_entry_registrations"' in handler, "doc premise no longer holds"
+
+    readme_rows = [
+        line
+        for line in (root / "README.md").read_text(encoding="utf-8").splitlines()
+        if line.startswith("| googlefindmy.rebuild_registry |")
+    ]
+    assert len(readme_rows) == 1
+    # R2-8: the purge covers what is registered to the entry's subentries.
+    assert (
+        "removes the entities and devices registered to its subentries"
+        in (readme_rows[0])
+    )
+    assert "removes all entities" not in readme_rows[0]
+    assert "set up again even when that removal fails" in readme_rows[0]
+    assert "stays disabled" in readme_rows[0]
+
+    agents = (root / "AGENTS.md").read_text(encoding="utf-8")
+    bullet = next(
+        line
+        for line in agents.splitlines()
+        if line.startswith("* **Config entry reload states:**")
+    )
+    assert "purge_entry_registrations" in bullet
+    assert "disabled entry is purged but not set up again" in bullet

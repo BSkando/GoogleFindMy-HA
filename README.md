@@ -330,7 +330,7 @@ The integration provides a couple of Home Assistant Actions for use with automat
 | googlefindmy.locate_external | Device ID (required), Device Name (optional) | Trigger the locate flow via the external helper while optionally labeling logs with a human-readable device name. Requires control permission on the device's entities when called by a user (see [Permissions](#permissions)). |
 | googlefindmy.refresh_device_urls | - | Refreshes all device Map View URLs.  Useful if you are having problems with accessing Map View pages. Administrators only when called by a user. |
 | googlefindmy.rebuild_device_registry | - | Maintenance: rebuilds device registry links for Google Find My hubs and removes tracker devices incorrectly tied to the parent entry. Administrators only when called by a user. |
-| googlefindmy.rebuild_registry | Config Entry ID(s) (optional) | Reload integration config entries; without a payload the first configured entry reloads, or target specific IDs by passing one or many `entry_id` values. Administrators only when called by a user. |
+| googlefindmy.rebuild_registry | Mode (optional), Config Entry ID(s) (optional) | Maintenance. Mode *Rebuild* (the default) unloads each target entry, removes the entities and devices registered to its subentries and sets the entry up again, which creates them anew; the entry is set up again even when that removal fails. Mode *Migrate* reapplies the data→options, unique ID and button relinking migrations and reloads. Without a payload the first configured entry is targeted; pass one or many `entry_id` values to target specific entries. A disabled entry is cleared but stays disabled. Administrators only when called by a user. |
 
 ### Permissions
 

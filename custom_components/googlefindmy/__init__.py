@@ -3558,7 +3558,13 @@ async def _async_purge_unloaded_subentry_registrations(
     config_subentry_id: str | None,
     entry_type: str | None,
 ) -> tuple[int, int]:
-    """Remove registry entries for a subentry that never finished loading."""
+    """Remove the registry entries of one subentry.
+
+    Callers: the unload of a subentry whose platforms never loaded, and the
+    ``rebuild`` mode of the ``rebuild_registry`` service between unload and
+    setup (``_async_purge_entry_registrations``). A normal unload keeps the
+    registry entries.
+    """
 
     if not parent_entry_id or not config_subentry_id:
         return (0, 0)
@@ -3679,6 +3685,37 @@ async def _async_purge_unloaded_subentry_registrations(
             removed_devices,
         )
 
+    return removed_entities, removed_devices
+
+
+async def _async_purge_entry_registrations(
+    hass: HomeAssistant, entry: MyConfigEntry
+) -> tuple[int, int]:
+    """Remove the registry entries of every subentry of an unloaded ``entry``.
+
+    Used by the ``rebuild`` mode of the ``rebuild_registry`` service, which
+    promises to remove entities and devices before the reload. The unload
+    itself keeps them, so the service passes this through its context.
+    """
+
+    removed_entities = 0
+    removed_devices = 0
+    for subentry in _collect_entry_subentries(entry):
+        identifier = _resolve_config_subentry_identifier(subentry)
+        if not isinstance(identifier, str) or not identifier:
+            continue
+        entry_type = None
+        data_obj = getattr(subentry, "data", None)
+        if isinstance(data_obj, Mapping):
+            entry_type = data_obj.get("subentry_type") or data_obj.get("group_key")
+        entities, devices = await _async_purge_unloaded_subentry_registrations(
+            hass,
+            parent_entry_id=entry.entry_id,
+            config_subentry_id=identifier,
+            entry_type=entry_type,
+        )
+        removed_entities += entities
+        removed_devices += devices
     return removed_entities, removed_devices
 
 
@@ -4923,13 +4960,24 @@ async def _async_relink_button_devices(hass: HomeAssistant, entry: ConfigEntry) 
     )
 
 
+# Unique-id suffixes of binary sensors that belong to one tracker device rather
+# than to the service device (today only the per-device UWT mode sensor). The
+# relink anchors them like tracker sensors. A device-scoped binary sensor whose
+# suffix is missing here is moved to the service device on every start, where the
+# duplicate cleanup then deletes it as a sibling of the other trackers' sensors;
+# tests/test_relink_uwt_mode_anchor.py fails when a new one is added without it.
+_DEVICE_SCOPED_BINARY_SENSOR_SUFFIXES: Final[tuple[str, ...]] = ("_uwt_mode",)
+
+
 async def _async_relink_subentry_entities(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> None:
     """Attach tracker/service entities to devices with matching subentry metadata.
 
     Tracker sensors and device trackers migrate to their tracker device while
-    service sensors and binary sensors remain anchored to the service device.
+    service sensors and binary sensors remain anchored to the service device,
+    except device-scoped binary sensors such as UWT mode, which follow their
+    tracker (``_DEVICE_SCOPED_BINARY_SENSOR_SUFFIXES``).
     The routine skips existing correct links, tolerates legacy unique ID shapes
     that omit subentry prefixes, and ignores unrelated platforms so callers can
     safely invoke it during reloads without disturbing non-integration entities.
@@ -5158,10 +5206,33 @@ async def _async_relink_subentry_entities(
     ) -> tuple[dr.DeviceEntry | Any, str | None] | None:
         domain = getattr(entity_entry, "domain", None)
         if domain == "binary_sensor":
-            service_device = _resolve_service_device(lookup_device)
-            if service_device is None:
+            binary_unique_id = getattr(entity_entry, "unique_id", None)
+            if not (
+                isinstance(binary_unique_id, str)
+                and binary_unique_id.endswith(_DEVICE_SCOPED_BINARY_SENSOR_SUFFIXES)
+            ):
+                service_device = _resolve_service_device(lookup_device)
+                if service_device is None:
+                    return None
+                return service_device, service_subentry_id
+
+            # Device-scoped binary sensor: anchor it to its tracker. When the
+            # tracker cannot be resolved, leave the entity where it is rather
+            # than moving it to the service device.
+            subentry_id, google_device_id = _extract_tracker_binding_from_sensor(
+                entity_entry
+            )
+            if google_device_id is None:
                 return None
-            return service_device, service_subentry_id
+            subentry_id = subentry_id or tracker_subentry_id
+            tracker_device = _find_tracker_device(
+                lookup_device=lookup_device,
+                subentry_id=subentry_id,
+                google_device_id=google_device_id,
+            )
+            if tracker_device is None:
+                return None
+            return tracker_device, subentry_id
 
         if domain == "sensor":
             sensor_binding = _extract_tracker_binding_from_sensor(entity_entry)
@@ -7498,6 +7569,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
                 "migrate_unique_ids": _async_migrate_unique_ids,
                 "relink_button_devices": _async_relink_button_devices,
                 "relink_subentry_entities": _async_relink_subentry_entities,
+                "purge_entry_registrations": _async_purge_entry_registrations,
                 "coalesce_account_entries": async_coalesce_account_entries,
                 "extract_normalized_email": _extract_email_from_entry,
             }
@@ -10084,15 +10156,16 @@ async def _async_unload_parent_entry(hass: HomeAssistant, entry: MyConfigEntry) 
             )
             if isinstance(identifier, str) and identifier and callable(forward_unload):
                 if inspect.iscoroutinefunction(forward_unload):
+                    # Keep the registry entries. Core keeps them across a
+                    # reload or a disable, and cleans them up itself when a
+                    # subentry or the entry is removed (async_remove_subentry,
+                    # entry removal). The purge is only for subentries whose
+                    # platforms never loaded (ValueError below and in
+                    # _async_unload_subentry). Devices that leave the Google
+                    # account are removed by the coordinator (stale devices).
                     _LOGGER.debug(
                         "[%s] Home Assistant manages coroutine-based subentry unloads; skipping manual forward calls",  # noqa: G004
                         identifier,
-                    )
-                    await _async_purge_unloaded_subentry_registrations(
-                        hass,
-                        parent_entry_id=entry.entry_id,
-                        config_subentry_id=identifier,
-                        entry_type=entry_type,
                     )
                     return True
 
