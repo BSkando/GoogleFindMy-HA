@@ -13,7 +13,6 @@ timing itself, and the limit is patched down so that no test waits for 12 s.
 from __future__ import annotations
 
 import asyncio
-import datetime
 import logging
 import random
 import socket
@@ -26,9 +25,6 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
-from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
 
 from custom_components.googlefindmy import const as integration_const
 from custom_components.googlefindmy.Auth.firebase_messaging import const as mcs_const
@@ -39,6 +35,7 @@ from custom_components.googlefindmy.Auth.firebase_messaging.fcmpushclient import
     FcmPushClientRunState,
 )
 from tests.helpers.dead_ipv6_path import DeadPath, install_dead_path, v4_info, v6_info
+from tests.helpers.self_signed_tls import self_signed_server_context
 
 pytestmark = pytest.mark.asyncio
 
@@ -93,36 +90,7 @@ class SilentServer:
 @pytest.fixture
 def certificate(tmp_path: Path) -> Certificate:
     """Create a certificate valid for ``TEST_HOST``."""
-    key = ec.generate_private_key(ec.SECP256R1())
-    name = x509.Name([x509.NameAttribute(x509.NameOID.COMMON_NAME, TEST_HOST)])
-    now = datetime.datetime.now(datetime.UTC)
-    cert = (
-        x509.CertificateBuilder()
-        .subject_name(name)
-        .issuer_name(name)
-        .public_key(key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(now - datetime.timedelta(minutes=5))
-        .not_valid_after(now + datetime.timedelta(hours=1))
-        .add_extension(
-            x509.SubjectAlternativeName([x509.DNSName(TEST_HOST)]),
-            critical=False,
-        )
-        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
-        .sign(key, hashes.SHA256())
-    )
-    cert_path = tmp_path / "cert.pem"
-    key_path = tmp_path / "key.pem"
-    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
-    key_path.write_bytes(
-        key.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.PKCS8,
-            serialization.NoEncryption(),
-        )
-    )
-    server = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    server.load_cert_chain(cert_path, key_path)
+    cert_path, server = self_signed_server_context(tmp_path, TEST_HOST)
     return Certificate(path=cert_path, server=server)
 
 

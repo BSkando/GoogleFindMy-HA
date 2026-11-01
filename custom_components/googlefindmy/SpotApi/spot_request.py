@@ -357,6 +357,9 @@ async def async_spot_request(
                 retries_used += 1
                 await _async_sleep(_compute_delay(attempt))
                 continue
+            # The channel is shared, so only the last attempt may close it, and
+            # only if no other caller has replaced it in the meantime.
+            await active_transport.reset(expected=channel)
             raise SpotNetworkError("Timeout after retries.") from err
 
         except (OSError, socket.gaierror) as err:
