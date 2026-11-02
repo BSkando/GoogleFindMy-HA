@@ -137,11 +137,12 @@ class Channel(_GrpclibChannel):
             server_hostname=server_hostname,
             happy_eyeballs_delay=_HAPPY_EYEBALLS_DELAY_S,
         )
+        sock = transport.get_extra_info("socket")
         _LOGGER.debug(
             "Connected to Spot endpoint (%s,%s) over %s",
             host,
             port,
-            transport.get_extra_info("socket").family.name,
+            sock.family.name if sock is not None else "unknown",
         )
         return protocol
 

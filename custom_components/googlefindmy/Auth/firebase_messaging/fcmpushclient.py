@@ -1010,11 +1010,12 @@ class FcmPushClient[NotificationContextT]:  # pylint:disable=too-many-instance-a
             self.reader, self.writer = await self._open_connection(
                 host=MCS_HOST, port=MCS_PORT, ssl_context=ssl_context
             )
+            sock = self.writer.get_extra_info("socket")
             self.logger.debug(
                 "Connected to MCS endpoint (%s,%s) over %s",
                 MCS_HOST,
                 MCS_PORT,
-                self.writer.get_extra_info("socket").family.name,
+                sock.family.name if sock is not None else "unknown",
             )
             return True
         except OSError as oex:

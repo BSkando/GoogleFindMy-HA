@@ -1735,7 +1735,7 @@ class FcmReceiverHA:
                     # state. The cap is meant to detect a poison-message
                     # crash loop (client connects, decodes, dies, repeat),
                     # NOT ordinary connectivity outages where ``_listen()``
-                    # exhausts its 5 connection retries (up to 78.6 s) without
+                    # exhausts its 5 connection attempts (up to 78.6 s) without
                     # ever reaching ``STARTED``. Without this gate, a normal
                     # MCS-unreachable / Google outage would cap the
                     # supervisor after 10 brief connection-failure runs and
@@ -1868,7 +1868,7 @@ class FcmReceiverHA:
                     # ensures the cap is specific to the poison-message
                     # scenario (client connects, decodes, dies, repeat) and
                     # excludes pre-start connection/login failures. A burst
-                    # of MCS-unreachable failures (5 retries, up to 78.6 s)
+                    # of MCS-unreachable failures (5 attempts, up to 78.6 s)
                     # would otherwise be counted as short-run crashes and
                     # permanently disable FCM push after one ordinary
                     # network outage. Pre-start failures leave the counter

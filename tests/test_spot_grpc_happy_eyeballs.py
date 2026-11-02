@@ -409,10 +409,13 @@ class ConnectionSpy:
 
     calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = field(default_factory=list)
     protocol: object = field(default_factory=object)
+    socket_info: object = field(
+        default_factory=lambda: SimpleNamespace(family=socket.AF_INET)
+    )
 
     async def __call__(self, *args: Any, **kwargs: Any) -> tuple[object, object]:
         self.calls.append((args, kwargs))
-        socket_info = SimpleNamespace(family=socket.AF_INET)
+        socket_info = self.socket_info
         return SimpleNamespace(get_extra_info=lambda _name: socket_info), self.protocol
 
 
@@ -707,6 +710,25 @@ async def test_connected_line_names_true_family_and_no_address(
     ]
     assert connected == [f"Connected to Spot endpoint ({TEST_HOST},443) over {family}"]
     assert not any(address in r.getMessage() for r in caplog.records)
+
+
+async def test_connected_line_survives_a_transport_without_socket(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A transport that reports no socket still connects; the log says unknown."""
+    spy = ConnectionSpy(socket_info=None)
+    monkeypatch.setattr(asyncio.get_running_loop(), "create_connection", spy)
+    channel = Channel(TEST_HOST, 443, ssl=None, codec=RawCodec())
+
+    with caplog.at_level(logging.DEBUG, logger=spot_grpc_transport.__name__):
+        assert await channel._create_connection() is spy.protocol
+
+    connected = [
+        r.getMessage()
+        for r in caplog.records
+        if r.getMessage().startswith("Connected to Spot endpoint")
+    ]
+    assert connected == [f"Connected to Spot endpoint ({TEST_HOST},443) over unknown"]
 
 
 async def test_control_network_error_does_not_fall_back(
@@ -1033,6 +1055,35 @@ async def test_single_timeout_after_other_failures_keeps_the_channel(
         await transport.async_close()
 
     assert method.channels == [channel] * 4
+
+
+async def test_timeouts_short_of_every_attempt_keep_the_channel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """As many timeouts as retries, but one other failure: the channel stays.
+
+    Only a channel on which every attempt timed out is dropped. Here the first
+    attempt failed otherwise, so the channel saw exactly ``_SPOT_MAX_RETRIES``
+    timeouts, one short of the reset.
+    """
+    transport = SpotGrpcTransport(host=TEST_HOST, port=443, use_ssl=False)
+    patch_request_budget(monkeypatch)
+    method = script_attempts(
+        monkeypatch,
+        fails_with(GRPCError(Status.UNAVAILABLE)),
+        *[fails_with(TimeoutError())] * spot_request._SPOT_MAX_RETRIES,
+    )
+    channel = await transport.get_channel()
+    try:
+        with pytest.raises(SpotNetworkError, match="Timeout after retries"):
+            await spot_request.async_spot_request(
+                "Test", b"ping", cache=UNUSED_CACHE, transport=transport
+            )
+        assert await transport.get_channel() is channel
+    finally:
+        await transport.async_close()
+
+    assert method.channels == [channel] * (spot_request._SPOT_MAX_RETRIES + 1)
 
 
 async def test_timeouts_across_a_replacement_keep_the_new_channel(

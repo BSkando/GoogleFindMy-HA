@@ -23,6 +23,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -559,6 +560,30 @@ async def test_diagnostics_failed_attempt_has_no_success_line(
     assert sum(m.startswith("Connecting to MCS endpoint") for m in messages) == 1
     assert not any(m.startswith("Connected to MCS endpoint") for m in messages)
     assert not any(V6_DEAD_A in m for m in messages)
+
+
+async def test_diagnostics_survive_a_stream_without_socket(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A stream that reports no socket still connects; the log says unknown."""
+    client = make_client(monkeypatch, None, 5228)
+    writer = SimpleNamespace(get_extra_info=lambda _name: None)
+
+    async def open_without_socket(
+        **_kwargs: Any,
+    ) -> tuple[object, object]:
+        return object(), writer
+
+    monkeypatch.setattr(client, "_open_connection", open_without_socket)
+
+    with caplog.at_level(logging.DEBUG):
+        connected, _ = await run_bounded(start_connect(client, eager=False))
+
+    assert connected is True
+    assert client.writer is writer
+    messages = [rec.getMessage() for rec in caplog.records]
+    after = [m for m in messages if m.startswith("Connected to MCS endpoint")]
+    assert after == [f"Connected to MCS endpoint ({TEST_HOST},5228) over unknown"]
 
 
 async def test_run_bounded_fails_and_cancels_a_hanging_task(
