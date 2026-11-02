@@ -22,7 +22,7 @@ The frame byte does not carry the EID length. Per the [Find Hub Network Accessor
 
 ### SPOT/gRPC client reminder
 
-When reusing the shared grpclib transport (`SpotGrpcTransport`), keep SSL context creation lazy and ensure ALPN includes `h2`. The transport helper already sets the protocol list and should be closed on unload so new channels negotiate HTTP/2 cleanly.
+When reusing the shared grpclib transport (`SpotGrpcTransport`), keep SSL context creation lazy and ensure ALPN includes `h2`. The transport helper already sets the protocol list and should be closed on unload so new channels negotiate HTTP/2 cleanly. Its `Channel` subclass overrides grpclib's private `_create_connection` to add Happy Eyeballs; `tests/test_spot_grpc_happy_eyeballs.py` fails when the upstream method body changes, and a change belongs in both the subclass and that test's literal.
 
 ## Cross-reference index
 
