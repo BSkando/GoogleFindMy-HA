@@ -16,22 +16,6 @@ from unittest.mock import Mock
 
 
 # ---------------------------------------------------------------------------
-# Helper to load coordinator module without full HA import chain
-# ---------------------------------------------------------------------------
-def _load_coordinator_module():
-    """Load the coordinator module using exec to bypass __init__.py."""
-    import types
-
-    with open("custom_components/googlefindmy/coordinator_subentry.py") as f:
-        subentry_code = f.read()
-    mod_subentry = types.ModuleType("coordinator_subentry")
-    exec(
-        compile(subentry_code, "coordinator_subentry.py", "exec"), mod_subentry.__dict__
-    )
-    return mod_subentry
-
-
-# ---------------------------------------------------------------------------
 # Pure function tests for extractable helpers
 # ---------------------------------------------------------------------------
 class TestExtractSubentryRawEntries:

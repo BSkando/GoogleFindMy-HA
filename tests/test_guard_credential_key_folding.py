@@ -2972,9 +2972,7 @@ def _python_writes(comprehension: str, scope: Mapping[str, object]) -> list[bool
     written = []
     for truth, holds in _VARIANTS:
         try:
-            value = eval(  # noqa: S307 - generated test code only
-                comprehension, {**scope, "data": _Runtime(truth, holds)}
-            )
+            value = eval(comprehension, {**scope, "data": _Runtime(truth, holds)})
         except LookupError:
             value = {}
         written.append(_MEMBER in value)
@@ -3395,7 +3393,7 @@ def test_python_is_the_oracle_for_class_bases(binding: str) -> None:
     for store in _STORE_DEFINITIONS:
         module = f"{meta}class A:\n    pass\n{rebind}{store}:\n    pass\n"
         scope: dict[str, object] = {}
-        exec(module, scope)  # noqa: S102 - generated test code only
+        exec(module, scope)
         instance = isinstance(scope["Store"], dict)
         for write, member_after in (
             ("Store.pop(C)", None),
@@ -3405,7 +3403,7 @@ def test_python_is_the_oracle_for_class_bases(binding: str) -> None:
             if instance:
                 scope["Store"][_MEMBER] = 0  # type: ignore[index]
             try:
-                exec(write, run)  # noqa: S102 - generated test code only
+                exec(write, run)
             except (TypeError, AttributeError):
                 assert not instance, (store, write)
             else:
@@ -3673,20 +3671,46 @@ _ORACLE_FAMILIES: dict[str, st.SearchStrategy[list[str]]] = {
 def _oracle_runs_to_the_member(statements: list[str]) -> bool:
     """Run ``statements`` one by one; True if ``C`` ever holds the member.
 
-    A statement that raises is skipped; the guard folds every binding in any
-    order, so it covers every subset as well.
+    A statement that raises ``NameError`` or ``TypeError`` is skipped; the guard
+    folds every binding in any order, so it covers every subset as well. Any
+    other error propagates.
     """
 
     namespace: dict[str, object] = {"contextlib": contextlib}
-    exec("A = B = C = ''", namespace)  # noqa: S102 - generated test code only
+    exec("A = B = C = ''", namespace)
     for statement in statements:
         try:
-            exec(statement, namespace)  # noqa: S102 - generated test code only
-        except Exception:  # noqa: BLE001 - a failing statement binds nothing
+            exec(statement, namespace)
+        except (NameError, TypeError):
+            # A name left unbound (``del``, the target of an ``except ... as``
+            # clause) raises NameError; a name bound to a function, module, class,
+            # mapping, list or type alias raises TypeError. The strategies produce
+            # nothing else, so any other error is a bug.
             continue
         if namespace.get("C") == _MEMBER:
             return True
     return False
+
+
+def test_the_oracle_skips_only_unbound_and_mistyped_statements() -> None:
+    """The oracle skips exactly ``NameError`` and ``TypeError``; any other error goes through."""
+
+    assert _oracle_runs_to_the_member(
+        ["del A", "C = A + 'x'", "C = 'fcm_' + 'credentials'"]
+    )
+    assert _oracle_runs_to_the_member(
+        ["def A():\n    pass", "C = A + 'x'", "C = 'fcm_' + 'credentials'"]
+    )
+    for statement, error in (
+        ("C = 1 // 0", ZeroDivisionError),
+        ("C = A.missing", AttributeError),
+        ("C = int('x')", ValueError),
+        ("C = (", SyntaxError),
+        ("C = {}['x']", KeyError),
+        ("import no_such_module", ModuleNotFoundError),
+    ):
+        with pytest.raises(error):
+            _oracle_runs_to_the_member([statement, "C = 'fcm_' + 'credentials'"])
 
 
 def _oracle_source(statements: list[str]) -> str:
@@ -3991,7 +4015,7 @@ def _keys_held_after(form: str) -> set[object]:
         "creds": {"private": "x"},
     }
     is_expression = isinstance(ast.parse(form).body[0], ast.Expr)
-    exec(f"result = {form}" if is_expression else form, scope)  # noqa: S102 - frozen forms only
+    exec(f"result = {form}" if is_expression else form, scope)
     scope.pop("__builtins__")
     return _keys_in(created) | _keys_in(list(scope.values()))
 
@@ -4108,7 +4132,7 @@ def test_the_statement_loop_limit_writes_the_member_in_python(form: str) -> None
     the guard stays silent (``_FORK_NOT_SEEN``)."""
 
     scope: dict[str, object] = {"updated_data": {}, "creds": {"private": "x"}}
-    exec(form, scope)  # noqa: S102 - frozen forms only
+    exec(form, scope)
     assert "fcm_credentials" in scope["updated_data"]  # type: ignore[operator]
     pin = _FORK_DOCUMENTED_FORMS[form]
     assert form in _changed(_FORK_NOT_SEEN[pin], pin)
@@ -4366,7 +4390,7 @@ def test_a_target_over_a_builtin_call_stays_unknown(
     with monkeypatch.context() as stub:
         _stub_builtin_hooks(stub)
         scope = {"creds": {"private": "x"}, "fcm_": 1}
-        held = eval(form, scope)  # noqa: S307 - the frozen forms above only
+        held = eval(form, scope)
     assert _MEMBER in held, form
     line = "            updated_data[K2] = copy.deepcopy(registration)\n"
     _writes, unclassified, _shared = _snippet_problems(

@@ -972,7 +972,7 @@ artifacts remain exempt when explicitly flagged by repo configuration).
 
 **Input validation & injection**
 
-* **Never** use `eval`/`exec`. For literals, use `ast.literal_eval`.
+* **Never** use `eval`/`exec`. For literals, use `ast.literal_eval`. The only exception is for tests and is narrow: section "`eval` and `exec` in tests" of [`tests/AGENTS.md`](tests/AGENTS.md) lists every allowed call site, and `tests/test_guard_eval_exec_sites.py` pins that list.
 * Subprocess: **no `shell=True`** for untrusted data; pass argv lists; use `shlex.quote` if you must touch shell.
 * Use parameterized queries for SQL/LDAP/XML; sanitize file names and paths.
 
@@ -1216,7 +1216,7 @@ artifacts remain exempt when explicitly flagged by repo configuration).
 
 * [ ] PEP 8/257 compliance; complete docstrings maintained per **Rule §9.DOC**.
 * [ ] Strict typing incl. PEP 695 where relevant; no implicit `Any` in public APIs.
-* [ ] No `eval/exec`; subprocess without `shell=True`; parameterized I/O; safe loaders.
+* [ ] No `eval/exec` (tests: only the call sites listed in `tests/AGENTS.md`); subprocess without `shell=True`; parameterized I/O; safe loaders.
 * [ ] Archive extraction is traversal-safe; paths validated with `pathlib`.
 * [ ] `secrets` used for tokens; cryptography aligns with BSI TR-02102-1 guidance.
 * [ ] Logs redact tokens, PII, coordinates and class (c) identifiers (section 5) at every level, and derived identifiers (user-provided names, `entity_id`) from records that can repeat unattended at INFO and above; diagnostics redact device, canonical and EID keys through `TO_REDACT` (the instance's own `entry_id` is class (b) and stays).
