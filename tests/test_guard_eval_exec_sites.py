@@ -336,12 +336,19 @@ _NEVER_A_NAME = frozenset(
 
 
 def _string_fields() -> set[str]:
-    """Return ``Node.field`` for every field of the running grammar typed as a name."""
+    """Return ``Node.field`` for every field of the running grammar typed as a name.
+
+    Only a node class bound under its own name counts. Python 3.13 still keeps
+    the deprecated alias ``Ellipsis`` under the key ``_ast_Ellipsis``; it is no
+    grammar node of its own and would add ``_ast_Ellipsis.kind``.
+    """
     kinds = (str, str | None, list[str])
     return {
         f"{name}.{field}"
         for name, node in vars(ast).items()
-        if isinstance(node, type) and issubclass(node, ast.AST)
+        if isinstance(node, type)
+        and issubclass(node, ast.AST)
+        and name == node.__name__
         for field, kind in getattr(node, "_field_types", {}).items()
         if kind in kinds
     }
