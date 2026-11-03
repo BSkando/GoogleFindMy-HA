@@ -1061,6 +1061,67 @@ of reporting a false positive
 (``::test_ap4_the_record_is_deduplicated_per_subentry_not_per_coordinator``
 carries both guards).
 
+## `eval` and `exec` in tests
+
+The security baseline in [`AGENTS.md`](../AGENTS.md) (section 11.2) says never
+to use `eval`/`exec`. This section is the only exception, and it holds for
+tests only. A test may reference `eval` or `exec` when all of the following hold:
+
+* **Source of the code.** The code it runs is either repository source (an
+  integration module inside the checkout, compiled without importing Home
+  Assistant) or code the test builds itself from constants written in the test
+  file (frozen forms, Hypothesis strategies over fixed parts). It never comes from
+  outside the checkout: no network data, no environment variables, no files outside
+  the repository, no user input.
+* **Listed site.** The reference stands in the table below, with the number of
+  references per function (qualified through classes and functions, as in
+  `Outer.inner`). `tests/test_guard_eval_exec_sites.py` pins the table against
+  every reference to `eval`/`exec` in every Python file git would commit (tracked,
+  or untracked and not ignored), not only under `tests/`: a new site, an extra
+  reference and a stale row each fail it. Adding a row needs a reason in the pull
+  request that meets the first condition.
+* **No `noqa`.** `S102` and `S307` are not enabled in this repository, so a
+  `# noqa` on such a call suppresses nothing and only suggests a review that never
+  took place. The reason lives in this section.
+
+Why an exception: the credential folding guard uses Python itself as its oracle.
+`ast.literal_eval` runs neither a comprehension nor a method, and an evaluator of
+our own would replace the oracle by the code under test. A subprocess per oracle
+call (permitted by section 11.2) was measured on 2026-11-02: one run of that file
+makes 12,778 oracle calls (a call of `_python_writes`, `_oracle_runs_to_the_member`
+or `_keys_held_after`, or an `eval`/`exec` in one of the listed tests) and takes
+about two minutes, and an interpreter start takes 8.6 ms with `-I -S` and 19.2 ms
+without flags (median of 30). A subprocess per oracle call would add about two to
+four minutes, so the run would take two to three times as long.
+
+| File | Function | References |
+|---|---|---|
+| `tests/helpers/ast_extract.py` | `compile_class_method_from_module` | 1 |
+| `tests/test_guard_credential_key_folding.py` | `_python_writes` | 1 |
+| `tests/test_guard_credential_key_folding.py` | `test_python_is_the_oracle_for_class_bases` | 2 |
+| `tests/test_guard_credential_key_folding.py` | `_oracle_runs_to_the_member` | 2 |
+| `tests/test_guard_credential_key_folding.py` | `_keys_held_after` | 1 |
+| `tests/test_guard_credential_key_folding.py` | `test_the_statement_loop_limit_writes_the_member_in_python` | 1 |
+| `tests/test_guard_credential_key_folding.py` | `test_a_target_over_a_builtin_call_stays_unknown` | 1 |
+
+The guard counts references, not calls, so neither an alias of the function nor
+one of its module can hide a later call. A reference is the bare name (`exec(…)`,
+`run = exec`), any attribute named `eval` or `exec` whatever object carries it
+(`builtins.exec`, `b.exec` after `import builtins as b`,
+`__import__("builtins").exec`, `sys.modules["builtins"].exec`), each keyword of a
+class pattern (`case object(exec=run)` reads the attribute), and each of the two
+names imported from `builtins`. A name that only binds or declares (`def exec`, a
+parameter, `except E as exec`, `case exec`, `import os as exec`) reads nothing and
+does not count; the guard pins this split for every name field of the grammar,
+so a new field fails it. It does not see a lookup by string such as
+`getattr(builtins, name)`, `builtins.__dict__["exec"]` or `vars(builtins)["exec"]`.
+
+One call is made without a reference and therefore stands outside the table:
+the battery in `_returns_an_iterable` (`tests/test_guard_credential_key_folding.py`)
+calls each builtin without a form through `getattr`, with constant stub arguments.
+`exec` is one of them (nine argument sets per run); `eval` has a form and is not.
+Frozen forms whose own text calls `eval` run through a listed site and add none.
+
 ## AST extraction helper
 
 The :mod:`tests.helpers.ast_extract` module exposes
