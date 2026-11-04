@@ -28,6 +28,8 @@ except ImportError:
     ZoneInfo = None  # type: ignore
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from custom_components.googlefindmy.Auth.token_cache import TokenCache
 
 from custom_components.googlefindmy.NovaApi.nova_request import (
@@ -203,10 +205,16 @@ def _unknown_field_numbers(message: Message) -> list[int]:
     return sorted(numbers)
 
 
-def _usable_id_count(entries: Any) -> int:
-    """Count the entries that yield a device row: a non-empty string ``id``."""
+def _usable_id_count(entries: Iterable[object] | None) -> int:
+    """Count the entries with a non-empty string ``id``, the row loop's entry test.
+
+    Takes the container as the row loop does: iterates it, without asking for its
+    truth value or length.
+    """
+    if entries is None:
+        return 0
     count = 0
-    for entry in entries or ():
+    for entry in entries:
         value = getattr(entry, "id", None)
         if isinstance(value, str) and value:
             count += 1
@@ -218,9 +226,10 @@ def _identifier_structure(device: object) -> tuple[str, bool, int, int]:
 
     Returns the enum name of ``identifierInformation.type``, whether
     ``phoneInformation`` is set, and the usable ID count of both branches (phone
-    branch, generic branch). Type name, presence and counts only, never the IDs
-    (``AGENTS.md`` section 5). Never raises an ``Exception``: test doubles lack
-    fields, and an enum value newer than the vendored schema has no name.
+    branch, generic branch). Type name, presence and counts only, never the IDs,
+    so the line can go into a public issue. Never raises an ``Exception``: test
+    doubles lack fields, and an enum value newer than the vendored schema has no
+    name.
     ``BaseException`` (cancellation, shutdown) propagates.
     """
     try:
@@ -1152,9 +1161,9 @@ def get_devices_with_location(
             if emit_canonicless_diagnostics and not _usable_id_count(canonic_ids):
                 # Structure only, never ID values; the device name stays at
                 # DEBUG. Which identifier branch Google filled for a device
-                # whose read branch holds no usable ID, so the same condition
-                # as the row loop below (BSkando/GoogleFindMy-HA#224, hypothesis
-                # "ID in the other branch"). Main poll only, like the other
+                # whose read entries yield no row in the loop below
+                # (BSkando/GoogleFindMy-HA#224, hypothesis "ID in the other
+                # branch"). Not on the capability probe pass, like the other
                 # canonicless output.
                 id_type, has_phone_info, phone_ids, generic_ids = (
                     _identifier_structure(device)

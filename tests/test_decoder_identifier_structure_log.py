@@ -3,13 +3,14 @@
 
 `get_devices_with_location` picks one canonical-ID branch per device by
 `identifierInformation.type`: `phoneInformation.canonicIds` for Android
-phones, `canonicIds` for everything else. When that branch holds no usable
-ID (none at all, or only blank entries) the device is dropped as canonicless,
-and until now no log showed the type or whether the other branch carried the
-ID (BSkando/GoogleFindMy-HA#224, a Wear OS watch). On the main poll the decoder
-now logs at DEBUG the enum name of the type, whether `phoneInformation` is set,
-and the usable ID count of both branches. The ID values never reach the log
-(`AGENTS.md` section 5), and the capability probe pass stays silent (CQS).
+phones, `canonicIds` for everything else. When that branch yields no row (no
+entry at all, only blank entries, or a blank first entry on a phone) the device
+is dropped as canonicless, and until now no log showed the type or whether the
+other branch carried the ID (BSkando/GoogleFindMy-HA#224, a Wear OS watch). For
+such a device the decoder now logs at DEBUG the enum name of the type, whether
+`phoneInformation` is set, and the usable ID count of both branches. This line
+carries no ID values, so it can go into a public issue, and the capability
+probe pass stays silent (CQS).
 """
 
 from __future__ import annotations
@@ -162,6 +163,28 @@ def test_structure_line_absent_when_read_branch_has_an_id(
     assert _structure_records(caplog) == []
 
 
+def test_one_structure_line_per_dropped_device(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    device_list = DeviceUpdate_pb2.DevicesList()
+    for name, generic_id in (("Dropped A", ""), ("Kept", _SECRET), ("Dropped B", "")):
+        device = device_list.deviceMetadata.add()
+        device.userDefinedDeviceName = name
+        device.identifierInformation.type = DeviceUpdate_pb2.IDENTIFIER_SPOT
+        device.identifierInformation.canonicIds.canonicId.add(id=generic_id)
+
+    with caplog.at_level(logging.DEBUG, logger="custom_components.googlefindmy"):
+        rows = decoder.get_devices_with_location(
+            device_list, cache=None, emit_canonicless_diagnostics=True
+        )
+
+    assert len(rows) == 1
+    messages = [r.getMessage() for r in _structure_records(caplog)]
+    assert len(messages) == 2
+    assert "'Dropped A'" in messages[0]
+    assert "'Dropped B'" in messages[1]
+
+
 def test_structure_line_absent_on_capability_probe_pass(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -258,6 +281,21 @@ def test_identifier_structure_takes_no_text_from_the_type_value() -> None:
     # bool is an int, but no enum value.
     assert structure(_info(type=True)) == ("<absent>", False, 0, 0)
     assert structure(_info(type=_LoudInt(7)))[0] == "UNRECOGNIZED(7)"
+
+
+class _NoTruthValueList(list[object]):
+    def __bool__(self) -> bool:
+        raise RuntimeError("no truth value")
+
+    def __len__(self) -> int:
+        raise RuntimeError("no length")
+
+
+def test_usable_id_count_needs_no_truth_value_of_the_container() -> None:
+    # The poll calls this outside any try, on the same object the row loop
+    # iterates, so it must not ask more of that object than the loop does.
+    assert decoder._usable_id_count(None) == 0
+    assert decoder._usable_id_count(_NoTruthValueList([SimpleNamespace(id="x")])) == 1
 
 
 def test_identifier_structure_counts_what_the_row_loop_accepts() -> None:
