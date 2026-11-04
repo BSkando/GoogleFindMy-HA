@@ -203,6 +203,45 @@ def _unknown_field_numbers(message: Message) -> list[int]:
     return sorted(numbers)
 
 
+def _identifier_structure(device: object) -> tuple[str, bool, int, int]:
+    """Shape of a device's identifier block.
+
+    Returns the enum name of ``identifierInformation.type``, whether
+    ``phoneInformation`` is set, and the ID counts of both branches (phone
+    branch, generic branch). Counts and presence only, never the IDs
+    (``AGENTS.md`` section 5). Never raises: test doubles lack fields, and an
+    enum value newer than the vendored schema has no name.
+    """
+    try:
+        info = getattr(device, "identifierInformation", None)
+        type_value = getattr(info, "type", None)
+        if isinstance(type_value, int) and not isinstance(type_value, bool):
+            try:
+                type_name = DeviceUpdate_pb2.IdentifierInformationType.Name(type_value)
+            except ValueError:
+                type_name = f"UNRECOGNIZED({type_value})"
+        else:
+            type_name = "<absent>"
+        phone = getattr(info, "phoneInformation", None)
+        # On a real message, reading an unset sub-message returns a default
+        # instance, so presence comes from HasField; doubles signal it by the
+        # attribute itself.
+        has_phone = (
+            info.HasField("phoneInformation")
+            if isinstance(info, Message)
+            else phone is not None
+        )
+        phone_ids = len(
+            getattr(getattr(phone, "canonicIds", None), "canonicId", None) or ()
+        )
+        generic_ids = len(
+            getattr(getattr(info, "canonicIds", None), "canonicId", None) or ()
+        )
+    except Exception:
+        return ("<unreadable>", False, -1, -1)
+    return (type_name, bool(has_phone), phone_ids, generic_ids)
+
+
 class _DecryptLocationsCallable(Protocol):
     """Runtime signature for the decrypt helper imported lazily."""
 
@@ -1097,6 +1136,25 @@ def get_devices_with_location(
                     device_name,
                     unknown_numbers,
                     len(unknown_numbers),
+                )
+
+            if emit_canonicless_diagnostics and not canonic_ids:
+                # Structure only, never values: which identifier branch Google
+                # filled for a device whose read branch is empty
+                # (BSkando/GoogleFindMy-HA#224, hypothesis "ID in the other
+                # branch"). Main poll only, like the other canonicless output.
+                id_type, has_phone_info, phone_ids, generic_ids = (
+                    _identifier_structure(device)
+                )
+                _LOGGER.debug(
+                    "Device '%s' IDENTIFIER STRUCTURE: type=%s, "
+                    "has_phoneInformation=%s, phoneInformation.canonicIds=%d, "
+                    "canonicIds=%d",
+                    device_name,
+                    id_type,
+                    has_phone_info,
+                    phone_ids,
+                    generic_ids,
                 )
 
         # Try decryption ONCE per device; share across all its canonic IDs
