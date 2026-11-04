@@ -99,9 +99,7 @@ def test_structure_line_reports_both_branches_without_values(
     # must not join them.
     assert "canonical ID" not in message
     assert _SECRET not in caplog.text
-    assert all(
-        _SECRET[i : i + 8] not in caplog.text for i in range(len(_SECRET) - 7)
-    )
+    assert all(_SECRET[i : i + 8] not in caplog.text for i in range(len(_SECRET) - 7))
 
 
 def test_structure_line_absent_when_read_branch_has_an_id(
@@ -152,9 +150,7 @@ def test_identifier_structure_never_raises() -> None:
     phone_double = SimpleNamespace(
         identifierInformation=SimpleNamespace(
             type=DeviceUpdate_pb2.IDENTIFIER_ANDROID,
-            phoneInformation=SimpleNamespace(
-                canonicIds=SimpleNamespace(canonicId=[])
-            ),
+            phoneInformation=SimpleNamespace(canonicIds=SimpleNamespace(canonicId=[])),
         )
     )
     assert structure(phone_double) == ("IDENTIFIER_ANDROID", True, 0, 0)
