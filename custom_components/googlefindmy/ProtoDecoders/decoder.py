@@ -12,6 +12,7 @@ import logging
 import math
 import os
 import subprocess
+from collections.abc import Iterable
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -28,8 +29,6 @@ except ImportError:
     ZoneInfo = None  # type: ignore
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
-
     from custom_components.googlefindmy.Auth.token_cache import TokenCache
 
 from custom_components.googlefindmy.NovaApi.nova_request import (
