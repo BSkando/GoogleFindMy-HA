@@ -422,7 +422,7 @@ jobs:
         id: bandit
         run: |
           set +e
-          # Run bandit security scanner on custom_components and tests
+          # Run bandit security scanner on custom_components only; tests/ is not a target (and is listed in exclude_dirs)
           # Exclude known false positives and test files that intentionally test security
           poetry run bandit -r custom_components -c pyproject.toml -f txt 2>&1 | tee bandit_output.txt
           EXIT_CODE=${PIPESTATUS[0]}
