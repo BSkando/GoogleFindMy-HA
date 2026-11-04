@@ -12,6 +12,7 @@ import logging
 import math
 import os
 import subprocess
+from collections.abc import Iterable
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -201,6 +202,63 @@ def _unknown_field_numbers(message: Message) -> list[int]:
                 items = value.values() if hasattr(value, "values") else value
                 pending.extend(item for item in items if isinstance(item, Message))
     return sorted(numbers)
+
+
+def _usable_id_count(entries: Iterable[object] | None) -> int:
+    """Count the entries with a non-empty string ``id``, the row loop's entry test.
+
+    Takes the container as the row loop does: iterates it, without asking for its
+    truth value or length.
+    """
+    if entries is None:
+        return 0
+    count = 0
+    for entry in entries:
+        value = getattr(entry, "id", None)
+        if isinstance(value, str) and value:
+            count += 1
+    return count
+
+
+def _identifier_structure(device: object) -> tuple[str, bool, int, int]:
+    """Shape of a device's identifier block.
+
+    Returns the enum name of ``identifierInformation.type``, whether
+    ``phoneInformation`` is set, and the usable ID count of both branches (phone
+    branch, generic branch). Type name, presence and counts only, never the IDs,
+    so the line can go into a public issue. Never raises an ``Exception``: test
+    doubles lack fields, and an enum value newer than the vendored schema has no
+    name.
+    ``BaseException`` (cancellation, shutdown) propagates.
+    """
+    try:
+        info = getattr(device, "identifierInformation", None)
+        type_value = getattr(info, "type", None)
+        if isinstance(type_value, int) and not isinstance(type_value, bool):
+            try:
+                type_name = DeviceUpdate_pb2.IdentifierInformationType.Name(type_value)
+            except ValueError:
+                type_name = f"UNRECOGNIZED({int.__repr__(type_value)})"
+        else:
+            type_name = "<absent>"
+        phone = getattr(info, "phoneInformation", None)
+        # On a real message, reading an unset sub-message returns a default
+        # instance, so presence comes from HasField; doubles signal it by the
+        # attribute itself.
+        has_phone = bool(
+            info.HasField("phoneInformation")
+            if isinstance(info, Message)
+            else phone is not None
+        )
+        phone_ids = _usable_id_count(
+            getattr(getattr(phone, "canonicIds", None), "canonicId", None)
+        )
+        generic_ids = _usable_id_count(
+            getattr(getattr(info, "canonicIds", None), "canonicId", None)
+        )
+    except Exception:
+        return ("<unreadable>", False, -1, -1)
+    return (type_name, has_phone, phone_ids, generic_ids)
 
 
 class _DecryptLocationsCallable(Protocol):
@@ -1097,6 +1155,27 @@ def get_devices_with_location(
                     device_name,
                     unknown_numbers,
                     len(unknown_numbers),
+                )
+
+            if emit_canonicless_diagnostics and not _usable_id_count(canonic_ids):
+                # Structure only, never ID values; the device name stays at
+                # DEBUG. Which identifier branch Google filled for a device
+                # whose read entries yield no row in the loop below
+                # (BSkando/GoogleFindMy-HA#224, hypothesis "ID in the other
+                # branch"). Not on the capability probe pass, like the other
+                # canonicless output.
+                id_type, has_phone_info, phone_ids, generic_ids = (
+                    _identifier_structure(device)
+                )
+                _LOGGER.debug(
+                    "Device '%s' IDENTIFIER STRUCTURE: type=%s, "
+                    "has_phoneInformation=%s, phoneInformation.canonicIds=%d, "
+                    "canonicIds=%d",
+                    device_name,
+                    id_type,
+                    has_phone_info,
+                    phone_ids,
+                    generic_ids,
                 )
 
         # Try decryption ONCE per device; share across all its canonic IDs
