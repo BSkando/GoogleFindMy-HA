@@ -3,23 +3,26 @@
 
 `get_devices_with_location` picks one canonical-ID branch per device by
 `identifierInformation.type`: `phoneInformation.canonicIds` for Android
-phones, `canonicIds` for everything else. When that branch is empty the
-device is dropped as canonicless, and until now no log showed the type or
-whether the other branch carried the ID (BSkando/GoogleFindMy-HA#224, a
-Wear OS watch). On the main poll the decoder now logs at DEBUG the enum name
-of the type, whether `phoneInformation` is set, and the ID count of both
-branches. Counts and presence only: the ID values never reach the log
+phones, `canonicIds` for everything else. When that branch holds no usable
+ID (none at all, or only blank entries) the device is dropped as canonicless,
+and until now no log showed the type or whether the other branch carried the
+ID (BSkando/GoogleFindMy-HA#224, a Wear OS watch). On the main poll the decoder
+now logs at DEBUG the enum name of the type, whether `phoneInformation` is set,
+and the usable ID count of both branches. The ID values never reach the log
 (`AGENTS.md` section 5), and the capability probe pass stays silent (CQS).
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
 from custom_components.googlefindmy.ProtoDecoders import DeviceUpdate_pb2, decoder
+from google.protobuf.message import Message
 
 _SECRET = "c4n0n1c-1d-QxZ8pLmN3vR7tY2w"
 
@@ -70,6 +73,38 @@ def _structure_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogReco
             "phoneInformation.canonicIds=0, canonicIds=1",
             id="android-id-in-generic-branch",
         ),
+        pytest.param(
+            DeviceUpdate_pb2.IDENTIFIER_SPOT,
+            [],
+            [""],
+            "type=IDENTIFIER_SPOT, has_phoneInformation=False, "
+            "phoneInformation.canonicIds=0, canonicIds=0",
+            id="spot-blank-id-in-read-branch",
+        ),
+        pytest.param(
+            DeviceUpdate_pb2.IDENTIFIER_SPOT,
+            [""],
+            [],
+            "type=IDENTIFIER_SPOT, has_phoneInformation=True, "
+            "phoneInformation.canonicIds=0, canonicIds=0",
+            id="spot-blank-id-in-other-branch-is-no-id",
+        ),
+        pytest.param(
+            DeviceUpdate_pb2.IDENTIFIER_ANDROID,
+            [""],
+            [],
+            "type=IDENTIFIER_ANDROID, has_phoneInformation=True, "
+            "phoneInformation.canonicIds=0, canonicIds=0",
+            id="android-blank-id-in-read-branch",
+        ),
+        pytest.param(
+            DeviceUpdate_pb2.IDENTIFIER_ANDROID,
+            ["", _SECRET],
+            [],
+            "type=IDENTIFIER_ANDROID, has_phoneInformation=True, "
+            "phoneInformation.canonicIds=1, canonicIds=0",
+            id="android-reads-only-the-blank-first-entry",
+        ),
     ],
 )
 def test_structure_line_reports_both_branches_without_values(
@@ -84,10 +119,12 @@ def test_structure_line_reports_both_branches_without_values(
     )
 
     with caplog.at_level(logging.DEBUG, logger="custom_components.googlefindmy"):
-        decoder.get_devices_with_location(
+        rows = decoder.get_devices_with_location(
             device_list, cache=None, emit_canonicless_diagnostics=True
         )
 
+    # The line accompanies a dropped device.
+    assert rows == []
     records = _structure_records(caplog)
     assert len(records) == 1, caplog.text
     record = records[0]
@@ -102,18 +139,26 @@ def test_structure_line_reports_both_branches_without_values(
     assert all(_SECRET[i : i + 8] not in caplog.text for i in range(len(_SECRET) - 7))
 
 
+@pytest.mark.parametrize(
+    "generic_ids",
+    [
+        pytest.param([_SECRET], id="id-only"),
+        pytest.param(["", _SECRET], id="blank-before-id"),
+    ],
+)
 def test_structure_line_absent_when_read_branch_has_an_id(
-    caplog: pytest.LogCaptureFixture,
+    caplog: pytest.LogCaptureFixture, generic_ids: list[str]
 ) -> None:
     device_list = _device_list(
-        id_type=DeviceUpdate_pb2.IDENTIFIER_SPOT, phone_ids=[], generic_ids=[_SECRET]
+        id_type=DeviceUpdate_pb2.IDENTIFIER_SPOT, phone_ids=[], generic_ids=generic_ids
     )
 
     with caplog.at_level(logging.DEBUG, logger="custom_components.googlefindmy"):
-        decoder.get_devices_with_location(
+        rows = decoder.get_devices_with_location(
             device_list, cache=None, emit_canonicless_diagnostics=True
         )
 
+    assert len(rows) == 1
     assert _structure_records(caplog) == []
 
 
@@ -138,13 +183,101 @@ class _ExplodingDevice:
         raise RuntimeError("broken accessor")
 
 
+class _CancelledDevice:
+    @property
+    def identifierInformation(self) -> object:
+        raise asyncio.CancelledError
+
+
+class _HasFieldRaises(Message):
+    def HasField(self, field_name: str) -> bool:
+        raise ValueError(field_name)
+
+
+class _UnboolableResult:
+    def __bool__(self) -> bool:
+        raise TypeError("no truth value")
+
+
+class _HasFieldUnboolable(Message):
+    def HasField(self, field_name: str) -> bool:
+        return cast(bool, _UnboolableResult())
+
+
+class _LoudInt(int):
+    def __format__(self, format_spec: str) -> str:
+        return "LEAK"
+
+    def __repr__(self) -> str:
+        return "LEAK"
+
+    __str__ = __repr__
+
+
+def _info(**fields: object) -> SimpleNamespace:
+    return SimpleNamespace(identifierInformation=SimpleNamespace(**fields))
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        pytest.param(_ExplodingDevice(), id="raising-property"),
+        pytest.param(
+            _info(canonicIds=SimpleNamespace(canonicId=5)), id="generic-not-iterable"
+        ),
+        pytest.param(
+            _info(
+                phoneInformation=SimpleNamespace(
+                    canonicIds=SimpleNamespace(canonicId=5)
+                )
+            ),
+            id="phone-not-iterable",
+        ),
+        pytest.param(
+            SimpleNamespace(identifierInformation=_HasFieldRaises()),
+            id="hasfield-raises",
+        ),
+        pytest.param(
+            SimpleNamespace(identifierInformation=_HasFieldUnboolable()),
+            id="hasfield-result-has-no-truth-value",
+        ),
+    ],
+)
+def test_identifier_structure_degrades_on_hostile_objects(hostile: object) -> None:
+    assert decoder._identifier_structure(hostile) == ("<unreadable>", False, -1, -1)
+
+
+def test_identifier_structure_lets_cancellation_through() -> None:
+    with pytest.raises(asyncio.CancelledError):
+        decoder._identifier_structure(_CancelledDevice())
+
+
+def test_identifier_structure_takes_no_text_from_the_type_value() -> None:
+    structure = decoder._identifier_structure
+
+    # bool is an int, but no enum value.
+    assert structure(_info(type=True)) == ("<absent>", False, 0, 0)
+    assert structure(_info(type=_LoudInt(7)))[0] == "UNRECOGNIZED(7)"
+
+
+def test_identifier_structure_counts_what_the_row_loop_accepts() -> None:
+    entries = [
+        SimpleNamespace(id="usable"),
+        SimpleNamespace(id=""),
+        SimpleNamespace(id=5),
+        SimpleNamespace(),
+    ]
+    device = _info(canonicIds=SimpleNamespace(canonicId=entries))
+
+    assert decoder._identifier_structure(device) == ("<absent>", False, 0, 1)
+
+
 def test_identifier_structure_never_raises() -> None:
     structure = decoder._identifier_structure
 
     assert structure(None) == ("<absent>", False, 0, 0)
     assert structure(object()) == ("<absent>", False, 0, 0)
     assert structure(SimpleNamespace()) == ("<absent>", False, 0, 0)
-    assert structure(_ExplodingDevice()) == ("<unreadable>", False, -1, -1)
 
     # Phone double as in the canonicless tests: no generic canonicIds field.
     phone_double = SimpleNamespace(
