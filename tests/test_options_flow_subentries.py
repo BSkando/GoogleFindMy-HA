@@ -766,31 +766,18 @@ async def test_repairs_delete_narrows_the_fallback_but_not_the_deletion() -> Non
     assert SERVICE_SUBENTRY_KEY in _offered_keys(form, "delete_subentry")
 
 
-async def test_the_non_assigning_steps_keep_the_service_subentry() -> None:
+async def test_the_repairs_menu_keeps_the_service_subentry() -> None:
     """The narrowing stops at the three steps that assign devices.
 
     ``_subentry_choice_map`` fed all six steps before the split. Filtering
     inside it would have been the smaller diff and the larger mistake:
-    ``async_step_credentials`` legitimately targets the service group (the
-    settings step no longer offers a group at all), and ``async_step_repairs``
-    only asks whether *any* subentry exists, so a shared filter could send an
-    entry whose sole subentry is the service group into
-    ``repairs_no_subentries``. Both are checked here, the last one in its worst
-    case. The third remaining caller, the ``removable_choices`` of
-    ``async_step_repairs_delete``, has its own test.
+    ``async_step_repairs`` only asks whether *any* subentry exists, so a shared
+    filter could send an entry whose sole subentry is the service group into
+    ``repairs_no_subentries``; that worst case is checked here. (Settings and
+    credentials no longer offer a group at all.) The other remaining caller,
+    the ``removable_choices`` of ``async_step_repairs_delete``, has its own
+    test.
     """
-
-    entry = _EntryStub()
-    entry.add_subentry(key=TRACKER_SUBENTRY_KEY, title="Core")
-    entry.add_subentry(
-        key=SERVICE_SUBENTRY_KEY,
-        title="Service",
-        subentry_type=SUBENTRY_TYPE_SERVICE,
-    )
-    flow = await _build_flow(entry)
-
-    credentials_form = await flow.async_step_credentials()
-    assert SERVICE_SUBENTRY_KEY in _offered_keys(credentials_form, "subentry")
 
     service_only = _EntryStub()
     service_only.add_subentry(
@@ -1001,8 +988,8 @@ async def test_a_subentry_without_a_stored_group_key_falls_back_to_its_id() -> N
 
     A subentry whose ``group_key`` is missing or blank takes its
     ``subentry_id`` as the key. That branch is what makes the disambiguation
-    above a no-op for such a subentry, and it is why the rewrite can claim not
-    to change what ``_async_refresh_subentry_entry_title`` would store.
+    above a no-op for such a subentry, and it is why the rewrite never changes
+    what reaches storage: no options step writes ``option.key`` back.
     """
 
     entry = _EntryStub()
@@ -1834,10 +1821,10 @@ async def test_the_preselected_group_is_judged_on_both_axes(collides: bool) -> N
     type, so a ``service``-typed subentry parked on the tracker key wins the
     preselection over the group that actually holds devices.
 
-    Both callers that pass the *unfiltered* ``_subentry_choice_map`` reach it
-    (``async_step_settings`` and ``async_step_credentials``), so a user who
-    submits either form without touching the group selector writes feature
-    flags or refreshes the entry title on a subentry that cannot hold devices.
+    The two callers that passed the *unfiltered* ``_subentry_choice_map``
+    (``async_step_settings`` and ``async_step_credentials``) reached it; both
+    have since dropped their group selector, so no production caller reaches
+    this branch today and the test pins the helper's own contract.
 
     The two cases have different provenance and are pinned together because
     one fix answers both:
@@ -1906,9 +1893,10 @@ async def test_the_preselection_is_unchanged_where_nothing_is_parked(
 ) -> None:
     """The both-axes guard must not move the default where it had no work to do.
 
-    ``async_step_settings`` and ``async_step_credentials`` pass the
-    *unfiltered* ``_subentry_choice_map`` and legitimately target the service
-    group (``agents/config_flow/AGENTS.md``). The first repair for the parked
+    ``async_step_settings`` and ``async_step_credentials`` passed the
+    *unfiltered* ``_subentry_choice_map`` and legitimately targeted the service
+    group (``agents/config_flow/AGENTS.md``) until both dropped their group
+    selector; the helper keeps the contract this test pins. The first repair for the parked
     subentry preferred any device-accepting option in its final branch, which
     also fires on an ordinary legacy entry -- a tracker group on an
     email-style key beside a real service group, where nothing is parked at
@@ -2160,15 +2148,15 @@ async def test_a_parked_tracker_key_prefers_the_typed_tracker_group(
 
 
 @pytest.mark.parametrize(
-    ("step", "field", "service_is_offered"),
+    ("step", "field"),
     [
-        ("credentials", "subentry", True),
-        ("repairs_move", "target_subentry", False),
+        ("visibility", "subentry"),
+        ("repairs_move", "target_subentry"),
     ],
-    ids=["credentials", "repairs-move"],
+    ids=["visibility", "repairs-move"],
 )
 async def test_the_shown_form_preselects_the_group_the_helper_chose(
-    step: str, field: str, service_is_offered: bool
+    step: str, field: str
 ) -> None:
     """The preselection is pinned where the user meets it: in the form.
 
@@ -2177,20 +2165,22 @@ async def test_the_shown_form_preselects_the_group_the_helper_chose(
     different one -- pass ``next(iter(choices))`` into the marker, drop the
     argument, rebuild the schema after the call -- and every helper-level test
     stays green while the form a user opens preselects the wrong group. All
-    three of those mutations were run against this test and all three turned
-    it red, the rebuild included: ``add_suggested_values_to_schema`` binds to
+    three of those mutations were run against this test when it pinned
+    ``settings`` and ``repairs_move``, and all three turned it red, the rebuild
+    included (for the ``visibility`` arm the first was re-measured): ``add_suggested_values_to_schema`` binds to
     the real core here and preserves the marker's default through its
     ``copy.copy``, so a rebuild that drops it is visible. The
     submit path makes that costly rather than cosmetic: ``repairs_move`` writes
     the chosen devices to whatever the target field holds when the user submits
     without touching it.
 
-    Two steps rather than one because they reach the helper through different
-    choice maps, and ``service_is_offered`` pins that difference instead of
-    assuming it: ``credentials`` passes the unfiltered ``_subentry_choice_map``
-    and legitimately offers the service group, ``repairs_move`` passes
-    ``_device_target_choice_map``, whose filter removes it. A fixture that only
-    exercised one of the two would leave the other step's wiring unpinned.
+    Two steps rather than one because each wires the helper on its own. Both
+    pass ``_device_target_choice_map``, whose filter removes the service group,
+    and the test pins that for each of them. The parametrisation
+    used to carry a positive arm (a step that offers the service group through
+    the unfiltered ``_subentry_choice_map``); settings and credentials were the
+    only such steps and no longer offer a group, so no step with that wiring is
+    left to pin, and the arm went with them.
 
     The shape is deliberately the *first* loop of the helper -- a
     tracker-keyed group that accepts devices, sorting last by label -- and not
@@ -2232,22 +2222,19 @@ async def test_the_shown_form_preselects_the_group_the_helper_chose(
         {"device_id": "dev-1", "name": "Device 1"},
         {"device_id": "dev-2", "name": "Device 2"},
     ]
+    # Visibility only renders its form while a device is ignored.
+    entry.options = {OPT_IGNORED_DEVICES: {"dev-3": {"name": "Device 3"}}}
     flow = await _build_flow(entry)
 
     form = await getattr(flow, f"async_step_{step}")()
     assert form["type"] == "form", f"{step} did not render a form"
 
     offered_in_order = _offered_keys_in_order(form, field)
-    # Each step's own map, not one map for both: ``repairs_move`` renders out
-    # of ``_device_target_choice_map``, and resolving its keys through the
-    # unfiltered ``_subentry_choice_map`` would make the ``service_is_offered``
+    # The map both steps render from. Resolving their keys through the
+    # unfiltered ``_subentry_choice_map`` would make the service-group
     # assertion below fail open -- it would also pass if *no* offered key
     # resolved at all, which is the opposite of what it claims to pin.
-    option_map = (
-        flow._subentry_choice_map()[1]
-        if step == "credentials"
-        else flow._device_target_choice_map()[1]
-    )
+    option_map = flow._device_target_choice_map()[1]
     assert set(offered_in_order) <= set(option_map), (
         f"{step} offers keys its own choice map cannot resolve: "
         f"{sorted(set(offered_in_order) - set(option_map))}"
@@ -2258,9 +2245,9 @@ async def test_the_shown_form_preselects_the_group_the_helper_chose(
         for key in offered_in_order
         if option_map[key].stored_key == SERVICE_SUBENTRY_KEY
     }
-    assert bool(offered_service) is service_is_offered, (
-        "the two steps must keep reaching the helper through different choice "
-        "maps, otherwise this parametrisation pins one wiring twice"
+    assert not offered_service, (
+        f"{step} renders from the device-target map, which must not offer the "
+        "service group"
     )
 
     rendered = _rendered_default(form, field)

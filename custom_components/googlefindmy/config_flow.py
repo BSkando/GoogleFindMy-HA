@@ -8225,8 +8225,7 @@ class OptionsFlowHandler(OptionsFlowBase, _OptionsFlowMixin, _ContainerLoginMixi
         # entry that already carries drifting aliases sees opaque keys, and the
         # label the user reads is unaffected either way. Nothing new reaches
         # storage either: the options steps use ``option.key`` only to route a
-        # choice to its subentry (and to look up a default title) and never
-        # write it into ``group_key``.
+        # choice to its subentry and never write it into ``group_key``.
         if any(count > 1 for count in key_counts.values()):
             for option in options:
                 option.key = str(option.subentry_id or option.key)
@@ -8263,13 +8262,13 @@ class OptionsFlowHandler(OptionsFlowBase, _OptionsFlowMixin, _ContainerLoginMixi
         Deliberately a second helper rather than a filter inside
         ``_subentry_choice_map``: that one fed all six steps before this
         change, and only the three that assign devices may narrow their
-        choices. The four it still feeds must keep seeing every group:
-        ``async_step_settings`` and ``async_step_credentials`` legitimately
-        target the service group, ``async_step_repairs`` only asks whether
-        *any* subentry exists (a shared filter could send an entry whose sole
-        subentry is the service group into ``repairs_no_subentries``), and
-        ``async_step_repairs_delete`` builds its ``removable_choices`` from it,
-        because deletability is not assignability.
+        choices. The two it still feeds must keep seeing every group:
+        ``async_step_repairs`` only asks whether *any* subentry exists (a
+        shared filter could send an entry whose sole subentry is the service
+        group into ``repairs_no_subentries``), and ``async_step_repairs_delete``
+        builds its ``removable_choices`` from it, because deletability is not
+        assignability. (``async_step_settings`` and ``async_step_credentials``,
+        which also targeted the service group, no longer offer a group.)
         """
 
         all_options = self._gather_subentry_options()
@@ -8324,7 +8323,7 @@ class OptionsFlowHandler(OptionsFlowBase, _OptionsFlowMixin, _ContainerLoginMixi
         touching the target field then writes the devices to that group.
 
         ``option_map`` is how the caller supplies the meaning the key lost, and
-        it is required rather than optional: every one of the five call sites
+        it is required rather than optional: every one of the three call sites
         obtains it from the same choice map it passes as ``choices``, so an
         optional parameter would only have kept a branch alive that nothing
         reaches, and a future caller who forgot the map would silently get the
@@ -8337,8 +8336,9 @@ class OptionsFlowHandler(OptionsFlowBase, _OptionsFlowMixin, _ContainerLoginMixi
         distinction is worth stating because an earlier version of this
         docstring got it wrong. It argued that preselecting such a group sends
         feature-flag writes to something that cannot hold devices -- but the
-        contract two paragraphs down names the service group as a legitimate
-        target of exactly these two steps, so writing there is not the harm.
+        contract named the service group as a legitimate target of the two
+        steps that then used the unfiltered map (settings and credentials), so
+        writing there was not the harm.
         The harm is that the key no longer identifies the tracker group and
         ``_accepts_device_assignment`` is the closest stand-in left: a group
         wearing the tracker key while refusing devices is, whatever else it
@@ -8350,19 +8350,21 @@ class OptionsFlowHandler(OptionsFlowBase, _OptionsFlowMixin, _ContainerLoginMixi
         an email-keyed tracker group beside a real service group, nothing
         parked -- where the pre-fix answer was ``next(iter(choices))``. That
         moved the preselection of ``async_step_settings`` and
-        ``async_step_credentials`` away from the service group they
-        legitimately target, for every such installation and in both label
+        ``async_step_credentials`` (the steps that then offered a group) away
+        from the service group they legitimately targeted, for every such installation and in both label
         orders. Measured, and pinned by
         ``::test_the_preselection_is_unchanged_where_nothing_is_parked``.
 
-        **Only two of the five call sites can reach that loop at all**, which
-        bounds what it is worth rather than justifying its removal:
-        ``async_step_settings`` and ``async_step_credentials`` pass the
-        unfiltered ``_subentry_choice_map``, while ``async_step_visibility``,
-        ``async_step_repairs_move`` and ``async_step_repairs_delete`` pass
-        ``_device_target_choice_map``, whose filter is ``_accepts_device_
-        assignment`` itself -- a parked group never arrives there. The loop is
-        kept for the two that do, not written for all five.
+        **None of the three remaining call sites can reach that loop**:
+        ``async_step_visibility``, ``async_step_repairs_move`` and
+        ``async_step_repairs_delete`` pass ``_device_target_choice_map``, whose
+        filter is ``_accepts_device_assignment`` itself -- a parked group never
+        arrives there. The loop served ``async_step_settings`` and
+        ``async_step_credentials``, which passed the unfiltered
+        ``_subentry_choice_map`` until their group selector was removed (neither
+        step stored anything account-wide by group). It is unreachable from production
+        today and stays pinned by the tests that call this helper directly
+        until its removal is decided.
 
         A key with no option behind it is skipped in **both** loops. The two
         used to disagree, the first skipping and the second returning it, so
@@ -8378,9 +8380,9 @@ class OptionsFlowHandler(OptionsFlowBase, _OptionsFlowMixin, _ContainerLoginMixi
         ``::test_the_preselection_is_unchanged_where_nothing_is_parked`` red
         (``'owner@example.com'`` where it demands ``'service'``) and takes
         ``::test_the_preselected_group_survives_the_collision_rewrite`` with
-        it: on an ordinary legacy entry nothing is parked, and moving the
-        preselection of ``async_step_settings`` and ``async_step_credentials``
-        off the service group is the regression that pin exists for.
+        it: on an ordinary legacy entry nothing is parked, and moving a
+        preselection off the service group is the regression that pin exists
+        for.
 
         The type axis therefore sits *inside* the parked branch, where the
         boundary above already confines it: among the options that accept
@@ -8426,47 +8428,6 @@ class OptionsFlowHandler(OptionsFlowBase, _OptionsFlowMixin, _ContainerLoginMixi
             if device_accepting is not None:
                 return device_accepting
         return next(iter(choices), TRACKER_SUBENTRY_KEY)
-
-    async def _async_refresh_subentry_entry_title(
-        self, entry: ConfigEntry, subentry_option: _SubentryOption
-    ) -> None:
-        """Ensure the subentry reflects the current entry title."""
-
-        subentry = subentry_option.subentry
-        if subentry is None:
-            return
-
-        data = dict(getattr(subentry, "data", {}) or {})
-        new_entry_title = getattr(entry, "title", None)
-        if not new_entry_title:
-            return
-        group_key = data.get("group_key") or subentry_option.key
-        current_title = getattr(subentry, "title", None)
-        default_title = _DEFAULT_SUBENTRY_TITLES.get(group_key)
-        target_title = (
-            current_title if default_title is not None else None
-        ) or default_title
-        if target_title is None:
-            target_title = new_entry_title
-        if (
-            data.get("entry_title") == new_entry_title
-            and getattr(subentry, "title", None) == target_title
-        ):
-            return
-        data["entry_title"] = new_entry_title
-        update_helper = cast(
-            Callable[..., Awaitable[None] | None], ConfigFlow._async_update_subentry
-        )
-        result = update_helper(
-            self,
-            entry,
-            subentry,
-            data=data,
-            title=target_title,
-            unique_id=getattr(subentry, "unique_id", None),
-        )
-        if inspect.isawaitable(result):
-            await result
 
     async def _async_assign_devices_to_subentry(
         self, entry: ConfigEntry, target_key: str, device_ids: list[str]
@@ -9625,15 +9586,9 @@ class OptionsFlowHandler(OptionsFlowBase, _OptionsFlowMixin, _ContainerLoginMixi
         """
         errors: dict[str, str] = {}
 
-        subentry_choices, option_map = self._subentry_choice_map()
-        default_subentry = self._default_subentry_key(subentry_choices, option_map)
-
         if selector is not None:
             schema = vol.Schema(
                 {
-                    vol.Required(_FIELD_SUBENTRY, default=default_subentry): vol.In(
-                        subentry_choices
-                    ),
                     vol.Optional("new_secrets_json"): selector(
                         {"text": {"multiline": True}}
                     ),
@@ -9643,235 +9598,212 @@ class OptionsFlowHandler(OptionsFlowBase, _OptionsFlowMixin, _ContainerLoginMixi
         else:
             schema = vol.Schema(
                 {
-                    vol.Required(_FIELD_SUBENTRY, default=default_subentry): vol.In(
-                        subentry_choices
-                    ),
                     vol.Optional("new_secrets_json"): str,
                     # vol.Optional("new_oauth_token"): str,  # Disabled: broken manual token path stays hidden until fixed.
                 }
             )
 
         if user_input is not None:
-            selected_key = str(user_input.get(_FIELD_SUBENTRY, default_subentry))
-            if selected_key not in subentry_choices:
-                errors[_FIELD_SUBENTRY] = "invalid_subentry"
+            new_token = (user_input.get("new_oauth_token") or "").strip()
+            has_token = bool(new_token)
+            has_secrets = bool((user_input.get("new_secrets_json") or "").strip())
+            supplied = _count_supplied_credential_methods(
+                user_input, _OPTIONS_CREDENTIAL_FIELDS
+            )
+            if supplied != 1:
+                # Exactly one credential method per submission. Zero is the
+                # pre-existing "nothing entered" case; more than one must
+                # fail here too, before anything is written.
+                errors["base"] = "choose_one"
             else:
-                new_token = (user_input.get("new_oauth_token") or "").strip()
-                has_token = bool(new_token)
-                has_secrets = bool((user_input.get("new_secrets_json") or "").strip())
-                supplied = _count_supplied_credential_methods(
-                    user_input, _OPTIONS_CREDENTIAL_FIELDS
-                )
-                if supplied != 1:
-                    # Exactly one credential method per submission. Zero is the
-                    # pre-existing "nothing entered" case; more than one must
-                    # fail here too, before anything is written.
-                    errors["base"] = "choose_one"
-                else:
-                    try:
-                        entry = self.config_entry
-                        email = entry.data.get(CONF_GOOGLE_EMAIL)
-                        selected_option = option_map.get(selected_key)
+                try:
+                    entry = self.config_entry
+                    email = entry.data.get(CONF_GOOGLE_EMAIL)
 
-                        async def _finalize_success(
-                            updated_data: dict[str, Any],
-                        ) -> FlowResult:
-                            await self._async_clear_cached_aas_token(entry)
-                            self.hass.config_entries.async_update_entry(
-                                entry, data=updated_data
+                    async def _finalize_success(
+                        updated_data: dict[str, Any],
+                    ) -> FlowResult:
+                        await self._async_clear_cached_aas_token(entry)
+                        self.hass.config_entries.async_update_entry(
+                            entry, data=updated_data
+                        )
+                        # A claim is a promise to reload, and the release
+                        # points (unload, setup, removal) all presuppose
+                        # that a reload arrives. Where it cannot, promising
+                        # would strand the latch for the life of the
+                        # process and every later credential write would
+                        # stand down with its credentials ineffective.
+                        if _entry_reload_is_hopeless(self.hass, entry.entry_id, entry):
+                            # Names all three inputs rather than the state
+                            # alone: for a disabled or ignored entry the
+                            # state stays recoverable and would mislead.
+                            _LOGGER.warning(
+                                "Not reloading entry %s after a credential "
+                                "write (state=%s, disabled_by=%s, "
+                                "source=%s); the credentials are stored and "
+                                "take effect the next time the entry is "
+                                "set up successfully",
+                                entry.entry_id,
+                                getattr(entry, "state", None),
+                                getattr(entry, "disabled_by", None),
+                                getattr(entry, "source", None),
                             )
-                            if selected_option is not None:
-                                await self._async_refresh_subentry_entry_title(
-                                    entry, selected_option
-                                )
-                            # A claim is a promise to reload, and the release
-                            # points (unload, setup, removal) all presuppose
-                            # that a reload arrives. Where it cannot, promising
-                            # would strand the latch for the life of the
-                            # process and every later credential write would
-                            # stand down with its credentials ineffective.
-                            if _entry_reload_is_hopeless(
-                                self.hass, entry.entry_id, entry
-                            ):
-                                # Names all three inputs rather than the state
-                                # alone: for a disabled or ignored entry the
-                                # state stays recoverable and would mislead.
-                                _LOGGER.warning(
-                                    "Not reloading entry %s after a credential "
-                                    "write (state=%s, disabled_by=%s, "
-                                    "source=%s); the credentials are stored and "
-                                    "take effect the next time the entry is "
-                                    "set up successfully",
-                                    entry.entry_id,
-                                    getattr(entry, "state", None),
-                                    getattr(entry, "disabled_by", None),
-                                    getattr(entry, "source", None),
-                                )
-                                # Only this branch reports differently. The
-                                # regular path keeps ``reconfigure_successful``,
-                                # where that message is true.
-                                return self.async_abort(
-                                    reason="credentials_saved_not_reloaded"
-                                )
-                            # The write above notifies the credential update
-                            # listener, which reloads for exactly this change.
-                            # Whichever side claims the latch first reloads.
-                            if _claim_entry_reload(self.hass, entry.entry_id):
-                                reload_task = self.hass.async_create_task(
-                                    self.hass.config_entries.async_reload(
-                                        entry.entry_id
-                                    )
-                                )
-                                # Fire-and-forget keeps the promise open for the
-                                # task's whole lifetime; a task that dies before
-                                # the unload/setup release points would leave
-                                # the latch set for good.
-                                _release_claim_when_reload_fails(
-                                    self.hass, entry.entry_id, reload_task
-                                )
-                            return self.async_abort(reason="reconfigure_successful")
+                            # Only this branch reports differently. The
+                            # regular path keeps ``reconfigure_successful``,
+                            # where that message is true.
+                            return self.async_abort(
+                                reason="credentials_saved_not_reloaded"
+                            )
+                        # The write above notifies the credential update
+                        # listener, which reloads for exactly this change.
+                        # Whichever side claims the latch first reloads.
+                        if _claim_entry_reload(self.hass, entry.entry_id):
+                            reload_task = self.hass.async_create_task(
+                                self.hass.config_entries.async_reload(entry.entry_id)
+                            )
+                            # Fire-and-forget keeps the promise open for the
+                            # task's whole lifetime; a task that dies before
+                            # the unload/setup release points would leave
+                            # the latch set for good.
+                            _release_claim_when_reload_fails(
+                                self.hass, entry.entry_id, reload_task
+                            )
+                        return self.async_abort(reason="reconfigure_successful")
 
-                        if has_token:
-                            try:
-                                chosen = await async_pick_working_token(
-                                    self.hass,
-                                    email,
-                                    [("manual", new_token)],
+                    if has_token:
+                        try:
+                            chosen = await async_pick_working_token(
+                                self.hass,
+                                email,
+                                [("manual", new_token)],
+                            )
+                        except (DependencyNotReady, ImportError) as exc:
+                            _register_dependency_error(errors, exc)
+                        else:
+                            if not chosen:
+                                _log_token_validation_failure(
+                                    candidates=[("manual", new_token)],
                                 )
-                            except (DependencyNotReady, ImportError) as exc:
-                                _register_dependency_error(errors, exc)
+                                errors["base"] = "cannot_connect"
                             else:
-                                if not chosen:
-                                    _log_token_validation_failure(
-                                        candidates=[("manual", new_token)],
+                                if _disqualifies_for_persistence(chosen):
+                                    _LOGGER.warning(
+                                        "Options: token looks like a JWT; persisting anyway due to validation."
                                     )
-                                    errors["base"] = "cannot_connect"
-                                else:
-                                    if _disqualifies_for_persistence(chosen):
-                                        _LOGGER.warning(
-                                            "Options: token looks like a JWT; persisting anyway due to validation."
-                                        )
-                                    updated_data = {
-                                        **entry.data,
-                                        DATA_AUTH_METHOD: _AUTH_METHOD_INDIVIDUAL,
-                                        CONF_OAUTH_TOKEN: chosen,
-                                    }
-                                    updated_data.pop(DATA_SECRET_BUNDLE, None)
-                                    if isinstance(chosen, str) and chosen.startswith(
-                                        "aas_et/"
-                                    ):
-                                        updated_data[DATA_AAS_TOKEN] = chosen
-                                    else:
-                                        updated_data.pop(DATA_AAS_TOKEN, None)
-                                    return await _finalize_success(updated_data)
-
-                        if has_secrets and "new_secrets_json" in user_input:
-                            try:
-                                parsed = json.loads(user_input["new_secrets_json"])
-                                if not isinstance(parsed, dict):
-                                    raise TypeError()
-                                parsed = normalize_secrets_bundle(parsed)
-                            except Exception:
-                                errors["new_secrets_json"] = "invalid_json"
-                            else:
-                                has_shared, _has_owner = _secrets_key_status(parsed)
-                                if not has_shared:
-                                    # Single-key rule: reject a shared_key-less
-                                    # bundle before any persist/reload. Field
-                                    # slot (like invalid_json) because it is a
-                                    # correctable paste, not a bundle/network
-                                    # state.
-                                    errors["new_secrets_json"] = "keys_missing"
-                                elif not (
-                                    cands := _extract_oauth_candidates_from_secrets(
-                                        parsed
-                                    )
+                                updated_data = {
+                                    **entry.data,
+                                    DATA_AUTH_METHOD: _AUTH_METHOD_INDIVIDUAL,
+                                    CONF_OAUTH_TOKEN: chosen,
+                                }
+                                updated_data.pop(DATA_SECRET_BUNDLE, None)
+                                if isinstance(chosen, str) and chosen.startswith(
+                                    "aas_et/"
                                 ):
-                                    errors["base"] = "invalid_token"
+                                    updated_data[DATA_AAS_TOKEN] = chosen
                                 else:
-                                    try:
-                                        chosen = await async_pick_working_token(
-                                            self.hass,
-                                            email,
-                                            cands,
-                                            secrets_bundle=parsed,
-                                        )
-                                    except (DependencyNotReady, ImportError) as exc:
-                                        _register_dependency_error(errors, exc)
-                                    else:
-                                        if not chosen:
-                                            _log_token_validation_failure(
-                                                candidates=cands
-                                            )
-                                            errors["base"] = "cannot_connect"
-                                        else:
-                                            to_persist = chosen
-                                            if _disqualifies_for_persistence(
-                                                to_persist
-                                            ):
-                                                alt = next(
-                                                    (
-                                                        v
-                                                        for (_src, v) in cands
-                                                        if not _disqualifies_for_persistence(
-                                                            v
-                                                        )
-                                                    ),
-                                                    None,
-                                                )
-                                                if alt:
-                                                    to_persist = alt
-                                            updated_data = {
-                                                **entry.data,
-                                                DATA_AUTH_METHOD: _AUTH_METHOD_SECRETS,
-                                                **_persist_secrets_bundle(
-                                                    parsed, to_persist
-                                                ),
-                                            }
-                                            if not (
-                                                isinstance(to_persist, str)
-                                                and to_persist.startswith("aas_et/")
-                                            ):
-                                                updated_data.pop(DATA_AAS_TOKEN, None)
-                                            return await _finalize_success(updated_data)
-                    except Exception as err2:  # noqa: BLE001
-                        # The deferral rebuilds the payload from the bundle, so
-                        # it only applies to a bundle submission. ``has_secrets``
-                        # is the guard, not a mere key check: it also rules out
-                        # an empty string, which would reach ``json.loads`` and
-                        # raise there instead. Both credential branches call
-                        # ``_finalize_success`` inside this ``try``, so a guard
-                        # error can arrive from a token-only submission too;
-                        # that one falls through to the error mapping below.
-                        # Defence in depth rather than a live user path: the
-                        # token field is commented out of both schema branches
-                        # and the flow manager rejects extra keys, so today
-                        # only a direct call produces that shape.
-                        if _is_multi_entry_guard_error(err2) and has_secrets:
-                            entry = self.config_entry
-                            parsed = normalize_secrets_bundle(
-                                json.loads(user_input["new_secrets_json"])
-                            )
-                            cands = _extract_oauth_candidates_from_secrets(parsed)
-                            token_first = cands[0][1] if cands else ""
-                            updated_data = {
-                                **entry.data,
-                                DATA_AUTH_METHOD: _AUTH_METHOD_SECRETS,
-                                **_persist_secrets_bundle(parsed, token_first),
-                            }
-                            if not (
-                                isinstance(token_first, str)
-                                and token_first.startswith("aas_et/")
+                                    updated_data.pop(DATA_AAS_TOKEN, None)
+                                return await _finalize_success(updated_data)
+
+                    if has_secrets and "new_secrets_json" in user_input:
+                        try:
+                            parsed = json.loads(user_input["new_secrets_json"])
+                            if not isinstance(parsed, dict):
+                                raise TypeError()
+                            parsed = normalize_secrets_bundle(parsed)
+                        except Exception:
+                            errors["new_secrets_json"] = "invalid_json"
+                        else:
+                            has_shared, _has_owner = _secrets_key_status(parsed)
+                            if not has_shared:
+                                # Single-key rule: reject a shared_key-less
+                                # bundle before any persist/reload. Field
+                                # slot (like invalid_json) because it is a
+                                # correctable paste, not a bundle/network
+                                # state.
+                                errors["new_secrets_json"] = "keys_missing"
+                            elif not (
+                                cands := _extract_oauth_candidates_from_secrets(parsed)
                             ):
-                                updated_data.pop(DATA_AAS_TOKEN, None)
-                            return await _finalize_success(updated_data)
-                        errors["base"] = _map_api_exc_to_error_key(err2)
+                                errors["base"] = "invalid_token"
+                            else:
+                                try:
+                                    chosen = await async_pick_working_token(
+                                        self.hass,
+                                        email,
+                                        cands,
+                                        secrets_bundle=parsed,
+                                    )
+                                except (DependencyNotReady, ImportError) as exc:
+                                    _register_dependency_error(errors, exc)
+                                else:
+                                    if not chosen:
+                                        _log_token_validation_failure(candidates=cands)
+                                        errors["base"] = "cannot_connect"
+                                    else:
+                                        to_persist = chosen
+                                        if _disqualifies_for_persistence(to_persist):
+                                            alt = next(
+                                                (
+                                                    v
+                                                    for (_src, v) in cands
+                                                    if not _disqualifies_for_persistence(
+                                                        v
+                                                    )
+                                                ),
+                                                None,
+                                            )
+                                            if alt:
+                                                to_persist = alt
+                                        updated_data = {
+                                            **entry.data,
+                                            DATA_AUTH_METHOD: _AUTH_METHOD_SECRETS,
+                                            **_persist_secrets_bundle(
+                                                parsed, to_persist
+                                            ),
+                                        }
+                                        if not (
+                                            isinstance(to_persist, str)
+                                            and to_persist.startswith("aas_et/")
+                                        ):
+                                            updated_data.pop(DATA_AAS_TOKEN, None)
+                                        return await _finalize_success(updated_data)
+                except Exception as err2:  # noqa: BLE001
+                    # The deferral rebuilds the payload from the bundle, so
+                    # it only applies to a bundle submission. ``has_secrets``
+                    # is the guard, not a mere key check: it also rules out
+                    # an empty string, which would reach ``json.loads`` and
+                    # raise there instead. Both credential branches call
+                    # ``_finalize_success`` inside this ``try``, so a guard
+                    # error can arrive from a token-only submission too;
+                    # that one falls through to the error mapping below.
+                    # Defence in depth rather than a live user path: the
+                    # token field is commented out of both schema branches
+                    # and the flow manager rejects extra keys, so today
+                    # only a direct call produces that shape.
+                    if _is_multi_entry_guard_error(err2) and has_secrets:
+                        entry = self.config_entry
+                        parsed = normalize_secrets_bundle(
+                            json.loads(user_input["new_secrets_json"])
+                        )
+                        cands = _extract_oauth_candidates_from_secrets(parsed)
+                        token_first = cands[0][1] if cands else ""
+                        updated_data = {
+                            **entry.data,
+                            DATA_AUTH_METHOD: _AUTH_METHOD_SECRETS,
+                            **_persist_secrets_bundle(parsed, token_first),
+                        }
+                        if not (
+                            isinstance(token_first, str)
+                            and token_first.startswith("aas_et/")
+                        ):
+                            updated_data.pop(DATA_AAS_TOKEN, None)
+                        return await _finalize_success(updated_data)
+                    errors["base"] = _map_api_exc_to_error_key(err2)
 
         return self.async_show_form(
             step_id="credentials",
             data_schema=schema,
             errors=errors,
-            description_placeholders=_SUBENTRY_PLACEHOLDERS,
         )
 
 

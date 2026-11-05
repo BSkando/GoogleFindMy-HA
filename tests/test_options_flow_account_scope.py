@@ -227,7 +227,6 @@ async def test_settings_form_offers_no_feature_group_field() -> None:
     assert _shown_keys(result) == _expected_settings_keys()
 
 
-@pytest.mark.xfail(strict=True, reason=_REASON)
 @pytest.mark.parametrize("with_selector", [True, False], ids=["selector", "plain"])
 async def test_credentials_form_offers_no_feature_group_field(
     monkeypatch: pytest.MonkeyPatch, with_selector: bool
@@ -329,7 +328,6 @@ async def test_settings_confirm_without_edit_neither_writes_nor_reloads_even_wit
 # --- T5: credentials are stored for the account and touch no group -----------
 
 
-@pytest.mark.xfail(strict=True, reason=_REASON)
 async def test_credentials_success_does_not_touch_any_subentry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

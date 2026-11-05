@@ -264,9 +264,7 @@ async def _rotate(
     flow.hass = hass  # type: ignore[assignment]
     flow.config_entry = entry  # type: ignore[attr-defined]
 
-    outcome = await flow.async_step_credentials(
-        {"new_oauth_token": token, "subentry": TRACKER_SUBENTRY_KEY}
-    )
+    outcome = await flow.async_step_credentials({"new_oauth_token": token})
     if inspect.isawaitable(outcome):
         outcome = await outcome
     await hass.settle()
