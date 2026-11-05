@@ -1,10 +1,16 @@
 # tests/test_options_flow_credentials_outcomes.py
-"""Every outcome of the credential options step, one test per branch.
+"""One test per branch of the credential options step that this change touched.
 
 The step validates one of two credential methods (a pasted secrets bundle or a
 manual token) and then either stores it for the whole account or answers with a
-form error. Its error branches had no test of their own; the account-scope tests
-(``tests/test_options_flow_account_scope.py``) cover only the successful bundle.
+form error. Removing the feature group selector dedented its validation
+branches, so they became part of the diff; several of them had no test
+anywhere. The outcomes that neighbouring files already pin stay there
+(``keys_missing`` and ``invalid_token`` in
+``tests/test_config_flow_secrets_normalization.py``, the plain token success and
+``credentials_saved_not_reloaded`` in
+``tests/test_options_flow_credentials_reload.py``, a guard error without a
+bundle in ``tests/test_options_flow_credentials_cache.py``).
 
 Each error test asserts the exact ``errors`` mapping *and* that nothing was
 written, claimed or reloaded, so a branch that silently stores half a credential
@@ -101,17 +107,22 @@ async def _submit(
     pick: _Pick,
     *,
     stale_aas: bool = False,
+    stale_bundle: bool = False,
 ) -> tuple[Any, Any, _DummyHass, _LatchRecorder]:
     """Run one credential submission and return outcome, entry, hass, latch.
 
     ``stale_aas`` seeds an AAS token from an earlier login, so a success test
     can show that a non-AAS credential drops it instead of carrying it along.
+    ``stale_bundle`` seeds a secrets bundle from an earlier login, so the manual
+    token branch can show that it drops the bundle it replaces.
     """
 
     cache = _MemoryCache()
     entry = _make_entry(entry_id="entry-credential-outcomes", cache=cache)
     if stale_aas:
         entry.data = {**entry.data, DATA_AAS_TOKEN: _STALE_AAS_TOKEN}
+    if stale_bundle:
+        entry.data = {**entry.data, DATA_SECRET_BUNDLE: {"shared_key": "AABBCC"}}
     hass = _DummyHass(entry, cache)
     latch = _LatchRecorder()
     monkeypatch.setattr(
@@ -231,6 +242,7 @@ async def test_a_validated_jwt_token_is_stored_with_a_warning(
         {"new_oauth_token": _JWT_TOKEN},
         _returning(_JWT_TOKEN),
         stale_aas=True,
+        stale_bundle=True,
     )
 
     stored = _assert_stored(outcome, hass, latch)
@@ -366,15 +378,27 @@ async def test_a_validated_aas_token_from_a_bundle_keeps_the_aas_token(
 
 
 @pytest.mark.parametrize(
-    ("tokens", "expected_aas"),
+    ("tokens", "expected_token", "expected_aas"),
     [
-        pytest.param({"aas_token": _AAS_TOKEN}, _AAS_TOKEN, id="aas-first"),
-        pytest.param({"oauth_token": _PLAIN_TOKEN}, None, id="plain-first"),
+        pytest.param({"aas_token": _AAS_TOKEN}, _AAS_TOKEN, _AAS_TOKEN, id="aas-only"),
+        pytest.param(
+            {"oauth_token": _PLAIN_TOKEN}, _PLAIN_TOKEN, None, id="plain-only"
+        ),
+        # Two candidates, the AAS token written last: the fallback takes the
+        # first *candidate* (``_extract_oauth_candidates_from_secrets`` puts
+        # ``aas_token`` first), not the first or the last key of the bundle.
+        pytest.param(
+            {"oauth_token": _PLAIN_TOKEN, "aas_token": _AAS_TOKEN},
+            _AAS_TOKEN,
+            _AAS_TOKEN,
+            id="two-candidates",
+        ),
     ],
 )
-async def test_the_guard_fallback_stores_the_first_bundle_token(
+async def test_the_guard_fallback_stores_the_first_candidate_of_the_bundle(
     monkeypatch: pytest.MonkeyPatch,
     tokens: dict[str, str],
+    expected_token: str,
     expected_aas: str | None,
 ) -> None:
     outcome, _entry, hass, latch = await _submit(
@@ -385,7 +409,21 @@ async def test_the_guard_fallback_stores_the_first_bundle_token(
     )
 
     stored = _assert_stored(outcome, hass, latch)
-    first = next(iter(tokens.values()))
-    assert stored[CONF_OAUTH_TOKEN] == first
+    assert stored[CONF_OAUTH_TOKEN] == expected_token
     assert stored[DATA_AUTH_METHOD] == config_flow._AUTH_METHOD_SECRETS
     assert stored.get(DATA_AAS_TOKEN) == expected_aas
+
+
+async def test_any_other_error_during_bundle_validation_stores_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Negative control for the fallback: only the guard error stores unvalidated."""
+
+    outcome, entry, hass, latch = await _submit(
+        monkeypatch,
+        {"new_secrets_json": _bundle(oauth_token=_PLAIN_TOKEN)},
+        _raising(RuntimeError("boom")),
+    )
+
+    _assert_rejected(outcome, entry, hass, latch)
+    assert outcome["errors"] == {"base": "unknown"}

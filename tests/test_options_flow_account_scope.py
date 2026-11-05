@@ -283,8 +283,8 @@ async def test_settings_change_writes_no_subentry_and_reloads_once() -> None:
 async def test_settings_store_the_extra_watch_paths_as_a_clean_list() -> None:
     """T3b: the text block lands on the entry as trimmed, de-duplicated paths.
 
-    The normalisation now runs one indentation level higher than before this
-    change, so it is part of the diff; this pins both of its outcomes.
+    Removing the feature group selector dedented the normalisation by one
+    level, so it is part of this branch's diff; this pins both of its outcomes.
     """
 
     entry = _EntryStub()
