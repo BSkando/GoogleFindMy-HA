@@ -61,6 +61,12 @@ from tests.test_options_flow_subentries import (
 
 pytestmark = pytest.mark.asyncio
 
+# The doubles are duck-typed stand-ins for Home Assistant objects. Each scoped
+# ``type: ignore[...]`` in this file sits on a line that hands a double to a
+# slot typed for the real object, which mypy cannot accept without a cast that
+# would hide the same fact; the neighbouring options-flow tests use the same
+# markers for the same reason.
+
 _FIELD = "subentry"
 _PACKAGE = Path(config_flow.__file__).resolve().parent
 
