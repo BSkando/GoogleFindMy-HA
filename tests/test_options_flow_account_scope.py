@@ -61,7 +61,6 @@ from tests.test_options_flow_subentries import (
 
 pytestmark = pytest.mark.asyncio
 
-_REASON = "inert feature group selector in settings and credentials, fixed in this PR"
 _FIELD = "subentry"
 _PACKAGE = Path(config_flow.__file__).resolve().parent
 
@@ -394,7 +393,6 @@ def _locale_files() -> list[Path]:
     ]
 
 
-@pytest.mark.xfail(strict=True, reason=_REASON)
 async def test_settings_and_credentials_translations_carry_no_feature_group_label() -> (
     None
 ):

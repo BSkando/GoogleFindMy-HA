@@ -262,11 +262,7 @@
         "title": "Aktualizuj poświadczenia (opcjonalnie)",
         "description": "Zaktualizuj swoje poświadczenia. Istniejące wartości nie są wyświetlane ze względów bezpieczeństwa.\n\nWklej pełną zawartość nowego pliku **secrets.json** (wygenerowanego przez uruchomienie GoogleFindMyTools).\n\nPo wysłaniu poświadczenia są weryfikowane i zapisywane; integracja przeładowuje się bez zmiany nazw twoich encji.",
         "data": {
-          "new_secrets_json": "Nowy plik secrets.json (pełna zawartość)",
-          "subentry": "Grupa funkcji"
-        },
-        "data_description": {
-          "subentry": "Zastosuj aktualizacje poświadczeń do wybranej grupy funkcji. Szczegóły procesu znajdziesz w przewodniku [Podpozycje i grupy funkcji]({subentries_docs_url})."
+          "new_secrets_json": "Nowy plik secrets.json (pełna zawartość)"
         }
       },
       "settings": {
@@ -287,7 +283,6 @@
           "map_view_token_expiration": "Włącz wygasanie tokenu widoku mapy",
           "map_view_enabled": "Włącz widok mapy",
           "contributor_mode": "Tryb raportowania lokalizacji",
-          "subentry": "Grupa funkcji",
           "secrets_extra_watch_paths": "Dodatkowe ścieżki obserwowania secrets.json (po jednej w wierszu)"
         },
         "data_description": {
@@ -300,7 +295,6 @@
           "map_view_token_expiration": "Po włączeniu tokeny widoku mapy wygasają po 1 tygodniu. Po wyłączeniu (domyślnie) nie wygasają.",
           "map_view_enabled": "Domyślnie włączone. Po wyłączeniu żądania widoku mapy są odrzucane jak przy nieprawidłowym tokenie, a linki urządzeń są usuwane. Nie unieważnia istniejących linków; jeśli link mógł wyciec, użyj 'Włącz wygasanie tokenu widoku mapy' (do dwóch tygodni, jeśli było już włączone).",
           "contributor_mode": "Wybierz, jak urządzenie współpracuje z siecią Google (domyślnie Wszystkie obszary w trybie crowdsourcingu lub tylko obszary o dużym ruchu).",
-          "subentry": "Zapisz te opcje w wybranej grupie funkcji. Zobacz [Podpozycje i grupy funkcji]({subentries_docs_url}), aby poznać przykłady.",
           "secrets_extra_watch_paths": "Opcjonalne. Dodatkowe bezwzględne ścieżki do plików secrets.json, które integracja powinna obserwować w celu automatycznego wczytywania, po jednej w wierszu. Pozostaw puste, aby obserwować tylko domyślne lokalizacje."
         }
       },

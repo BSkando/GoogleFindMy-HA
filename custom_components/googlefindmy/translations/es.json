@@ -262,11 +262,7 @@
         "title": "Actualizar credenciales (opcional)",
         "description": "Actualiza tus credenciales. Los valores existentes no se muestran por seguridad.\n\nPega el contenido completo de un nuevo **secrets.json** (generado ejecutando GoogleFindMyTools).\n\nUna vez enviadas, las credenciales se validan y se almacenan; la integración se recarga sin cambiar los nombres de tus entidades.",
         "data": {
-          "new_secrets_json": "Nuevo secrets.json (contenido completo)",
-          "subentry": "Grupo de funciones"
-        },
-        "data_description": {
-          "subentry": "Aplica las actualizaciones de credenciales al grupo de funciones seleccionado. Consulta la guía [Subentradas y grupos de funciones]({subentries_docs_url}) para conocer los detalles del flujo de trabajo."
+          "new_secrets_json": "Nuevo secrets.json (contenido completo)"
         }
       },
       "settings": {
@@ -287,7 +283,6 @@
           "map_view_token_expiration": "Activar caducidad del token de la vista de mapa",
           "map_view_enabled": "Activar la vista de mapa",
           "contributor_mode": "Modo de contribución de ubicaciones",
-          "subentry": "Grupo de funciones",
           "secrets_extra_watch_paths": "Rutas de vigilancia adicionales de secrets.json (una por línea)"
         },
         "data_description": {
@@ -300,7 +295,6 @@
           "map_view_token_expiration": "Si está activado, los tokens de la vista de mapa caducan tras 1 semana. Si está desactivado (por defecto), no caducan.",
           "map_view_enabled": "Activado por defecto. Si está desactivado, las solicitudes a la vista de mapa se rechazan como con un token inválido y se borran los enlaces de dispositivo. No renueva los enlaces existentes; si uno pudo filtrarse, usa 'Activar caducidad del token de la vista de mapa' (hasta dos semanas si ya estaba activada).",
           "contributor_mode": "Elige cómo contribuye tu dispositivo a la red de Google (Todas las zonas por defecto para aportes colaborativos o solo Zonas de alto tránsito).",
-          "subentry": "Guarda estas opciones en el grupo de funciones seleccionado. Consulta [Subentradas y grupos de funciones]({subentries_docs_url}) para ver ejemplos.",
           "secrets_extra_watch_paths": "Opcional. Rutas absolutas adicionales a archivos secrets.json que la integración debe vigilar para recogerlos automáticamente, una por línea. Déjalo vacío para vigilar solo las ubicaciones predeterminadas."
         }
       },

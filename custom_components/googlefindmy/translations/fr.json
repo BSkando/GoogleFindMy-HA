@@ -262,11 +262,7 @@
         "title": "Mettre à jour les identifiants (optionnel)",
         "description": "Mettez à jour vos identifiants. Les valeurs existantes ne sont pas affichées pour des raisons de sécurité.\n\nCollez le contenu complet d'un nouveau **secrets.json** (généré en exécutant GoogleFindMyTools).\n\nUne fois soumis, les identifiants sont validés et enregistrés ; l'intégration se recharge sans modifier les noms de vos entités.",
         "data": {
-          "new_secrets_json": "Nouveau secrets.json (contenu complet)",
-          "subentry": "Groupe de fonctionnalités"
-        },
-        "data_description": {
-          "subentry": "Appliquez les mises à jour d'identifiants au groupe de fonctionnalités sélectionné. Consultez le guide [Sous-entrées et groupes de fonctionnalités]({subentries_docs_url}) pour plus de détails sur le flux de travail."
+          "new_secrets_json": "Nouveau secrets.json (contenu complet)"
         }
       },
       "settings": {
@@ -287,7 +283,6 @@
           "map_view_token_expiration": "Activer l’expiration du jeton de la vue carte",
           "map_view_enabled": "Activer la vue carte",
           "contributor_mode": "Mode de contribution de localisation",
-          "subentry": "Groupe de fonctionnalités",
           "secrets_extra_watch_paths": "Chemins de surveillance supplémentaires pour secrets.json (un par ligne)"
         },
         "data_description": {
@@ -300,7 +295,6 @@
           "map_view_token_expiration": "Lorsqu'elle est activée, les jetons de la vue carte expirent après 1 semaine. Lorsqu'elle est désactivée (par défaut), ils n'expirent pas.",
           "map_view_enabled": "Activée par défaut. Si désactivée, les requêtes de la vue carte sont refusées comme avec un jeton invalide et les liens des appareils sont effacés. Ne fait pas tourner les liens existants ; si un lien a pu fuiter, utilisez « Activer l'expiration du jeton de la vue carte » (jusqu'à deux semaines si déjà activée).",
           "contributor_mode": "Choisissez comment votre appareil contribue au réseau Google (par défaut Toutes les zones pour une contribution participative ou uniquement les zones à forte affluence).",
-          "subentry": "Enregistrez ces options pour le groupe de fonctionnalités sélectionné. Consultez [Sous-entrées et groupes de fonctionnalités]({subentries_docs_url}) pour des exemples.",
           "secrets_extra_watch_paths": "Facultatif. Chemins absolus supplémentaires vers des fichiers secrets.json que l'intégration doit surveiller pour une prise en charge automatique, un par ligne. Laissez vide pour ne surveiller que les emplacements par défaut."
         }
       },

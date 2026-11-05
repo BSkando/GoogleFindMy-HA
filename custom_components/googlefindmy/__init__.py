@@ -1322,9 +1322,10 @@ class ConfigEntrySubEntryManager:
         lost that way were exactly two, and both have owners elsewhere:
         ``visible_device_ids`` (the device-to-subentry assignment, written by
         the options flow and read by the coordinator) and ``feature_flags``
-        (written by ``_build_subentry_payload`` in ``config_flow.py`` and read
-        by ``SubentryOperations``). Neither is derivable from a definition, so
-        neither can be repaired by adding it to one.
+        (written by ``_build_subentry_payload`` in ``config_flow.py``; it is
+        loaded into ``SubentryMetadata`` but currently has no reader). Neither
+        is derivable from a definition, so neither can be repaired by adding it
+        to one.
 
         The preservation is deliberately **not** an allow-list of named keys:
         an allow-list has to be extended whenever a writer stores a new field,
@@ -1586,12 +1587,11 @@ class ConfigEntrySubEntryManager:
 
         How long the shape survives is a *window*, not a permanent state, and
         saying "never repaired" here was the same overreach one paragraph
-        later. Two kinds of write-back exist. The three subentry updates on
-        ``OptionsFlowHandler`` (``_async_update_feature_group_subentry``,
-        ``_async_refresh_subentry_entry_title``,
-        ``_async_assign_devices_to_subentry``) pass an existing value
-        through unchanged (``unique_id=getattr(subentry, "unique_id", None)``),
-        so they neither create nor repair a ``None``; but
+        later. Two kinds of write-back exist. The subentry update on
+        ``OptionsFlowHandler`` (``_async_assign_devices_to_subentry``) passes
+        an existing value through unchanged
+        (``unique_id=getattr(subentry, "unique_id", None)``), so it neither
+        creates nor repairs a ``None``; but
         ``ConfigFlow._async_sync_feature_subentries`` assigns
         ``f"{entry_id}-{key}"`` to the *existing* core subentry it resolved
         (and its nested ``_claim_unique_id`` does the same for a displaced
