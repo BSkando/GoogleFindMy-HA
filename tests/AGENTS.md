@@ -276,7 +276,7 @@ are installed. **Review this checklist on every single change under
    is the only thing that gets an un-ignored device its entity back) and
    settings (`async_step_settings`, which asks for its own reload since the
    handler stopped inheriting one from `OptionsFlowWithReload`, and asks only
-   when the submission actually changes the options or the selected subentry)
+   when the submission actually changes the options)
    schedule their reload through
    `config_flow._schedule_claimed_reload`, so their manager doubles must expose
    a **synchronous** `async_schedule_reload` recorder (the core method is a

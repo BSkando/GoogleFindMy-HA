@@ -18,7 +18,6 @@ from custom_components.googlefindmy import config_flow
 from custom_components.googlefindmy.const import (
     OPT_CONTRIBUTOR_MODE,
     OPT_IGNORED_DEVICES,
-    OPT_MAP_VIEW_ENABLED,
     OPT_MAP_VIEW_TOKEN_EXPIRATION,
     SERVICE_SUBENTRY_KEY,
     SUBENTRY_TYPE_HUB,
@@ -471,29 +470,6 @@ async def test_subentry_options_are_gathered_from_the_real_read_only_mapping() -
     assert not isinstance(_EntryStub().subentries, dict)
 
 
-async def test_settings_updates_feature_flags_for_selected_subentry() -> None:
-    """Settings step should persist feature flags to the chosen subentry."""
-
-    entry = _EntryStub()
-    entry.add_subentry(key=TRACKER_SUBENTRY_KEY, title="Core")
-    flow = await _build_flow(entry)
-
-    result = await flow.async_step_settings(
-        {
-            "subentry": TRACKER_SUBENTRY_KEY,
-            OPT_MAP_VIEW_TOKEN_EXPIRATION: True,
-            OPT_CONTRIBUTOR_MODE: "high_traffic",
-        }
-    )
-
-    assert result["type"] == "create_entry"
-    manager = flow.hass.config_entries  # type: ignore[assignment]
-    assert manager.updated
-    _, payload = manager.updated[-1]
-    assert payload["feature_flags"][OPT_MAP_VIEW_TOKEN_EXPIRATION] is True
-    assert payload["feature_flags"][OPT_CONTRIBUTOR_MODE] == "high_traffic"
-
-
 async def test_settings_schedules_the_reload_its_options_need() -> None:
     """The settings step asks for its own reload, through the owner latch.
 
@@ -511,12 +487,7 @@ async def test_settings_schedules_the_reload_its_options_need() -> None:
     entry.add_subentry(key=TRACKER_SUBENTRY_KEY, title="Core")
     flow = await _build_flow(entry)
 
-    result = await flow.async_step_settings(
-        {
-            "subentry": TRACKER_SUBENTRY_KEY,
-            OPT_MAP_VIEW_TOKEN_EXPIRATION: True,
-        }
-    )
+    result = await flow.async_step_settings({OPT_MAP_VIEW_TOKEN_EXPIRATION: True})
 
     assert result["type"] == "create_entry"
     manager = flow.hass.config_entries  # type: ignore[assignment]
@@ -541,19 +512,14 @@ async def test_settings_stands_down_but_still_writes_the_options(
     flow = await _build_flow(entry)
     _claim_latch(flow.hass, entry.entry_id)
 
-    result = await flow.async_step_settings(
-        {
-            "subentry": TRACKER_SUBENTRY_KEY,
-            OPT_MAP_VIEW_TOKEN_EXPIRATION: True,
-        }
-    )
+    result = await flow.async_step_settings({OPT_MAP_VIEW_TOKEN_EXPIRATION: True})
 
     assert result["type"] == "create_entry"
     manager = flow.hass.config_entries  # type: ignore[assignment]
     assert manager.scheduled_reloads == []
     assert manager.reloads == []
-    _, payload = manager.updated[-1]
-    assert payload["feature_flags"][OPT_MAP_VIEW_TOKEN_EXPIRATION] is True
+    assert result["data"][OPT_MAP_VIEW_TOKEN_EXPIRATION] is True
+    assert manager.updated == []
     assert any(
         "were saved without scheduling a reload" in record.message
         for record in caplog.records
@@ -565,7 +531,7 @@ async def _settled_settings_state(
 ) -> tuple[dict[str, Any], dict[str, Any], str]:
     """Return the options, subentry data and title a settings submit leaves behind.
 
-    Used to build the *unchanged* starting point for the two tests below. Taken
+    Used to build the *unchanged* starting point for the test below. Taken
     from a throwaway entry with its own hass double on purpose: submitting twice
     against one double would leave the shared reload latch claimed from the first
     run, and the second run would then stand down as a foreign owner -- passing
@@ -577,10 +543,8 @@ async def _settled_settings_state(
     flow = await _build_flow(entry)
     result = await flow.async_step_settings(dict(user_input))
     assert result["type"] == "create_entry"
-    manager = flow.hass.config_entries  # type: ignore[assignment]
-    _, subentry_payload = manager.updated[-1]
     subentry = next(iter(entry.subentries.values()))
-    return dict(result["data"]), dict(subentry_payload), subentry.title
+    return dict(result["data"]), dict(subentry.data), subentry.title
 
 
 async def test_settings_skips_the_reload_when_nothing_changed() -> None:
@@ -597,7 +561,6 @@ async def test_settings_skips_the_reload_when_nothing_changed() -> None:
     """
 
     user_input = {
-        "subentry": TRACKER_SUBENTRY_KEY,
         OPT_MAP_VIEW_TOKEN_EXPIRATION: True,
         OPT_CONTRIBUTOR_MODE: "high_traffic",
     }
@@ -622,63 +585,19 @@ async def test_settings_skips_the_reload_when_nothing_changed() -> None:
     assert _latch_is_free(flow.hass, entry.entry_id) is True
 
 
-async def test_settings_schedules_the_reload_for_a_subentry_only_change() -> None:
-    """A write that lands only on the subentry still owes a reload.
-
-    The options comparison cannot see it: the payload is identical, but
-    ``_async_update_feature_group_subentry`` synchronises a stale
-    ``entry_title`` onto the subentry. Without the second arm of the condition
-    the change would be written and never take effect, which is the exact
-    damage class this PR exists to close.
-
-    ``group_key`` would be the other candidate and is deliberately *not* used:
-    dropping it also drops the subentry from ``_subentry_choice_map``, so the
-    step would abort with ``invalid_subentry`` and the test would exercise the
-    error path instead of the change detection (measured, not assumed).
-    """
-
-    user_input = {
-        "subentry": TRACKER_SUBENTRY_KEY,
-        OPT_MAP_VIEW_TOKEN_EXPIRATION: True,
-    }
-    options, subentry_data, subentry_title = await _settled_settings_state(user_input)
-    assert subentry_data["entry_title"] != "Stale title"
-    subentry_data["entry_title"] = "Stale title"
-
-    entry = _EntryStub()
-    subentry = entry.add_subentry(key=TRACKER_SUBENTRY_KEY, title=subentry_title)
-    subentry.data = MappingProxyType(dict(subentry_data))
-    entry.options = options
-    flow = await _build_flow(entry)
-
-    result = await flow.async_step_settings(dict(user_input))
-
-    assert result["type"] == "create_entry"
-    assert dict(result["data"]) == options
-    manager = flow.hass.config_entries  # type: ignore[assignment]
-    assert manager.updated[-1][1]["entry_title"] == entry.title
-    assert manager.scheduled_reloads == [entry.entry_id]
-    assert manager.reloads == []
-
-
 async def test_settings_reloads_for_an_entry_without_any_subentry() -> None:
-    """With no subentry to write to, the options arm has to carry the decision.
+    """An entry without any subentry saves its options and reloads once.
 
-    An entry without subentries still offers a choice: `_gather_subentry_options`
-    synthesises a `core_tracking` option whose `subentry` is ``None``, and
-    `_async_update_feature_group_subentry` returns early for it. The subentry arm
-    is therefore always ``False`` here, and a reload must still be scheduled
-    because the options did change -- the early return must not be mistaken for
-    "nothing happened".
+    The options are account-wide, so the step neither needs nor touches a
+    subentry: nothing is written to a group, and the changed options alone
+    schedule the reload.
     """
 
     entry = _EntryStub()
     assert entry.subentries == {}
     flow = await _build_flow(entry)
 
-    result = await flow.async_step_settings(
-        {"subentry": "core_tracking", OPT_MAP_VIEW_TOKEN_EXPIRATION: True}
-    )
+    result = await flow.async_step_settings({OPT_MAP_VIEW_TOKEN_EXPIRATION: True})
 
     assert result["type"] == "create_entry"
     manager = flow.hass.config_entries  # type: ignore[assignment]
@@ -847,17 +766,18 @@ async def test_repairs_delete_narrows_the_fallback_but_not_the_deletion() -> Non
     assert SERVICE_SUBENTRY_KEY in _offered_keys(form, "delete_subentry")
 
 
-async def test_the_three_non_assigning_steps_keep_the_service_subentry() -> None:
+async def test_the_non_assigning_steps_keep_the_service_subentry() -> None:
     """The narrowing stops at the three steps that assign devices.
 
     ``_subentry_choice_map`` fed all six steps before the split. Filtering
     inside it would have been the smaller diff and the larger mistake:
-    ``async_step_settings`` and ``async_step_credentials`` legitimately target
-    the service group, and ``async_step_repairs`` only asks whether *any*
-    subentry exists, so a shared filter could send an entry whose sole subentry
-    is the service group into ``repairs_no_subentries``. All three are checked
-    here, the last one in its worst case. The fourth remaining caller, the
-    ``removable_choices`` of ``async_step_repairs_delete``, has its own test.
+    ``async_step_credentials`` legitimately targets the service group (the
+    settings step no longer offers a group at all), and ``async_step_repairs``
+    only asks whether *any* subentry exists, so a shared filter could send an
+    entry whose sole subentry is the service group into
+    ``repairs_no_subentries``. Both are checked here, the last one in its worst
+    case. The third remaining caller, the ``removable_choices`` of
+    ``async_step_repairs_delete``, has its own test.
     """
 
     entry = _EntryStub()
@@ -868,9 +788,6 @@ async def test_the_three_non_assigning_steps_keep_the_service_subentry() -> None
         subentry_type=SUBENTRY_TYPE_SERVICE,
     )
     flow = await _build_flow(entry)
-
-    settings_form = await flow.async_step_settings()
-    assert SERVICE_SUBENTRY_KEY in _offered_keys(settings_form, "subentry")
 
     credentials_form = await flow.async_step_credentials()
     assert SERVICE_SUBENTRY_KEY in _offered_keys(credentials_form, "subentry")
@@ -1085,7 +1002,7 @@ async def test_a_subentry_without_a_stored_group_key_falls_back_to_its_id() -> N
     A subentry whose ``group_key`` is missing or blank takes its
     ``subentry_id`` as the key. That branch is what makes the disambiguation
     above a no-op for such a subentry, and it is why the rewrite can claim not
-    to change what ``_async_update_feature_group_subentry`` would store.
+    to change what ``_async_refresh_subentry_entry_title`` would store.
     """
 
     entry = _EntryStub()
@@ -2245,10 +2162,10 @@ async def test_a_parked_tracker_key_prefers_the_typed_tracker_group(
 @pytest.mark.parametrize(
     ("step", "field", "service_is_offered"),
     [
-        ("settings", "subentry", True),
+        ("credentials", "subentry", True),
         ("repairs_move", "target_subentry", False),
     ],
-    ids=["settings", "repairs-move"],
+    ids=["credentials", "repairs-move"],
 )
 async def test_the_shown_form_preselects_the_group_the_helper_chose(
     step: str, field: str, service_is_offered: bool
@@ -2270,7 +2187,7 @@ async def test_the_shown_form_preselects_the_group_the_helper_chose(
 
     Two steps rather than one because they reach the helper through different
     choice maps, and ``service_is_offered`` pins that difference instead of
-    assuming it: ``settings`` passes the unfiltered ``_subentry_choice_map``
+    assuming it: ``credentials`` passes the unfiltered ``_subentry_choice_map``
     and legitimately offers the service group, ``repairs_move`` passes
     ``_device_target_choice_map``, whose filter removes it. A fixture that only
     exercised one of the two would leave the other step's wiring unpinned.
@@ -2328,7 +2245,7 @@ async def test_the_shown_form_preselects_the_group_the_helper_chose(
     # resolved at all, which is the opposite of what it claims to pin.
     option_map = (
         flow._subentry_choice_map()[1]
-        if step == "settings"
+        if step == "credentials"
         else flow._device_target_choice_map()[1]
     )
     assert set(offered_in_order) <= set(option_map), (
@@ -2359,39 +2276,3 @@ async def test_the_shown_form_preselects_the_group_the_helper_chose(
         "whichever group sorts first"
     )
     assert rendered != offered_in_order[0]
-
-
-@pytest.mark.parametrize(
-    ("payload", "expected"),
-    [({}, False), ({OPT_MAP_VIEW_ENABLED: True}, True)],
-    ids=["key-absent-keeps-stored-flag", "key-present-overwrites"],
-)
-async def test_feature_group_update_writes_map_view_only_when_in_the_payload(
-    payload: dict[str, Any], expected: bool
-) -> None:
-    """A payload without ``map_view_enabled`` leaves the stored flag alone.
-
-    The settings step always passes every option, so only the helper's own
-    contract covers the absent key; it follows the same rule as the other
-    feature flags.
-    """
-
-    entry = _EntryStub()
-    subentry = entry.add_subentry(
-        key=TRACKER_SUBENTRY_KEY,
-        title="Trackers",
-        feature_flags={OPT_MAP_VIEW_ENABLED: False},
-    )
-    flow = await _build_flow(entry)
-    option = config_flow._SubentryOption(
-        key=TRACKER_SUBENTRY_KEY,
-        label="Trackers",
-        subentry=subentry,
-        visible_device_ids=(),
-    )
-
-    await flow._async_update_feature_group_subentry(entry, option, payload)
-
-    manager = flow.hass.config_entries  # type: ignore[assignment]
-    stored = manager.updated[-1][1]["feature_flags"]
-    assert stored[OPT_MAP_VIEW_ENABLED] is expected

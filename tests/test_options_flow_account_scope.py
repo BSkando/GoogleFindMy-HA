@@ -214,7 +214,6 @@ async def test_the_credentials_subentry_recorder_sees_the_production_helper(
 # --- T1, T2: the forms offer no group field, and keep everything else -------
 
 
-@pytest.mark.xfail(strict=True, reason=_REASON)
 async def test_settings_form_offers_no_feature_group_field() -> None:
     """T1: exactly the account options, no ``subentry`` marker."""
 
@@ -253,7 +252,6 @@ async def test_credentials_form_offers_no_feature_group_field(
 # --- T3, T4: settings write account-wide and reload only for a real change ---
 
 
-@pytest.mark.xfail(strict=True, reason=_REASON)
 async def test_settings_change_writes_no_subentry_and_reloads_once() -> None:
     """T3: a changed option lands on the entry, reloads once, touches no group."""
 
@@ -277,14 +275,13 @@ async def test_settings_change_writes_no_subentry_and_reloads_once() -> None:
     assert manager.updated == []
 
 
-@pytest.mark.xfail(strict=True, reason=_REASON)
 async def test_settings_confirm_without_edit_neither_writes_nor_reloads_even_with_stale_subentry_metadata() -> (
     None
 ):
     """T4: confirming unchanged options costs nothing, whatever the group holds.
 
-    The group already holds the copy the old step would write, except for a
-    stale ``entry_title``. Before the fix, the step rewrote the group on every
+    The group holds what a previous save left there, with a stale
+    ``entry_title``. Before the fix, the step rewrote the group on every
     save, and that stale title alone made it also schedule a reload of every
     entity of the account (measured: the same fixture with a current title
     rewrote the group but scheduled no reload). The settled options
@@ -307,8 +304,10 @@ async def test_settings_confirm_without_edit_neither_writes_nor_reloads_even_wit
 
     entry = _EntryStub()
     subentry = entry.add_subentry(key=TRACKER_SUBENTRY_KEY, title="Core")
-    # Same flags and title the old step would write, then only the title stale.
-    assert synced.data["entry_title"] == entry.title
+    # Whatever the throwaway save left in its group, then only the title stale.
+    # At the base that is the full copy (flags, filter, current title); after
+    # the fix the save leaves the group alone, so only the stub's own
+    # ``group_key`` and empty ``feature_flags`` are there.
     subentry.data = MappingProxyType(
         {**dict(synced.data), "entry_title": "Stale title"}
     )
@@ -434,7 +433,6 @@ async def test_settings_and_credentials_translations_carry_no_feature_group_labe
 # --- T7: a stale submission carrying the old field is refused ----------------
 
 
-@pytest.mark.xfail(strict=True, reason=_REASON)
 async def test_a_stale_subentry_key_is_rejected_by_the_form_schema() -> None:
     """T7: the shown schema refuses ``subentry`` and still accepts the options.
 
