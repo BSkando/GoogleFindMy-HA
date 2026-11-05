@@ -45,6 +45,7 @@ from custom_components.googlefindmy.const import (
     OPT_CONTRIBUTOR_MODE,
     OPT_IGNORED_DEVICES,
     OPT_MAP_VIEW_TOKEN_EXPIRATION,
+    SECRETS_EXTRA_WATCH_PATHS,
     TRACKER_SUBENTRY_KEY,
 )
 from tests.test_options_flow_credentials_reload import (
@@ -277,6 +278,38 @@ async def test_settings_change_writes_no_subentry_and_reloads_once() -> None:
     assert manager.reloads == []
     # Absence: no group receives a copy.
     assert manager.updated == []
+
+
+async def test_settings_store_the_extra_watch_paths_as_a_clean_list() -> None:
+    """T3b: the text block lands on the entry as trimmed, de-duplicated paths.
+
+    The normalisation now runs one indentation level higher than before this
+    change, so it is part of the diff; this pins both of its outcomes.
+    """
+
+    entry = _EntryStub()
+    entry.add_subentry(key=TRACKER_SUBENTRY_KEY, title="Core")
+    flow = await _build_flow(entry)
+
+    result = await flow.async_step_settings(
+        {
+            SECRETS_EXTRA_WATCH_PATHS: " /config/a.json\n\n/config/a.json\n/config/b.json "
+        }
+    )
+
+    assert result["type"] == "create_entry"
+    assert result["data"][SECRETS_EXTRA_WATCH_PATHS] == [
+        "/config/a.json",
+        "/config/b.json",
+    ]
+    manager = flow.hass.config_entries  # type: ignore[assignment]
+    assert manager.updated == []
+
+    # Control: a blank block removes the override instead of storing [].
+    flow = await _build_flow(entry)
+    result = await flow.async_step_settings({SECRETS_EXTRA_WATCH_PATHS: "  \n "})
+    assert result["type"] == "create_entry"
+    assert SECRETS_EXTRA_WATCH_PATHS not in result["data"]
 
 
 async def test_settings_confirm_without_edit_neither_writes_nor_reloads_even_with_stale_subentry_metadata() -> (
