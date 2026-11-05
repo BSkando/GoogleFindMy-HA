@@ -2167,8 +2167,9 @@ async def test_the_shown_form_preselects_the_group_the_helper_chose(
     stays green while the form a user opens preselects the wrong group. All
     three of those mutations were run against this test when it pinned
     ``settings`` and ``repairs_move``, and all three turned it red, the rebuild
-    included (for the ``visibility`` arm the first was re-measured): ``add_suggested_values_to_schema`` binds to
-    the real core here and preserves the marker's default through its
+    included (for the ``visibility`` arm the first was re-measured):
+    ``add_suggested_values_to_schema`` binds to the real core here and
+    preserves the marker's default through its
     ``copy.copy``, so a rebuild that drops it is visible. The
     submit path makes that costly rather than cosmetic: ``repairs_move`` writes
     the chosen devices to whatever the target field holds when the user submits

@@ -8351,8 +8351,8 @@ class OptionsFlowHandler(OptionsFlowBase, _OptionsFlowMixin, _ContainerLoginMixi
         parked -- where the pre-fix answer was ``next(iter(choices))``. That
         moved the preselection of ``async_step_settings`` and
         ``async_step_credentials`` (the steps that then offered a group) away
-        from the service group they legitimately targeted, for every such installation and in both label
-        orders. Measured, and pinned by
+        from the service group they legitimately targeted, for every such
+        installation and in both label orders. Measured, and pinned by
         ``::test_the_preselection_is_unchanged_where_nothing_is_parked``.
 
         **None of the three remaining call sites can reach that loop**:
