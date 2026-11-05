@@ -95,6 +95,21 @@ def _raising(exc: BaseException) -> _Pick:
     return _pick
 
 
+def _dependency_error(kind: str) -> Exception:
+    """The dependency error the step maps to ``import_failed``, built at call time.
+
+    ``tests/test_config_flow_initial_auth.py`` reloads ``config_flow`` with
+    ``importlib.reload``, which rebinds ``DependencyNotReady`` to a new class on
+    the same module object. An instance built at collection time would belong
+    to the old class, miss the step's ``except (DependencyNotReady, ImportError)``
+    and fail only when that file runs first in the same process (as in CI).
+    """
+
+    if kind == "dependency":
+        return config_flow.DependencyNotReady("api missing")
+    return ImportError("api missing")
+
+
 def _bundle(**tokens: str) -> str:
     """A secrets bundle that passes the single-key rule, plus ``tokens``."""
 
@@ -204,17 +219,19 @@ async def test_zero_or_two_methods_are_refused_before_anything_is_tried(
 
 
 @pytest.mark.parametrize(
-    "exc",
+    "kind",
     [
-        pytest.param(config_flow.DependencyNotReady("api missing"), id="dependency"),
-        pytest.param(ImportError("api missing"), id="import"),
+        pytest.param("dependency", id="dependency"),
+        pytest.param("import", id="import"),
     ],
 )
 async def test_token_validation_without_dependencies_reports_import_failed(
-    monkeypatch: pytest.MonkeyPatch, exc: Exception
+    monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:
     outcome, entry, hass, latch = await _submit(
-        monkeypatch, {"new_oauth_token": _PLAIN_TOKEN}, _raising(exc)
+        monkeypatch,
+        {"new_oauth_token": _PLAIN_TOKEN},
+        _raising(_dependency_error(kind)),
     )
 
     _assert_rejected(outcome, entry, hass, latch)
@@ -292,19 +309,19 @@ async def test_a_bundle_that_is_not_a_json_object_is_invalid_json(
 
 
 @pytest.mark.parametrize(
-    "exc",
+    "kind",
     [
-        pytest.param(config_flow.DependencyNotReady("api missing"), id="dependency"),
-        pytest.param(ImportError("api missing"), id="import"),
+        pytest.param("dependency", id="dependency"),
+        pytest.param("import", id="import"),
     ],
 )
 async def test_bundle_validation_without_dependencies_reports_import_failed(
-    monkeypatch: pytest.MonkeyPatch, exc: Exception
+    monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:
     outcome, entry, hass, latch = await _submit(
         monkeypatch,
         {"new_secrets_json": _bundle(oauth_token=_PLAIN_TOKEN)},
-        _raising(exc),
+        _raising(_dependency_error(kind)),
     )
 
     _assert_rejected(outcome, entry, hass, latch)
