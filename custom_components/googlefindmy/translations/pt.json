@@ -262,11 +262,7 @@
         "title": "Atualizar credenciais (opcional)",
         "description": "Atualize as suas credenciais. Os valores existentes não são mostrados por motivos de segurança.\n\nCole todo o conteúdo de um novo **secrets.json** (gerado ao executar o GoogleFindMyTools).\n\nApós o envio, as credenciais são validadas e armazenadas; a integração é recarregada sem alterar os nomes das suas entidades.",
         "data": {
-          "new_secrets_json": "Novo secrets.json (conteúdo completo)",
-          "subentry": "Grupo de recursos"
-        },
-        "data_description": {
-          "subentry": "Aplique as atualizações de credenciais ao grupo de recursos selecionado. Consulte o guia [Subentradas e grupos de recursos]({subentries_docs_url}) para detalhes do fluxo de trabalho."
+          "new_secrets_json": "Novo secrets.json (conteúdo completo)"
         }
       },
       "settings": {
@@ -287,7 +283,6 @@
           "map_view_token_expiration": "Ativar a expiração do token de visualização do mapa",
           "map_view_enabled": "Ativar a visualização do mapa",
           "contributor_mode": "Modo de contribuidor de localização",
-          "subentry": "Grupo de recursos",
           "secrets_extra_watch_paths": "Caminhos de monitorização adicionais de secrets.json (um por linha)"
         },
         "data_description": {
@@ -300,7 +295,6 @@
           "map_view_token_expiration": "Quando ativado, os tokens de visualização do mapa expiram após 1 semana. ",
           "map_view_enabled": "Ativado por predefinição. Quando desativado, os pedidos à vista de mapa são recusados como com um token inválido e as hiperligações dos dispositivos são apagadas. Não renova hiperligações existentes; se uma puder ter sido exposta, use 'Ativar a expiração do token de visualização do mapa' (até duas semanas se já estava ativada).",
           "contributor_mode": "Escolha como seu dispositivo contribui para a rede do Google (todas as áreas por padrão para relatórios de crowdsourcing ou apenas áreas de alto tráfego).",
-          "subentry": "Armazene essas opções no grupo de recursos selecionado. Consulte [Subentradas e grupos de recursos]({subentries_docs_url}) para exemplos.",
           "secrets_extra_watch_paths": "Opcional. Caminhos absolutos adicionais para ficheiros secrets.json que a integração deve monitorizar para deteção automática, um por linha. Deixe vazio para monitorizar apenas os locais predefinidos."
         }
       },

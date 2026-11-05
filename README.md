@@ -276,7 +276,7 @@ The Google Home filter helps prevent noisy location updates from speakers and di
 
 ## Subentries and feature groups
 
-Home Assistant's config-entry **subentries** let the integration organize devices and helper entities into feature groups. The coordinator deterministically provisions two subentries—`SERVICE_SUBENTRY_KEY` and `TRACKER_SUBENTRY_KEY`—and recreates them after reloads or restarts so entity grouping stays stable across updates. Both subentries persist alongside the config entry, storing options, `visible_device_ids`, and diagnostics based on their constant identifiers.
+Home Assistant's config-entry **subentries** let the integration organize devices and helper entities into feature groups. The coordinator deterministically provisions two subentries—`SERVICE_SUBENTRY_KEY` and `TRACKER_SUBENTRY_KEY`—and recreates them after reloads or restarts so entity grouping stays stable across updates. Both subentries persist alongside the config entry, storing group metadata and diagnostics based on their constant identifiers (the tracker subentry also stores `visible_device_ids`; the service subentry never does). Options and credentials are account-wide and live on the config entry itself, so the **Settings** and **Credentials** options steps offer no group choice; only **Visibility** and the **Repairs** steps ask for a feature group, because they assign devices to one.
 
 Home Assistant 2025.11+ handles subentry platform scheduling automatically. The parent `async_setup_entry` forwards the platform list **once** (no `config_subentry_id` allowed). Each platform then iterates the subentry coordinators on `entry.runtime_data` and calls `async_add_entities(..., config_subentry_id=<subentry_id>)` so devices and entities attach to the correct child entry. This pattern prevents orphaned tracker devices and avoids the silent failure caused by manual per-subentry forwarding.
 
@@ -313,7 +313,7 @@ Config flows communicate state transitions through **abort reasons**, which powe
 | `subentry_delete_invalid` | Repairs → Delete subentry | There are too few removable feature groups to continue. |
 | `subentry_remove_failed` | Repairs → Delete subentry | Removing the requested feature group failed unexpectedly. |
 | `subentry_delete_success` | Repairs → Delete subentry | A feature group was deleted (after optional device reassignment). |
-| `reconfigure_successful` | Credentials refresh flow | The integration applied new credentials and refreshed the chosen feature group. |
+| `reconfigure_successful` | Credentials refresh flow | The integration applied the new credentials and reloaded. |
 | `credentials_saved_not_reloaded` | Credentials refresh flow | The new credentials were stored, but the entry could not be reloaded (it is disabled, ignored, or in a state a reload cannot come back from). They take effect the next time it is set up successfully. |
 
 The `strings.json` and translation files under `custom_components/googlefindmy/translations/` provide localized messages for each key so UI notifications remain consistent.

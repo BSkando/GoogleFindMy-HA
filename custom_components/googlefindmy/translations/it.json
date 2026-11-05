@@ -262,11 +262,7 @@
         "title": "Aggiorna credenziali (opzionale)",
         "description": "Aggiorna le tue credenziali. Per motivi di sicurezza i valori esistenti non vengono mostrati.\n\nIncolla il contenuto completo di un nuovo file **secrets.json** (generato eseguendo GoogleFindMyTools).\n\nUna volta inviate, le credenziali vengono convalidate e memorizzate; l'integrazione si ricarica senza modificare i nomi delle tue entità.",
         "data": {
-          "new_secrets_json": "Nuovo secrets.json (contenuto completo)",
-          "subentry": "Gruppo di funzionalità"
-        },
-        "data_description": {
-          "subentry": "Applica gli aggiornamenti delle credenziali al gruppo di funzionalità selezionato. Consulta la guida [Sotto-voci e gruppi di funzionalità]({subentries_docs_url}) per i dettagli sul flusso di lavoro."
+          "new_secrets_json": "Nuovo secrets.json (contenuto completo)"
         }
       },
       "settings": {
@@ -287,7 +283,6 @@
           "map_view_token_expiration": "Abilita scadenza dei token della vista mappa",
           "map_view_enabled": "Abilita la vista mappa",
           "contributor_mode": "Modalità di contributo posizione",
-          "subentry": "Gruppo di funzionalità",
           "secrets_extra_watch_paths": "Percorsi aggiuntivi da monitorare per secrets.json (uno per riga)"
         },
         "data_description": {
@@ -300,7 +295,6 @@
           "map_view_token_expiration": "Se abilitato, i token della vista mappa scadono dopo 1 settimana. Se disabilitato (predefinito), non scadono.",
           "map_view_enabled": "Abilitata per impostazione predefinita. Se disabilitata, le richieste alla vista mappa vengono rifiutate come con un token non valido e i link dei dispositivi vengono cancellati. Non ruota i link esistenti; se un link potrebbe essere trapelato, usare 'Abilita scadenza dei token della vista mappa' (fino a due settimane se già abilitata).",
           "contributor_mode": "Scegli come il dispositivo contribuisce alla rete di Google (per impostazione predefinita Tutte le aree per un contributo collaborativo oppure solo Aree ad alto traffico).",
-          "subentry": "Salva queste opzioni nel gruppo di funzionalità selezionato. Consulta [Sotto-voci e gruppi di funzionalità]({subentries_docs_url}) per esempi pratici.",
           "secrets_extra_watch_paths": "Facoltativo. Percorsi assoluti aggiuntivi ai file secrets.json che l'integrazione deve monitorare per l'importazione automatica, uno per riga. Lascia vuoto per monitorare solo le posizioni predefinite."
         }
       },
