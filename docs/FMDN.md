@@ -12,7 +12,7 @@ IDs: section IDs like `S0`, `S3.2` are stable for internal linking.
 * S0. Overview & Roles — `⟦OVERVIEW⟧`
 * S1. Cryptographic Primitives & Key Taxonomy — `⟦CRYPTO_PRIMITIVES⟧`
 * S2. Provisioning (Fast Pair + EIK lifecycle) — `⟦PROV_FLOW⟧`
-* S3. BLE Advertising & EID (timebase, jitter, curves) — `⟦BLE_EID⟧`
+* S3. BLE Advertising & EID (timebase, jitter, curves, S3.4.1 multi-component devices) — `⟦BLE_EID⟧`
 * S4. Finder Device Behavior (scan, upload, throttling) — `⟦FINDER_BEHAV⟧`
 * S5. Server-side Behavior (aggregation & modes) — `⟦SERVER_BEHAV⟧`
 * S6. Owner App / Client (fetch, unwrap, decrypt, aggregate) — `⟦OWNER_BEHAV⟧`
@@ -54,6 +54,7 @@ IDs: section IDs like `S0`, `S3.2` are stable for internal linking.
 * **EIK (32 B)** — root secret for identity/cryptography
 * **Derived short keys (8 B)** — purpose-bound keys
 * **Wrapped/transport forms** — encrypted containers that must be unwrapped before use
+* **Per-component keys `K_c` (32 B)** — derived from the EIK for one EID series (S3.4.1); key material, computed in memory only, never logged or persisted
 
 ### S1.3 Curves and AEADs (Measured vs. Specified)
 
@@ -135,6 +136,42 @@ This is consistent with the general principle that the EIK remains within the ow
 * Standard advertising corresponds to **20-byte EID** on **P-160R1 / secp160r1** (x-coordinate width).
 * **32-byte EID** on **P-256** is possible but measured as rare/device-specific.
   (Böttger et al., 2025). ([Pet Symposium][1])
+
+### S3.4.1 Multi-component devices (Measured; one device; not published by Google)
+
+Devices with several FMDN components do not advertise the EIDs of the EIK alone. Measured on one Pixel Buds Pro 2 pair (firmware 6.144, 2026-11-06), the steps above run with a per-component key instead of the EIK:
+
+```text
+K_c = SHA-256(EIK || 0x04 || c)        c = trackableComponent, one byte
+r   = AES-256-ECB(K_c, Table 10) mod n
+EID = x(r * G) on secp160r1            counter = timestamp - pairDate
+```
+
+The specification defines the labels `0x01` to `0x03` for the short keys of S1.2; the label `0x04` is measured.
+
+**Evidence:**
+
+| Check | Result |
+|---|---|
+| Google's `ListEidsForBleDevices` for this pair, per series | 88 of 88 for each of 5 series, 440 of 440 |
+| Received EIDs of this pair in three listening sessions, full 20 bytes | all matched |
+| Wrong label or wrong component | 0 of 15 per variant |
+| Plain Table 10 with the EIK on this pair | 0 of 440 |
+| Control: two `moto tag`, plain Table 10 | 88 of 88 each |
+
+**Series:** the measured set is `MEASURED_COMPONENT_ROWS` = 0, 1, 2, 254, 255. Which part each series stands for is not measured, and it does not fit Spot's enum (right 1, left 2, case 3). Etui and earbuds send different series depending on where they are: earbuds in the closed case showed 255, earbuds outside showed 2 and 254.
+
+**How the integration uses it:**
+
+* The gate is `DeviceCapabilities.trackableComponents > 1` (Pro 2: 3, `moto tag`: 1). `capableComponents` does not separate them: a `moto tag` has 3.
+* The resolver adds one forward legacy EID per series and window next to the EIK series. The set is fixed rather than read from Google at runtime, which would need a further request for every user.
+* The key fingerprint stays that of the EIK. `EIDMatch.component` and `ConfirmedSighting.component` name the series.
+* Hashed flags of a series use the mask from `K_c`. They appear in the diagnostics block `fmdn_component_flags` as raw values and fill no sensor, because a case value must not appear as the battery of the device. All measured values decoded to `0x02`, whose meaning is unchecked.
+* The finder reports the EID of the series it received. Whether Google accepts reports on these EIDs is not measured.
+* The owner side tries `K_c` for foreign reports without promoting it to an identity key. It reads the count from the registration in the report; that `DeviceUpdate` responses carry it is not measured.
+* All series run as one device in Bermuda.
+
+**Limits:** one device and one firmware. Another model can use other series or another derivation; the EIK series stays for it, and `compare_eid` and the derivation search of S13 test both.
 
 ### S3.5 MAC rotation vs. UT mode (Measured)
 
@@ -254,6 +291,27 @@ encryptedUserSecrets.encryptedIdentityKey:
 - unwrapping observed to involve AES-GCM in your codebase
 ```
 
+### S8.4 Spot schema inventory (reverse-engineered; not confirmed by Google)
+
+`ProtoDecoders/DeviceUpdate.proto` and `Common.proto` declare every message and field of [leonboe1/Spot](https://github.com/leonboe1/Spot) (`Spot/DataProcessing/Protos/DeviceUpdate.proto`, commit `55f87f62302fae24150188124e8e07d5285568d8`, GPL-3.0), marked `Spot@55f87f62`. That includes actions the integration does not use, so the wire format does not have to be guessed later: invitations and sharing (`UpdateBleDeviceSharingSettingsRequest`, `InvitationToken`, `SharingKeys`), web login (`WebloginAuthResponse`), key rotation (`RotateBleDeviceKeysRequest`), scan upload (`UploadScansRequest`, `UploadScansResponse`), Fast Pair data, `ListEidsForBleDevicesResponse`, `GetBleDeviceRequest`, `GetBleDeviceResponse` and `DeleteBleDeviceRequest`.
+
+**Type rule on the parse path (`DevicesList`, `DeviceUpdate`):** a new length-delimited field is `bytes`, without exception. A declared `string` or message with foreign content raises `DecodeError`, and that would fail the whole device list. The intended shape stays available as a message, and the field comment names it:
+
+| Message | Field (number) | Declared | Spot shape |
+|---|---|---|---|
+| `DeviceMetadata` | `supportedActions` (2), `phoneInformation` (3) | `bytes` | `SupportedActions`, `DeviceMetadata.PhoneInformation` |
+| `DeviceRegistration` | `canonicId` (1), `capabilities` (11) | `bytes` | `CanonicId`, `DeviceCapabilities` |
+| `DeviceRegistration` | `ringKey` (25), `recoveryKey` (26), `unwantedTrackingKey` (31) | `bytes`, key material | |
+| `DeviceRegistration` | `keyRotationInformation` (29), `lostModeInformation` (32), `firstSecretsCreationDate` (33) | `bytes` | nested messages, `Time` |
+| `DeviceTypeInformation` | `userDefinedName` (1), `deviceComponentsInformation` (9), `contactInfo` (12) | `bytes` | string, `DeviceComponentInformation`, `ContactInfo` |
+| `DeviceTypeInformation` | `componentDetails` (15) | `bytes` | not in Spot; measured wire shape `DeviceComponentDetail` |
+| `ImageInformation` | `componentImages` (3) | `bytes` | `ImageInformation.ComponentImage` |
+| `AccessInformation` | `sharingKeys` (7) | `bytes` | `SharingKeys` |
+| `EncryptedUserSecrets` | `sharingKeys` (6), `previousEikDate` (9) | `bytes` | `SharingKeys`, `Time` |
+| `SemanticLocation` | `semanticLocationIdentifier` (7) | `bytes` | nested message |
+
+`ProtoDecoders/decoder.py` hides key material from developer output (`_SECRET_PROTO_FIELDS`). `DeviceRegistration` fields 15, 38, 40 and the `DeviceMetadata` root fields 11, 12, 13 stay undeclared: they are not in Spot, their meaning is unknown, and at least one text could have the form of a key. They remain visible as numbers only.
+
 ---
 
 ## S9. State Machines & Failure Models `⟦STATE_MACHINES⟧`
@@ -296,6 +354,7 @@ Fetch secrets → Unwrap EIK (if wrapped) → Precompute rolling EIDs → Fetch 
 * Exact semantics and cryptographic definition of **UT byte** and **hashed flags** across accessory generations (unless you hold the applicable partner spec revision).
 * Exact format of **60-byte EIK wrapper** (nonce/tag sizing, AAD rules, versioning) beyond the confirmed AES-GCM structure; capture detailed layout once more test vectors are recorded.
 * Precise REST endpoints, headers, attestation details, and server retention policies (subject to change).
+* Multi-component devices (S3.4.1): what the series 0, 1, 2, 254, 255 stand for and why they differ from Spot's enum; the meaning of the decoded flags value `0x02`; whether Google accepts finder reports on these EIDs; whether other models and firmware use the same derivation and series.
 
 ---
 
@@ -340,6 +399,8 @@ Fetch secrets → Unwrap EIK (if wrapped) → Precompute rolling EIDs → Fetch 
 | `null` | `true` | `null` | The tracker holds this EIK, but `0x01` was not verified: the account key is missing or not accepted, see `operations` |
 | `null` | `null` | `null` | `0x01` was not verified and `0x06` decided nothing, see `operations`. Not a verdict on the EIK |
 | any | `null` | any | Undecided (timeout, transport error, malformed or skipped operation), see `operations`. Never read this as a foreign key |
+
+`eid_check` also tries the measured component series (S3.4.1): `component` names the series of a match, and is `null` for the EIK series and for no match; `components_checked` counts these comparisons apart from `variants_checked`. The derivation search has a key family `sha256_eik_label_<s>_component_<c>`, so another label or series shows up by name without a code change.
 
 `connection` says how far the run got: `no_matching_frame`, `no_account_key_for_search`, `device_not_connectable`, `timeout`, `connection_failed`, `gatt_setup_failed` (the fields above are then absent) or `connected`.
 

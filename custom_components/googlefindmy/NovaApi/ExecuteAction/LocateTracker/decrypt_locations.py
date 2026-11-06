@@ -26,6 +26,11 @@ from custom_components.googlefindmy.Auth.username_provider import username_strin
 from custom_components.googlefindmy.const import MAX_ACCEPTED_LOCATION_FUTURE_DRIFT_S
 from custom_components.googlefindmy.FMDNCrypto._lazy_crypto import get_aesgcm_class
 from custom_components.googlefindmy.FMDNCrypto.curve_profile import SECP160R1, SECP256R1
+from custom_components.googlefindmy.FMDNCrypto.eid_generator import (
+    EIK_LENGTH,
+    MEASURED_COMPONENT_ROWS,
+    derive_component_key,
+)
 from custom_components.googlefindmy.FMDNCrypto.foreign_report_errors import (
     ForeignReportAuthError,
     ForeignReportStructureError,
@@ -58,6 +63,7 @@ from custom_components.googlefindmy.NovaApi.ExecuteAction.LocateTracker.foreign_
 )
 from custom_components.googlefindmy.ProtoDecoders.decoder import (
     parse_device_update_protobuf,
+    trackable_components_of,
 )
 from custom_components.googlefindmy.SpotApi.GetEidInfoForE2eeDevices.get_eid_info_request import (
     SpotApiEmptyResponseError,
@@ -1065,6 +1071,25 @@ async def _offload_decrypt_aes(identity_key: bytes, encrypted_location: bytes) -
     )
 
 
+def _component_keys(
+    device_registration: object, identity_keys: Sequence[bytes]
+) -> list[bytes]:
+    """Return the per-component keys of a multi-component device, else nothing.
+
+    Finder reports on a component EID are encrypted to that EID (``docs/FMDN.md``
+    S3.4.1). These keys are only tried: they are neither identity keys nor
+    candidates, so nothing may promote or persist them.
+    """
+    if (trackable_components_of(device_registration) or 0) <= 1:
+        return []
+    return [
+        derive_component_key(key, component)
+        for key in identity_keys
+        if len(key) == EIK_LENGTH
+        for component in MEASURED_COMPONENT_ROWS
+    ]
+
+
 async def _offload_decrypt_foreign(
     identity_keys: Sequence[bytes],
     encrypted_location: bytes,
@@ -1725,7 +1750,10 @@ async def async_decrypt_location_response_locations(  # noqa: PLR0912, PLR0915
                 # and let the payload check below drop the report.
                 if foreign_keys:
                     foreign_result = await _offload_decrypt_foreign(
-                        foreign_keys,
+                        [
+                            *foreign_keys,
+                            *_component_keys(device_registration, foreign_keys),
+                        ],
                         encrypted_location,
                         public_key_random,
                         time_offset,
@@ -1734,7 +1762,13 @@ async def async_decrypt_location_response_locations(  # noqa: PLR0912, PLR0915
                         else None,
                     )
                     decrypted_location_raw = foreign_result.plaintext
-                    candidate_key = foreign_keys[foreign_result.key_index]
+                    # An index past the identity keys is a per-component key,
+                    # which stands for the identity key and is never promoted.
+                    candidate_key = (
+                        foreign_keys[foreign_result.key_index]
+                        if foreign_result.key_index < len(foreign_keys)
+                        else active_identity_key
+                    )
                     # Promote successful alternate candidate for remaining reports
                     # and sync identity_key_bytes so payload construction uses
                     # the key that actually decrypted.

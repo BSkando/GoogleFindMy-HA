@@ -646,7 +646,11 @@ async def _async_get_device_eid(  # noqa: PLR0911, PLR0912
     (compared by ``eid_resolver.identity_key_fingerprint``): its window
     counter belongs to that key, and an EID computed from another key with
     it was never advertised. Among several candidate keys of one device the
-    one the sighting was matched under is used.
+    one the sighting was matched under is used. A sighting of a component
+    series reports that series: its EID comes from the per-component key,
+    which exists only as a local value here. The measurements cover the legacy
+    form only, so a series sighting of any other variant reports nothing.
+    Whether Google accepts reports on such EIDs is not measured.
 
     Args:
         hass: Home Assistant instance
@@ -772,16 +776,37 @@ async def _async_get_device_eid(  # noqa: PLR0911, PLR0912
             )
             return None
 
+        from ..FMDNCrypto.eid_generator import (  # noqa: PLC0415
+            EidVariant as _EidVariant,
+        )
+        from ..FMDNCrypto.eid_generator import (
+            derive_component_key,
+        )
+
+        eid_key = identity_key
+        if sighting.component is not None:
+            if sighting.variant is not _EidVariant.LEGACY_SECP160R1_X20_BE:
+                _LOGGER.debug(
+                    "Sighting of device %s has component %s with variant %s, "
+                    "nothing to report",
+                    device_id,
+                    sighting.component,
+                    sighting.variant.value,
+                )
+                return None
+            eid_key = derive_component_key(identity_key, sighting.component)
+
         # encrypt() picks the curve from the EID's length.
-        eid = _encryptable_eid(identity_key, sighting.window_counter, sighting.variant)
+        eid = _encryptable_eid(eid_key, sighting.window_counter, sighting.variant)
 
         _LOGGER.debug(
             "Reporting the sighting of device %s from %s s ago: counter=%s, "
-            "variant=%s, EID=%s...",
+            "variant=%s, component=%s, EID=%s...",
             device_id,
             age,
             sighting.window_counter,
             sighting.variant.value,
+            sighting.component,
             eid[:EID_LOG_PREFIX_LENGTH].hex()
             if len(eid) >= EID_LOG_PREFIX_LENGTH
             else eid.hex(),
