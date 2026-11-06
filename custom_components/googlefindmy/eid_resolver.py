@@ -38,6 +38,7 @@ from homeassistant.util import dt as dt_util
 from .Auth.username_provider import username_string
 from .const import DOMAIN
 from .coordinator import DeviceIdentity, GoogleFindMyCoordinator
+from .coordinator.helpers.identity import normalize_component_count
 from .FMDNCrypto._lazy_crypto import get_aesgcm_class, get_invalid_tag_exception
 from .FMDNCrypto.curve_profile import SECP160R1, SECP256R1, ScalarDerivation
 from .FMDNCrypto.eid_generator import (
@@ -2845,6 +2846,9 @@ class GoogleFindMyEIDResolver:
                     encrypted_account_key=encrypted_account_key,
                     public_key_address=public_key_address,
                     time_anchors_debug=identity.get("time_anchors_debug"),
+                    trackable_components=normalize_component_count(
+                        identity.get("trackable_components")
+                    ),
                 )
             elif isinstance(identity, DeviceIdentity):
                 target_identity = identity

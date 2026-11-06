@@ -21,6 +21,7 @@ def test_decoder_exports_required_keys() -> None:
         "model",
         "encrypted_account_key",
         "public_key_address",
+        "trackable_components",
     }
     missing_keys = required_keys.difference(_DEVICE_STUB_KEYS)
 
@@ -43,6 +44,7 @@ def test_device_identity_definition() -> None:
         "model",
         "encrypted_account_key",
         "public_key_address",
+        "trackable_components",
     }
     available_fields = tuple(field.name for field in fields(DeviceIdentity))
     missing = required_fields.difference(available_fields)

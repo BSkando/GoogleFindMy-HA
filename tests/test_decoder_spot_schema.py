@@ -8,17 +8,21 @@ length-delimited fields on this path are therefore ``bytes``.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+import logging
+from collections.abc import Callable, Iterator
+from types import SimpleNamespace
 
 import pytest
-from google.protobuf import descriptor as _descriptor
-from google.protobuf.descriptor import Descriptor
-from google.protobuf.message import DecodeError
 
 from custom_components.googlefindmy.ProtoDecoders import (
     Common_pb2,
     DeviceUpdate_pb2,
+    LocationReportsUpload_pb2,
+    decoder,
 )
+from google.protobuf import descriptor as _descriptor
+from google.protobuf.descriptor import Descriptor
+from google.protobuf.message import DecodeError, Message
 
 _TYPE_MESSAGE = _descriptor.FieldDescriptor.TYPE_MESSAGE
 _TYPE_STRING = _descriptor.FieldDescriptor.TYPE_STRING
@@ -233,3 +237,261 @@ def test_unused_spot_messages_round_trip() -> None:
     entry = parsed.deviceEids[0]
     assert entry.rotationPeriod == 1024
     assert entry.serverList.publicKeyIdInfo[0].trackableComponent == 255
+
+
+# --- Redaction of key material (AP4) ------------------------------------------
+
+_SENTINEL = bytes.fromhex("5a5a5a5a5a5a5a5a")
+_SENTINEL_HEX = _SENTINEL.hex()
+
+# Field names that read like secrets but are not raw key material.
+_NOT_SECRET_NAMES = frozenset(
+    {
+        # Blobs already encrypted for the owner, shown by this dev tool before.
+        "encryptedAccountKey",
+        "encryptedIdentityKey",
+        "encryptedOwnerKey",
+        "encryptedSha256AccountKeyPublicAddress",
+        "publicKeyRandom",
+        # Public keys.
+        "ownerPublicKey",
+        "publicKey",
+        # Counters, flags, names and identifiers.
+        "cookieName",
+        "domainKeyVersion",
+        "encryptedWithSharedSecret",
+        "firstSecretsCreationDate",
+        "hasOwnerKeyVersion",
+        "keyIdentifier",
+        "keyRotationNeeded",
+        "ownerKeyVersion",
+        "publicKeyId",
+        # Containers: their leaves are checked one by one.
+        "cookies",
+        "e2eePublicKeyRegistration",
+        "ecdsaPublicKeys",
+        "eciesAeadHkdfPublicKeys",
+        "encryptedOwnerKeyAndMetadata",
+        "encryptedUserSecrets",
+        "keyInformation",
+        "keys",
+        "publicKeyIdInfo",
+        "publicKeyIdList",
+        "rotatedUserSecrets",
+        "webloginCookies",
+    }
+)
+
+
+def _all_field_names() -> set[str]:
+    names: set[str] = set()
+
+    def walk(message: Descriptor) -> None:
+        names.update(field.name for field in message.fields)
+        for nested in message.nested_types:
+            walk(nested)
+
+    for module in (Common_pb2, DeviceUpdate_pb2):
+        for message in module.DESCRIPTOR.message_types_by_name.values():
+            walk(message)
+    return names
+
+
+def test_every_secret_looking_field_is_redacted_or_explained() -> None:
+    suspects = {
+        name
+        for name in _all_field_names()
+        if any(part in name.lower() for part in ("key", "secret", "cookie", "token"))
+    }
+    assert suspects - decoder._SECRET_PROTO_FIELDS - _NOT_SECRET_NAMES == set()
+
+
+def test_secret_set_names_only_existing_fields() -> None:
+    assert decoder._SECRET_PROTO_FIELDS - _all_field_names() == set()
+
+
+def _registration_with_secrets() -> DeviceUpdate_pb2.DeviceRegistration:
+    return DeviceUpdate_pb2.DeviceRegistration(
+        canonicId=b"\x11\x22",
+        ringKey=_SENTINEL,
+        recoveryKey=_SENTINEL,
+        unwantedTrackingKey=_SENTINEL,
+        keyRotationInformation=_SENTINEL,
+        encryptedUserSecrets=DeviceUpdate_pb2.EncryptedUserSecrets(
+            sharingKeys=_SENTINEL, encryptedIdentityKey=b"\x33\x44"
+        ),
+    )
+
+
+def _device_list_with_secrets() -> DeviceUpdate_pb2.DevicesList:
+    device_list = DeviceUpdate_pb2.DevicesList()
+    device = device_list.deviceMetadata.add()
+    device.information.deviceRegistration.CopyFrom(_registration_with_secrets())
+    device.information.accessInformation.add(sharingKeys=_SENTINEL)
+    device.phoneInformation = _SENTINEL
+    return device_list
+
+
+def test_formatter_redacts_secrets_and_keeps_the_rest() -> None:
+    text = decoder.custom_message_formatter(_registration_with_secrets(), "", False)
+    assert _SENTINEL_HEX not in text
+    assert "ringKey: <redacted len=8>" in text
+    assert 'canonicId: "1122"' in text
+    assert 'encryptedIdentityKey: "3344"' in text
+
+
+def test_formatter_redacts_a_secret_string() -> None:
+    cookie = DeviceUpdate_pb2.WebloginAuthResponse.WebloginCookies.Cookie(
+        cookieName="SID", cookieValue="s3cr3t-cookie"
+    )
+    text = decoder.custom_message_formatter(cookie, "", False)
+    assert "s3cr3t-cookie" not in text
+    assert "cookieValue: <redacted len=13>" in text
+    assert "cookieName: SID" in text
+
+
+@pytest.mark.parametrize("force_type_error", [False, True])
+@pytest.mark.parametrize(
+    ("printer", "parser", "build"),
+    [
+        (
+            decoder.print_device_list_protobuf,
+            "parse_device_list_protobuf",
+            _device_list_with_secrets,
+        ),
+        (
+            decoder.print_device_update_protobuf,
+            "parse_device_update_protobuf",
+            lambda: DeviceUpdate_pb2.DeviceUpdate(
+                deviceMetadata=_device_list_with_secrets().deviceMetadata[0]
+            ),
+        ),
+    ],
+)
+def test_print_helpers_never_show_secrets(  # noqa: PLR0913
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    force_type_error: bool,
+    printer: Callable[[str], None],
+    parser: str,
+    build: Callable[[], Message],
+) -> None:
+    monkeypatch.setattr(decoder, parser, lambda _hex: build())
+    if force_type_error:
+        real = decoder._get_text_format()
+
+        class _OldTextFormat:
+            @staticmethod
+            def MessageToString(message: Message, **kwargs: object) -> str:  # noqa: N802
+                if kwargs:
+                    raise TypeError("message_formatter not supported")
+                return str(real.MessageToString(message))
+
+        monkeypatch.setattr(decoder, "_get_text_format", lambda: _OldTextFormat)
+    printer("00")
+    out = capsys.readouterr().out
+    assert "5a5a" not in out
+    assert "ZZZZ" not in out  # 0x5A as text format would print it
+    assert "1122" in out or "\\021" in out  # the non-secret neighbour stays
+
+
+def test_location_report_printer_uses_the_redacted_copy(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """No field of this message is secret; it only has to keep printing."""
+    message = LocationReportsUpload_pb2.LocationReportsUpload(random1=7)
+    monkeypatch.setattr(
+        decoder, "parse_location_report_upload_protobuf", lambda _hex: message
+    )
+    decoder.print_location_report_upload_protobuf("00")
+    assert "random1: 7" in capsys.readouterr().out
+
+
+def test_redacted_copy_leaves_the_original_alone() -> None:
+    original = _device_list_with_secrets()
+    redacted = decoder._redacted_copy(original)
+    assert (
+        original.deviceMetadata[0].information.deviceRegistration.ringKey == _SENTINEL
+    )
+    assert not redacted.deviceMetadata[0].information.deviceRegistration.ringKey
+    assert not redacted.deviceMetadata[0].information.accessInformation[0].sharingKeys
+    assert not redacted.deviceMetadata[0].phoneInformation
+
+
+def test_device_rows_and_debug_log_never_carry_secrets(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    device_list = _device_list_with_secrets()
+    device = device_list.deviceMetadata[0]
+    device.identifierInformation.canonicIds.canonicId.add(id="cid-1")
+    with caplog.at_level(logging.DEBUG):
+        rows = decoder.get_devices_with_location(device_list)
+    assert len(rows) == 1
+    assert _SENTINEL_HEX not in repr(rows)
+    assert repr(_SENTINEL)[2:-1] not in repr(rows)
+    assert _SENTINEL_HEX not in caplog.text
+    assert "ZZZZ" not in caplog.text
+
+
+# --- Guarded reader for the component count (AP5) -----------------------------
+
+
+def _capabilities(trackable: int) -> bytes:
+    return DeviceUpdate_pb2.DeviceCapabilities(
+        trackableComponents=trackable
+    ).SerializeToString()
+
+
+def test_trackable_components_reads_the_value() -> None:
+    registration = DeviceUpdate_pb2.DeviceRegistration(capabilities=_capabilities(3))
+    assert decoder.trackable_components_of(registration) == 3
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [b"", *_GARBAGE, _capabilities(0), _capabilities(-1)],
+    ids=["empty", "utf8", "truncated", "zero", "negative"],
+)
+def test_trackable_components_rejects_bad_values_without_logging(
+    raw: bytes, caplog: pytest.LogCaptureFixture
+) -> None:
+    registration = DeviceUpdate_pb2.DeviceRegistration(capabilities=raw)
+    with caplog.at_level(logging.DEBUG):
+        assert decoder.trackable_components_of(registration) is None
+    assert caplog.text == ""
+
+
+@pytest.mark.parametrize(
+    "stand_in",
+    [SimpleNamespace(), SimpleNamespace(capabilities="text"), None],
+    ids=["no-field", "not-bytes", "none"],
+)
+def test_trackable_components_accepts_test_doubles(stand_in: object) -> None:
+    assert decoder.trackable_components_of(stand_in) is None
+
+
+def test_device_row_carries_trackable_components() -> None:
+    device_list = DeviceUpdate_pb2.DevicesList()
+    device = device_list.deviceMetadata.add()
+    device.identifierInformation.canonicIds.canonicId.add(id="cid-1")
+    device.information.deviceRegistration.capabilities = _capabilities(3)
+    device.information.deviceRegistration.pairDate = 1_700_000_000
+    rows = decoder.get_devices_with_location(device_list)
+    assert rows[0]["trackable_components"] == 3
+
+
+def test_device_row_without_capabilities_has_none() -> None:
+    device_list = DeviceUpdate_pb2.DevicesList()
+    device = device_list.deviceMetadata.add()
+    device.identifierInformation.canonicIds.canonicId.add(id="cid-1")
+    rows = decoder.get_devices_with_location(device_list)
+    assert rows[0]["trackable_components"] is None
+
+
+def test_device_row_survives_garbage_capabilities() -> None:
+    device_list = DeviceUpdate_pb2.DevicesList()
+    device = device_list.deviceMetadata.add()
+    device.identifierInformation.canonicIds.canonicId.add(id="cid-1")
+    device.information.deviceRegistration.capabilities = _GARBAGE[1]
+    rows = decoder.get_devices_with_location(device_list)
+    assert rows[0]["trackable_components"] is None
