@@ -2767,3 +2767,9 @@ def test_a_zero_scalar_is_a_failed_attempt_not_a_crash(
     )
     assert report["result"] == "no_match"
     assert report["combinations_checked"] == 4
+
+
+def test_a_key_that_repeats_keeps_its_first_name() -> None:
+    names = dict(ba.derivation_keys(ba.BeaconKeys(None, bytes(32))))
+    assert "eik" in names
+    assert "eik_reversed" not in names
