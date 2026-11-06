@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 import custom_components.googlefindmy.coordinator as coordinator_module
+from custom_components.googlefindmy.coordinator.cache import _METADATA_KEYS
 from custom_components.googlefindmy.coordinator.helpers import (
     normalize_component_count,
 )
@@ -92,6 +93,7 @@ def test_normalize_component_count(value: object, expected: int | None) -> None:
 def test_contracts_know_the_field() -> None:
     assert "trackable_components" in _DEVICE_STUB_KEYS
     assert "trackable_components" in _PERSISTED_METADATA_KEYS
+    assert "trackable_components" in _METADATA_KEYS
     assert "trackable_components" in {field.name for field in fields(DeviceIdentity)}
     assert (
         DeviceIdentity(

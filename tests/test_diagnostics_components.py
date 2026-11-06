@@ -16,6 +16,7 @@ from custom_components.googlefindmy.eid_resolver import (
     MODERN_FRAME_TYPE,
     EIDMatch,
     GoogleFindMyEIDResolver,
+    ObservationClock,
     UwtSource,
 )
 from custom_components.googlefindmy.FMDNCrypto.eid_generator import (
@@ -101,21 +102,50 @@ def test_eik_series_of_a_multi_component_device_stays_on_the_old_path() -> None:
     assert resolver.get_ble_battery_state("can-reg-1") is not None
 
 
-def test_mode_of_a_series_follows_the_known_rule() -> None:
+@pytest.mark.parametrize(
+    ("frame", "decoded", "mode"),
+    [
+        (MODERN_FRAME_TYPE, 0x00, True),
+        (MODERN_FRAME_TYPE, 0x01, True),
+        (FMDN_FRAME_TYPE, 0x00, False),
+        (FMDN_FRAME_TYPE, 0x01, False),
+    ],
+)
+def test_mode_of_a_series_comes_from_the_frame_type(
+    frame: int, decoded: int, mode: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The meaning of the flags of a series is unknown, the frame type is clear."""
     resolver = _resolver_with([_identity()])
-    _resolve(resolver, _framed(2, 0x01, MODERN_FRAME_TYPE))
+    with caplog.at_level("INFO"):
+        _resolve(resolver, _framed(2, decoded, frame))
     sighting = resolver.last_confirmed_sighting("reg-1")
-    assert (sighting.uwt_mode, sighting.uwt_source) == (True, UwtSource.FLAGS_BIT)
-    _resolve(resolver, _framed(2, 0x00), at=NOW + 1)
-    sighting = resolver.last_confirmed_sighting("reg-1")
-    assert (sighting.uwt_mode, sighting.uwt_source) == (False, UwtSource.FLAGS_BIT)
+    assert (sighting.uwt_mode, sighting.uwt_source) == (mode, UwtSource.FRAME_TYPE)
+    assert "CONFLICT" not in caplog.text
+    assert _entry(resolver)[2]["decoded"] == decoded
 
 
-def test_conflict_of_frame_and_bit_reports_no_mode() -> None:
+def test_guessed_flags_byte_of_a_series_is_not_recorded() -> None:
     resolver = _resolver_with([_identity()])
-    _resolve(resolver, _framed(2, 0x01))
-    assert resolver.last_confirmed_sighting("reg-1").uwt_mode is None
-    assert resolver.last_confirmed_sighting("reg-1").uwt_source is UwtSource.CONFLICT
+    match = EIDMatch("reg-1", "entry", "can-reg-1", 0, False, 2)
+    metadata = {"component": 2, "flags_xor_mask": 0}
+    reading = resolver._update_ble_battery(
+        b"\x40" + b"\x01" * 20 + b"\x02", 0x40, metadata, [match]
+    )
+    assert reading.origin == "guessed"
+    assert resolver.component_flags_snapshot("entry") == {}
+
+
+def test_reading_without_a_canonical_id_uses_the_device_id() -> None:
+    resolver = _resolver_with([_identity()])
+    match = EIDMatch("reg-1", "entry", "", 0, False, 2)
+    resolver._record_component_flags(
+        [match],
+        2,
+        decoded=2,
+        frame=0x40,
+        observation=ObservationClock(wall=1.0, monotonic=1.0),
+    )
+    assert resolver.component_flags_snapshot("entry")["reg-1"][2]["decoded"] == 2
 
 
 def test_bare_eid_has_no_flags_and_no_mode() -> None:
@@ -142,6 +172,46 @@ def test_invalid_component_does_not_reach_the_diagnostics_or_the_sensor() -> Non
     )
     assert resolver.component_flags_snapshot("entry") == {}
     assert resolver.get_ble_battery_state("can-reg-1") is None
+
+
+def test_recording_ignores_a_component_that_is_no_int() -> None:
+    resolver = _resolver_with([_identity()])
+    match = EIDMatch("reg-1", "entry", "can-reg-1", 0, False)
+    resolver._record_component_flags(
+        [match],
+        True,
+        decoded=2,
+        frame=0x40,
+        observation=ObservationClock(wall=1.0, monotonic=1.0),
+    )
+    assert resolver.component_flags_snapshot("entry") == {}
+
+
+def test_bare_series_does_not_use_up_the_probe_of_the_device(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    resolver = _resolver_with([_identity()])
+    with caplog.at_level("INFO"):
+        _resolve(resolver, _eid(2))
+        assert "FMDN_FLAGS_PROBE" not in caplog.text
+        eik_eid = generate_eid_variant(EIK, COUNTER, LEGACY)
+        _resolve(resolver, eik_eid, at=NOW + 1)
+    assert "FMDN_FLAGS_PROBE" in caplog.text
+
+
+def test_purge_keeps_a_reading_keyed_by_the_registry_id() -> None:
+    resolver = _resolver_with([_identity()])
+    resolver._record_component_flags(
+        [EIDMatch("reg-1", "entry", "", 0, False, 2)],
+        2,
+        decoded=2,
+        frame=0x40,
+        observation=ObservationClock(wall=1.0, monotonic=1.0),
+    )
+    resolver.hass = SimpleNamespace(data={DOMAIN: {"entries": {"entry": object()}}})
+    resolver._cached_identities = [_identity()]
+    resolver._purge_uwt_state()
+    assert resolver.component_flags_snapshot("entry")["reg-1"][2]["decoded"] == 2
 
 
 def test_snapshot_is_limited_to_the_entry_and_a_copy() -> None:

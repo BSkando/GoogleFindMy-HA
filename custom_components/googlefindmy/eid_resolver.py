@@ -42,6 +42,7 @@ from .coordinator.helpers.identity import normalize_component_count
 from .FMDNCrypto._lazy_crypto import get_aesgcm_class, get_invalid_tag_exception
 from .FMDNCrypto.curve_profile import SECP160R1, SECP256R1, ScalarDerivation
 from .FMDNCrypto.eid_generator import (
+    COMPONENT_MAX,
     EIK_LENGTH,
     FHNA_COUNTER_MASK,
     LEGACY_EID_LENGTH,
@@ -139,8 +140,6 @@ _VARIANT_CURVE_PARAMS: dict[EidVariant, tuple[int, int, ScalarDerivation]] = {
 # _MEMO_HEADROOM below). tests/test_eid_resolver_memoization.py measures the
 # per-device key counts of the sizing case and fails if a new variant or
 # derivation outgrows these floors.
-_COMPONENT_MAX = 0xFF  # The component is one byte of derive_component_key().
-
 # Devices with several FMDN components add one legacy key per measured series
 # and window (see _compute_variants); each build sizes the memos to that count.
 _EID_MEMO_MAXSIZE = 2048
@@ -1067,7 +1066,8 @@ class _FlagsReading(NamedTuple):
     """What the hashed-flags decoder saw for one matched advertisement.
 
     ``uwt_bit`` is the decoded spec bit 7, or ``None`` when nothing was
-    decoded. ``origin`` says how the byte was located: ``"framed"`` at the
+    decoded or the advertisement belongs to a component series, whose flags have
+    no checked meaning. ``origin`` says how the byte was located: ``"framed"`` at the
     position the matched geometry defines, ``"guessed"`` by
     ``_guess_flags_byte``, ``"absent"`` when no byte was found. ``decoded``
     is the whole XOR-decoded flags byte, ``None`` when nothing was decoded;
@@ -3428,7 +3428,7 @@ class GoogleFindMyEIDResolver:
             raw_component = metadata["component"]
             if (
                 type(raw_component) is not int
-                or not 0 <= raw_component <= _COMPONENT_MAX
+                or not 0 <= raw_component <= COMPONENT_MAX
             ):
                 return
             component = raw_component
@@ -3486,7 +3486,7 @@ class GoogleFindMyEIDResolver:
         """
         if match.component is None:
             return
-        key = (match.canonical_id, match.component)
+        key = (match.canonical_id or match.device_id, match.component)
         if key in self._component_hits:
             return
         self._component_hits.add(key)
@@ -3495,7 +3495,7 @@ class GoogleFindMyEIDResolver:
             match.device_id,
             match.canonical_id,
             match.component,
-            frame,
+            "none" if frame is None else f"0x{frame:02x}",
         )
 
     def _sighting_is_older_than_the_lock(
@@ -4138,7 +4138,8 @@ class GoogleFindMyEIDResolver:
         DEBUG level only when the battery level changes.
 
         Returns the decoded protection-mode bit and how the flags byte was
-        located, for the sighting the caller records.
+        located, for the sighting the caller records. A component series stores
+        no state and returns no bit (``_record_component_flags``).
         """
         if not matches:
             return _FlagsReading(None, "absent")
@@ -4229,6 +4230,23 @@ class GoogleFindMyEIDResolver:
             observation = clock if clock is not None else _observation_clock(None)
             now_wall = observation.wall
 
+            if "component" in metadata:
+                # Measured series with an unknown meaning: a case value must not
+                # appear as the battery of the device, and a bit of unchecked
+                # meaning must not reach Google as the mode. Diagnostics only, and
+                # no bit: the finder falls back to the frame type, which is in
+                # clear text. A guessed byte may be EID material and is not
+                # recorded either.
+                if flags_origin == "framed":
+                    self._record_component_flags(
+                        matches,
+                        metadata["component"],
+                        decoded=decoded,
+                        frame=observed_frame,
+                        observation=observation,
+                    )
+                return _FlagsReading(None, flags_origin, decoded_flags)
+
             # Observe -- do not arbitrate -- the two redundant channels.
             #
             # SPEC (Find Hub Network Accessory Specification,
@@ -4264,18 +4282,6 @@ class GoogleFindMyEIDResolver:
                     decoded=decoded,
                     payload_len=length,
                 )
-
-            if "component" in metadata:
-                # Measured series with an unknown meaning: a case value must not
-                # appear as the battery of the device. Diagnostics only.
-                self._record_component_flags(
-                    matches,
-                    metadata["component"],
-                    decoded=decoded,
-                    frame=observed_frame,
-                    observation=observation,
-                )
-                return _FlagsReading(uwt_bit, flags_origin, decoded_flags)
 
             state = BLEBatteryState(
                 battery_level=battery_raw,
@@ -4347,8 +4353,10 @@ class GoogleFindMyEIDResolver:
                         battery_label,
                         battery_raw,
                     )
-        else:
-            # Cannot decode — log once per device at INFO for diagnostics
+        elif "component" not in metadata:
+            # Cannot decode — log once per device at INFO for diagnostics. A
+            # component series has no probe of its own and must not use up the
+            # one of the device.
             for match in matches:
                 storage_key = match.canonical_id or match.device_id
                 if storage_key not in self._flags_logged_devices:
@@ -4392,7 +4400,7 @@ class GoogleFindMyEIDResolver:
             return
         for match in matches:
             readings = self._component_flags.setdefault(
-                (match.config_entry_id, match.canonical_id), {}
+                (match.config_entry_id, match.canonical_id or match.device_id), {}
             )
             previous = readings.get(component)
             count = 1 if previous is None else previous["observations"] + 1

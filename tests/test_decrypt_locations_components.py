@@ -80,6 +80,34 @@ async def test_report_on_a_series_decrypts_and_the_eik_stays(component: int) -> 
 
 
 @pytest.mark.asyncio
+async def test_series_of_a_second_candidate_promotes_that_candidate(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    stale = b"\x51" * 32
+
+    async def identity_keys(*_args: object, **_kwargs: object) -> list[bytes]:
+        return [stale, EIK]
+
+    monkeypatch.setattr(decrypt_locations, "async_retrieve_identity_key", identity_keys)
+    eid = generate_eid_variant(derive_component_key(EIK, 254), COUNTER, LEGACY)
+    with caplog.at_level("INFO"):
+        records = await _records(_update(eid, _capabilities(3)))
+    assert len(records) == 1
+    assert records[0]["identity_key"] == EIK
+    assert "alternate identity key candidate (index=1)" in caplog.text
+
+
+def test_keys_of_another_length_get_no_series() -> None:
+    registration = DeviceUpdate_pb2.DeviceRegistration(capabilities=_capabilities(3))
+    assert decrypt_locations._component_keys(registration, [b"\x01" * 16]) == []
+    pairs = decrypt_locations._component_keys(registration, [EIK])
+    assert [identity for identity, _key in pairs] == [EIK] * 5
+    assert [key for _identity, key in pairs] == [
+        derive_component_key(EIK, c) for c in MEASURED_COMPONENT_ROWS
+    ]
+
+
+@pytest.mark.asyncio
 async def test_series_key_does_not_reach_any_output(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

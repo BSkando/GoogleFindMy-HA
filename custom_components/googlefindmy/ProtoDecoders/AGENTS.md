@@ -57,7 +57,7 @@ If the upstream proto schema changes, update the mirrored definitions under `cus
 
 Every length-delimited field that is newly declared on a message reachable from `DevicesList` or `DeviceUpdate` is `bytes`, without exception, even where the source of the schema (for example Spot) declares a message or a string. A declared `string` with invalid UTF-8 or a declared message with foreign content raises `DecodeError`, and `parse_device_list_protobuf` turns that into a failure of the whole device list. A `bytes` field cannot fail, and a wrong wire type lands in the unknown fields. Keep the intended shape as its own message and name it in the field comment, then read the field through a guarded helper only (`trackable_components_of` in `decoder.py` is the pattern). Varint fields are safe. `tests/test_decoder_spot_schema.py` pins the list of length-delimited fields on this path.
 
-Fields holding key material go into `_SECRET_PROTO_FIELDS` in `decoder.py`; the same test file fails on a new field whose name suggests a secret and that is not listed.
+Scalar fields holding key material or personal data go into `_SECRET_PROTO_FIELDS` in `decoder.py`; the same test file fails on a new field whose name suggests either and that is not listed or explained. The set matches by field name and only on scalar fields, so a message field of a listed name stays visible and shows its own fields one by one.
 
 ## Schema additions from Spot
 

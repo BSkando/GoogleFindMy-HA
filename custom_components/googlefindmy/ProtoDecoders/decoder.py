@@ -278,15 +278,20 @@ class _DecryptLocationsCallable(Protocol):
 
 
 # Fields that hold or wrap key material, tracker secrets or personal data of the
-# phone. Developer output shows at most their length; the integration never logs
-# them. `tests/test_decoder_spot_schema.py` fails on a new field whose name reads
-# like a secret and that is neither listed here nor explained there.
+# phone or the account. Developer output shows at most their length; the
+# integration never logs them. `tests/test_decoder_spot_schema.py` fails on a new
+# field whose name reads like a secret or like personal data and that is neither
+# listed here nor explained there. Only scalar fields count: `phoneInformation`
+# on `IdentitfierInformation` is a message that holds the canonical ids, and a
+# message of a listed name shows its fields one by one.
 _SECRET_PROTO_FIELDS: frozenset[str] = frozenset(
     {
         "contactInfo",
         "cookieValue",
         "droidGuardResults",
+        "email",
         "encryptedEIK",
+        "infoMessage",
         "encryptedPrivateKeyWrapper",
         "imei",
         "inviteeKey",
@@ -300,22 +305,31 @@ _SECRET_PROTO_FIELDS: frozenset[str] = frozenset(
         "ringKey",
         "sharingKeys",
         "unwantedTrackingKey",
+        "updateForAccount",
     }
 )
 
 
+_SECRET_MESSAGE_FIELD = "gcmRegistrationId"  # The FCM push token of this client.
+
+
 def _clear_secret_fields(message: Message) -> None:
-    """Remove every field of ``_SECRET_PROTO_FIELDS``, also in sub-messages."""
+    """Remove the scalar fields of ``_SECRET_PROTO_FIELDS``, also in sub-messages.
+
+    ``gcmRegistrationId`` is removed as a whole: its only field is a plain ``id``.
+    """
     for field, value in message.ListFields():
-        if field.name in _SECRET_PROTO_FIELDS:
+        if field.message_type is None:
+            if field.name in _SECRET_PROTO_FIELDS:
+                message.ClearField(field.name)
+        elif field.name == _SECRET_MESSAGE_FIELD:
             message.ClearField(field.name)
-        elif field.message_type is not None:
-            if isinstance(value, Message):
-                _clear_secret_fields(value)
-            else:
-                items = value.values() if hasattr(value, "values") else value
-                for item in items:
-                    _clear_secret_fields(item)
+        elif isinstance(value, Message):
+            _clear_secret_fields(value)
+        else:
+            items = value.values() if hasattr(value, "values") else value
+            for item in items:
+                _clear_secret_fields(item)
 
 
 def _redacted_copy(message: Message) -> Message:
@@ -357,12 +371,16 @@ def custom_message_formatter(
             display_tz_name = "UTC"
 
     for field, value in message.ListFields():
-        if field.name in _SECRET_PROTO_FIELDS:
+        if field.name == _SECRET_MESSAGE_FIELD:
+            lines.append(f"{indent}{field.name}: <redacted>")
+        elif field.message_type is None and field.name in _SECRET_PROTO_FIELDS:
             size = len(value) if hasattr(value, "__len__") else 1
             lines.append(f"{indent}{field.name}: <redacted len={size}>")
         elif field.type == field.TYPE_BYTES:
-            hex_value = binascii.hexlify(value).decode("utf-8")
-            lines.append(f'{indent}{field.name}: "{hex_value}"')
+            # Repeated bytes fields hold a container of values.
+            for item in [value] if isinstance(value, bytes) else value:
+                hex_value = binascii.hexlify(item).decode("utf-8")
+                lines.append(f'{indent}{field.name}: "{hex_value}"')
         elif field.type == field.TYPE_MESSAGE:
             # The upb descriptor of current runtimes has no `label`, so repeated
             # is read from the value (see `_unknown_field_numbers`).

@@ -266,7 +266,11 @@ _NOT_SECRET_NAMES = frozenset(
         "keyRotationNeeded",
         "ownerKeyVersion",
         "publicKeyId",
+        # No personal data of their own.
+        "thisAccount",
         # Containers: their leaves are checked one by one.
+        "accessInformation",
+        "phoneIdentifierInformation",
         "cookies",
         "e2eePublicKeyRegistration",
         "ecdsaPublicKeys",
@@ -283,6 +287,19 @@ _NOT_SECRET_NAMES = frozenset(
 )
 
 
+_SUSPECT_NAME_PARTS = (
+    "account",
+    "contact",
+    "cookie",
+    "email",
+    "imei",
+    "key",
+    "phone",
+    "secret",
+    "token",
+)
+
+
 def _all_field_names() -> set[str]:
     names: set[str] = set()
 
@@ -291,7 +308,7 @@ def _all_field_names() -> set[str]:
         for nested in message.nested_types:
             walk(nested)
 
-    for module in (Common_pb2, DeviceUpdate_pb2):
+    for module in (Common_pb2, DeviceUpdate_pb2, LocationReportsUpload_pb2):
         for message in module.DESCRIPTOR.message_types_by_name.values():
             walk(message)
     return names
@@ -301,9 +318,60 @@ def test_every_secret_looking_field_is_redacted_or_explained() -> None:
     suspects = {
         name
         for name in _all_field_names()
-        if any(part in name.lower() for part in ("key", "secret", "cookie", "token"))
+        if any(part in name.lower() for part in _SUSPECT_NAME_PARTS)
     }
     assert suspects - decoder._SECRET_PROTO_FIELDS - _NOT_SECRET_NAMES == set()
+
+
+def test_secret_names_on_message_fields_are_explained() -> None:
+    """A set entry does not hide a message, so each such pair needs a reason."""
+    found: set[str] = set()
+
+    def walk(message: Descriptor) -> None:
+        for field in message.fields:
+            if (
+                field.type == _TYPE_MESSAGE
+                and field.name in decoder._SECRET_PROTO_FIELDS
+            ):
+                found.add(field.full_name)
+        for nested in message.nested_types:
+            walk(nested)
+
+    for module in (Common_pb2, DeviceUpdate_pb2, LocationReportsUpload_pb2):
+        for message in module.DESCRIPTOR.message_types_by_name.values():
+            walk(message)
+    assert found == {
+        # Holds the canonical ids, which developer output has always shown.
+        "IdentitfierInformation.phoneInformation",
+        # Its fields are listed one by one, see the next test.
+        "DeviceDescription.contactInfo",
+    }
+
+
+def test_contact_info_message_shows_no_personal_data() -> None:
+    description = DeviceUpdate_pb2.DeviceDescription(
+        contactInfo=DeviceUpdate_pb2.DeviceDescription.ContactInfo(
+            phoneNumber="+49 1", infoMessage="call me", email="a@example.com"
+        )
+    )
+    text = decoder.custom_message_formatter(description, "", False)
+    for value in ("+49 1", "call me", "a@example.com"):
+        assert value not in text
+    redacted = decoder._redacted_copy(description)
+    assert redacted.contactInfo.ByteSize() == 0
+
+
+def test_push_token_is_hidden() -> None:
+    update = DeviceUpdate_pb2.DeviceUpdate()
+    update.fcmMetadata.gcmRegistrationId.id = "push-token"
+    update.fcmMetadata.requestUuid = "uuid-1"
+    text = decoder.custom_message_formatter(update.fcmMetadata, "", False)
+    assert "push-token" not in text
+    assert "gcmRegistrationId: <redacted>" in text
+    assert "uuid-1" in text
+    redacted = decoder._redacted_copy(update)
+    assert not redacted.fcmMetadata.HasField("gcmRegistrationId")
+    assert redacted.fcmMetadata.requestUuid == "uuid-1"
 
 
 def test_secret_set_names_only_existing_fields() -> None:
@@ -395,7 +463,7 @@ def test_print_helpers_never_show_secrets(  # noqa: PLR0913
     assert "1122" in out or "\\021" in out  # the non-secret neighbour stays
 
 
-def test_location_report_printer_uses_the_redacted_copy(
+def test_location_report_printer_keeps_printing(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """No field of this message is secret; it only has to keep printing."""
@@ -405,6 +473,30 @@ def test_location_report_printer_uses_the_redacted_copy(
     )
     decoder.print_location_report_upload_protobuf("00")
     assert "random1: 7" in capsys.readouterr().out
+
+
+def test_formatter_prints_every_value_of_a_repeated_bytes_field() -> None:
+    metadata = DeviceUpdate_pb2.DeviceMetadata(supportedActions=[b"\x08\x01", b"\x10"])
+    text = decoder.custom_message_formatter(metadata, "", False)
+    assert 'supportedActions: "0801"' in text
+    assert 'supportedActions: "10"' in text
+
+
+def test_formatter_redacts_personal_data_in_type_information() -> None:
+    information = DeviceUpdate_pb2.DeviceTypeInformation(contactInfo=_SENTINEL)
+    text = decoder.custom_message_formatter(information, "", False)
+    assert _SENTINEL_HEX not in text
+    assert "contactInfo: <redacted len=8>" in text
+
+
+def test_identifier_phone_information_stays_visible() -> None:
+    """Same field name as the secret bytes field, but a message with the ids."""
+    metadata = DeviceUpdate_pb2.DeviceMetadata()
+    metadata.identifierInformation.phoneInformation.canonicIds.canonicId.add(id="cid-1")
+    assert "cid-1" in decoder.custom_message_formatter(metadata, "", False)
+    redacted = decoder._redacted_copy(metadata)
+    identifier = redacted.identifierInformation
+    assert identifier.phoneInformation.canonicIds.canonicId[0].id == "cid-1"
 
 
 def test_redacted_copy_leaves_the_original_alone() -> None:

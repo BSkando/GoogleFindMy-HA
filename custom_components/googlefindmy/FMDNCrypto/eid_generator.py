@@ -29,6 +29,7 @@ from typing import Final
 
 __all__ = [
     "COMPONENT_KEY_LABEL",
+    "COMPONENT_MAX",
     "EidVariant",
     "EIK_LENGTH",
     "FHNA_K",
@@ -88,7 +89,7 @@ EIK_LENGTH: Final[int] = 32
 # Measured, not specified: see derive_component_key().
 COMPONENT_KEY_LABEL: Final[int] = 0x04
 MEASURED_COMPONENT_ROWS: Final[tuple[int, ...]] = (0, 1, 2, 254, 255)
-_COMPONENT_MAX: Final[int] = 0xFF
+COMPONENT_MAX: Final[int] = 0xFF
 LEGACY_EID_LENGTH: Final[int] = 20
 MODERN_EID_LENGTH: Final[int] = 32
 FHNA_PRF_INPUT_LENGTH: Final[int] = 32
@@ -319,7 +320,7 @@ def derive_component_key(eik: bytes, component: int) -> bytes:
     """
     if len(eik) != EIK_LENGTH:
         raise ValueError(f"Ephemeral Identity Key must be {EIK_LENGTH} bytes")
-    if type(component) is not int or not 0 <= component <= _COMPONENT_MAX:
+    if type(component) is not int or not 0 <= component <= COMPONENT_MAX:
         raise ValueError("FMDN component must be an int from 0 to 255")
     return hashlib.sha256(eik + bytes((COMPONENT_KEY_LABEL, component))).digest()
 

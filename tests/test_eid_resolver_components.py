@@ -427,8 +427,25 @@ def test_component_hit_is_logged_once_per_series(
         r.getMessage() for r in caplog.records if "FMDN_COMPONENT_HIT" in r.getMessage()
     ]
     assert len(lines) == 2
-    assert "device=reg-1 canonical=can-reg-1 component=2" in lines[0]
+    assert "device=reg-1 canonical=can-reg-1 component=2 frame=none" in lines[0]
     assert "component=254" in lines[1]
+
+
+def test_component_hit_logs_the_frame_in_hex(caplog: pytest.LogCaptureFixture) -> None:
+    resolver = _resolver_with([_identity()])
+    with caplog.at_level(logging.INFO):
+        _resolve(resolver, bytes([0x40]) + _eid(2))
+    assert "component=2 frame=0x40" in caplog.text
+
+
+def test_component_hits_without_canonical_ids_stay_apart(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    resolver = _new_resolver()
+    with caplog.at_level(logging.INFO):
+        resolver._note_component_hit(EIDMatch("reg-a", "entry", "", 0, False, 2), None)
+        resolver._note_component_hit(EIDMatch("reg-b", "entry", "", 0, False, 2), None)
+    assert caplog.text.count("FMDN_COMPONENT_HIT") == 2
 
 
 def test_single_component_hit_is_not_logged(caplog: pytest.LogCaptureFixture) -> None:

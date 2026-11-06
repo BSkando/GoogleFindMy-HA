@@ -159,7 +159,7 @@ The specification defines the labels `0x01` to `0x03` for the short keys of S1.2
 | Plain Table 10 with the EIK on this pair | 0 of 440 |
 | Control: two `moto tag`, plain Table 10 | 88 of 88 each |
 
-**Series:** the measured set is `MEASURED_COMPONENT_ROWS` = 0, 1, 2, 254, 255. Which part each series stands for is not measured, and it does not fit Spot's enum (right 1, left 2, case 3). The case and the earbuds send different series depending on where they are: earbuds in the closed case showed 255, earbuds outside showed 2 and 254.
+**Series:** the measured set is `MEASURED_COMPONENT_ROWS` = 0, 1, 2, 254, 255. Which part each series stands for is not measured, and it does not fit Spot's enum (right 1, left 2, case 3). Different series appeared depending on where the earbuds were: with the earbuds in the closed case 255, with the earbuds outside 2 and 254. Which part sent which series is not known.
 
 **How the integration uses it:**
 
@@ -167,7 +167,8 @@ The specification defines the labels `0x01` to `0x03` for the short keys of S1.2
 * The resolver adds one forward legacy EID per series and window next to the EIK series. The set is fixed rather than read from Google at runtime, which would need a further request for every user.
 * The key fingerprint stays that of the EIK. `EIDMatch.component` and `ConfirmedSighting.component` name the series.
 * Hashed flags of a series use the mask from `K_c`. They appear in the diagnostics block `fmdn_component_flags` as raw values and fill no sensor, because a case value must not appear as the battery of the device. All measured values decoded to `0x02`, whose meaning is unchecked.
-* The finder reports the EID of the series it received. Whether Google accepts reports on these EIDs is not measured.
+* The finder reports the EID of the series it received. The mode in such a report comes from the frame type, not from the flags bit, because the meaning of the flags of a series is unchecked. All frames of a series measured so far had type `0x40`; whether a series sends `0x41` is not measured. Whether Google accepts reports on these EIDs is not measured.
+* The first hit of each series per process logs `FMDN_COMPONENT_HIT device=... canonical=... component=... frame=...` at INFO, so a log shows which series a device sends.
 * The owner side tries `K_c` for foreign reports without promoting it to an identity key. It reads the count from the registration in the report; that `DeviceUpdate` responses carry it is not measured.
 * All series run as one device in Bermuda.
 
@@ -310,7 +311,7 @@ encryptedUserSecrets.encryptedIdentityKey:
 | `EncryptedUserSecrets` | `sharingKeys` (6), `previousEikDate` (9) | `bytes` | `SharingKeys`, `Time` |
 | `SemanticLocation` | `semanticLocationIdentifier` (7) | `bytes` | nested message |
 
-`ProtoDecoders/decoder.py` hides key material from developer output (`_SECRET_PROTO_FIELDS`). `DeviceRegistration` fields 15, 38, 40 and the `DeviceMetadata` root fields 11, 12, 13 stay undeclared: they are not in Spot, their meaning is unknown, and at least one text could have the form of a key. They remain visible as numbers only.
+`ProtoDecoders/decoder.py` hides key material and personal data from developer output (`_SECRET_PROTO_FIELDS`, scalar fields by name). `DeviceRegistration` fields 15, 38, 40 and the `DeviceMetadata` root fields 11, 12, 13 stay undeclared: they are not in Spot, their meaning is unknown, and at least one text could have the form of a key. They remain visible as numbers only.
 
 ---
 
