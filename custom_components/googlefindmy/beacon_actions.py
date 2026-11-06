@@ -70,7 +70,8 @@ MIN_FAST_PAIR_FRAME_LENGTH = 2
 # A tracker can change its address while the old one is still cached, so one call
 # may try several addresses. Untried addresses share the time, capped, because a dead
 # address would otherwise use all of it (measured: 40 to 57 s per failed call). The
-# cap stays above the 20 s bleak allows itself, so a lone address gets its full try.
+# cap stays above the 20 s bleak allows itself, so at the default limit of 45 s a lone
+# address gets its full try.
 MAX_CONNECT_ATTEMPTS = 3
 CONNECT_ATTEMPT_LIMIT = 25.0
 # Time kept for the reads after a late connection: at most this, at most a third.
@@ -454,9 +455,10 @@ def search_eid_counter(  # noqa: PLR0913
 ) -> dict[str, Any]:
     """Look for the counter that yields a target EID, second by second around the clock.
 
-    Runs in an executor. ``stop`` ends it early when the caller goes away, so a new
-    call cannot run next to a forgotten one. ``targets`` maps an EID to the name of
-    its source; only the name is reported. A hit on a
+    Runs in an executor. ``stop`` ends it within a moment when the caller is
+    cancelled, so a new call runs next to a forgotten one for a moment at most.
+    ``targets`` maps an EID to the name of its source; only the name is reported. A
+    hit on a
     counter whose low 10 bits are zero is what the specification prescribes, any
     other hit shows a tracker that departs from it.
     """
@@ -1083,6 +1085,7 @@ async def _async_connect_search(
         remaining = connect_until - loop.time()
         if remaining <= 0:
             report["connection"] = "timeout"
+            report.pop("error_class", None)
             break
         untried = [item for item in selection.addresses if item not in tried]
         target = untried[0] if untried else selection.addresses[0]
@@ -1163,7 +1166,7 @@ async def async_probe_tracker(  # noqa: PLR0913
         client = await _async_connect_address(hass, stack, address, report, timeout)
     elif keys.account_key is None:
         report["connection"] = "no_account_key_for_search"
-        return report
+        client = None
     else:
         client = await _async_connect_search(
             hass,
@@ -1174,7 +1177,9 @@ async def async_probe_tracker(  # noqa: PLR0913
         )
     if client is None:
         if search_seconds > 0:
-            report["eid_search"] = {"result": "no_clock"}
+            report["eid_search"] = await _async_search(
+                hass, keys, None, search_seconds, search_eid
+            )
         return report
 
     reading: _Reading | None = None

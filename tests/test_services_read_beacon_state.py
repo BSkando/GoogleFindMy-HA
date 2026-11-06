@@ -452,3 +452,11 @@ async def test_search_window_outside_the_range_is_rejected(
     await harness.register()
     with pytest.raises(vol.Invalid):
         harness.call(search_seconds=seconds)
+
+
+@pytest.mark.asyncio
+async def test_search_window_arrives_as_a_whole_number(harness: _Harness) -> None:
+    await harness.register()
+    call = harness.call(search_seconds=1.5)
+    assert call.data["search_seconds"] == 1
+    assert type(call.data["search_seconds"]) is int
