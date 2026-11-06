@@ -39,7 +39,11 @@ from homeassistant.helpers.network import NoURLAvailableError, get_url
 from homeassistant.helpers.service import async_register_admin_service
 
 from .Auth.log_safety import describe_exception
-from .beacon_actions import BeaconKeys, async_probe_tracker
+from .beacon_actions import (
+    EID_SEARCH_MAX_SECONDS,
+    BeaconKeys,
+    async_probe_tracker,
+)
 from .const import (
     DATA_EID_RESOLVER,
     DEFAULT_MAP_VIEW_TOKEN_EXPIRATION,
@@ -134,6 +138,7 @@ SERVICE_REBUILD_DEVICE_REGISTRY: str = "rebuild_device_registry"
 SERVICE_READ_BEACON_STATE: str = "read_beacon_state"
 
 _BLE_ADDRESS_PATTERN = re.compile(r"^(?:[0-9A-F]{2}:){5}[0-9A-F]{2}$")
+_EID_HEX_PATTERN = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _READ_BEACON_STATE_SCHEMA = vol.Schema(
     {
         vol.Required("device_id"): str,
@@ -141,6 +146,13 @@ _READ_BEACON_STATE_SCHEMA = vol.Schema(
         vol.Optional("timeout", default=45): vol.All(
             vol.Coerce(float), vol.Range(min=5, max=120)
         ),
+        vol.Optional("include_raw_response", default=False): bool,
+        vol.Optional("search_seconds", default=0): vol.All(
+            vol.Coerce(float),
+            vol.Range(min=0, max=EID_SEARCH_MAX_SECONDS),
+            vol.Coerce(int),
+        ),
+        vol.Optional("search_eid"): str,
     }
 )
 
@@ -1859,6 +1871,14 @@ async def async_register_services(hass: HomeAssistant, ctx: dict[str, Any]) -> N
                     "The address is not a valid Bluetooth address.",
                     translation_key="beacon_invalid_address",
                 )
+        search_eid: str | None = call.data.get("search_eid")
+        if search_eid is not None:
+            search_eid = search_eid.strip().lower()
+            if not _EID_HEX_PATTERN.fullmatch(search_eid):
+                raise _service_validation_error(
+                    "The EID must be 20 or 32 bytes in hexadecimal.",
+                    translation_key="beacon_invalid_eid",
+                )
         if "bluetooth" not in hass.config.components:
             raise _service_validation_error(
                 "The Bluetooth integration is not loaded.",
@@ -1874,7 +1894,13 @@ async def async_register_services(hass: HomeAssistant, ctx: dict[str, Any]) -> N
                 hass, runtime, canonical_id, call.data["timeout"]
             )
             return await async_probe_tracker(
-                hass, keys, address=address, timeout=call.data["timeout"]
+                hass,
+                keys,
+                address=address,
+                timeout=call.data["timeout"],
+                include_raw=call.data["include_raw_response"],
+                search_seconds=call.data["search_seconds"],
+                search_eid=bytes.fromhex(search_eid) if search_eid else None,
             )
 
     # ---- Actual service registrations (global; visible even without entries) ----

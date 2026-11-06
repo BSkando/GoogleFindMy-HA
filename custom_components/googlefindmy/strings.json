@@ -446,6 +446,18 @@
         "timeout": {
           "name": "Timeout (optional)",
           "description": "Time limit in seconds, 5 to 120, for the key lookup and again for connection and reads. Cleanup may add a few seconds."
+        },
+        "include_raw_response": {
+          "name": "Include raw response (optional)",
+          "description": "Also return the raw provisioning response as hexadecimal. It holds the tracker's full current EID, so treat the output accordingly."
+        },
+        "search_seconds": {
+          "name": "EID search window (optional)",
+          "description": "Seconds to search on each side of the tracker's clock, second by second, for the counter behind an EID. 0 turns it off. It runs after the connection has closed, adds up to 5 minutes and loads the CPU meanwhile."
+        },
+        "search_eid": {
+          "name": "EID to search for (optional)",
+          "description": "An EID seen in an advertisement, 20 or 32 bytes in hexadecimal. Searched in addition to the EID the tracker reports. Used only with a search window."
         }
       }
     }
@@ -933,6 +945,9 @@
     },
     "beacon_invalid_address": {
       "message": "The address is not a valid Bluetooth address."
+    },
+    "beacon_invalid_eid": {
+      "message": "The EID must be 20 or 32 bytes in hexadecimal."
     },
     "beacon_bluetooth_unavailable": {
       "message": "The Bluetooth integration is not loaded."

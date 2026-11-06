@@ -407,3 +407,57 @@ async def test_permission_check_runs_before_input_validation(
         await harness.handler(harness.call(address="not-a-mac"))
     assert calls == [DEVICE_ID]
     assert harness.probe_calls == []
+
+
+@pytest.mark.asyncio
+async def test_new_fields_default_to_off(harness: _Harness) -> None:
+    await harness.register()
+    await harness.handler(harness.call())
+    call = harness.probe_calls[0]
+    assert call["include_raw"] is False
+    assert call["search_seconds"] == 0
+    assert call["search_eid"] is None
+
+
+@pytest.mark.asyncio
+async def test_search_fields_reach_the_probe(harness: _Harness) -> None:
+    await harness.register()
+    eid = "AB" * 20
+    await harness.handler(
+        harness.call(include_raw_response=True, search_seconds=600, search_eid=eid)
+    )
+    call = harness.probe_calls[0]
+    assert call["include_raw"] is True
+    assert call["search_seconds"] == 600
+    assert call["search_eid"] == bytes.fromhex(eid)
+
+
+@pytest.mark.parametrize("value", ["zz" * 20, "ab" * 19, "ab" * 21, "ab" * 33])
+@pytest.mark.asyncio
+async def test_invalid_search_eid_is_rejected_without_echo(
+    harness: _Harness, value: str
+) -> None:
+    await harness.register()
+    with pytest.raises(ServiceValidationError) as info:
+        await harness.handler(harness.call(search_eid=value))
+    assert info.value.translation_key == "beacon_invalid_eid"
+    assert value not in str(info.value)
+    assert harness.probe_calls == []
+
+
+@pytest.mark.parametrize("seconds", [-1, 172801, float("inf"), float("nan")])
+@pytest.mark.asyncio
+async def test_search_window_outside_the_range_is_rejected(
+    harness: _Harness, seconds: int
+) -> None:
+    await harness.register()
+    with pytest.raises(vol.Invalid):
+        harness.call(search_seconds=seconds)
+
+
+@pytest.mark.asyncio
+async def test_search_window_arrives_as_a_whole_number(harness: _Harness) -> None:
+    await harness.register()
+    call = harness.call(search_seconds=1.5)
+    assert call.data["search_seconds"] == 1
+    assert type(call.data["search_seconds"]) is int
