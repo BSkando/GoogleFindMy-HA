@@ -457,7 +457,15 @@
         },
         "search_eid": {
           "name": "EID a buscar (opcional)",
-          "description": "Um EID visto em um anúncio, 20 ou 32 bytes em hexadecimal. Buscado além do EID informado pelo rastreador. Usado apenas com uma janela de busca."
+          "description": "Um EID visto em um anúncio, 20 ou 32 bytes em hexadecimal. Buscado além do EID informado pelo rastreador e do EID anunciado pelo endereço escolhido. Usado apenas com uma busca."
+        },
+        "identity_form": {
+          "name": "Identidade para conectar (opcional)",
+          "description": "A qual identidade do rastreador conectar: qualquer uma, o localizador que envia o quadro FMDN ou o dispositivo de áudio que anuncia Common Audio. Ignorado quando um endereço é informado."
+        },
+        "derivation_windows": {
+          "name": "Janela de busca de derivações (opcional)",
+          "description": "Janelas de rotação de 1024 s a buscar em cada lado do relógio do rastreador, testando outras formas de chave e de bloco contra os EIDs procurados. 0 desativa. É executada depois de fechar a conexão, adiciona até 5 minutos e sobrecarrega a CPU nesse tempo."
         }
       }
     }

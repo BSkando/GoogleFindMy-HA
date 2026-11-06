@@ -15,7 +15,8 @@ Scope and guarantees
   before any GATT access, see ``_BeaconSession.run``.
 - Nothing here runs unless the action is called: no timer, no listener, no entity.
   The only log calls are at DEBUG level. The second-by-second EID search runs only
-  when the caller asks for it and stops at a fixed time budget.
+  when the caller asks for it and stops at a fixed time budget, and so does the
+  search over key and block derivations.
 - Keys never leave this module's call chain: not in logs, responses, exceptions or
   ``repr``. Bleak error texts carry the hardware address, so they are reduced to an
   ATT error code and the exception class. The raw ``0x01`` frame, which holds the
@@ -42,6 +43,8 @@ _LOGGER = logging.getLogger(__name__)
 
 BEACON_ACTIONS_UUID = "fe2c1238-8366-4814-8eb0-01de32100bea"
 FAST_PAIR_SERVICE_DATA_UUID = "0000fe2c-0000-1000-8000-00805f9b34fb"
+FMDN_SERVICE_DATA_UUID = "0000feaa-0000-1000-8000-00805f9b34fb"
+COMMON_AUDIO_SERVICE_DATA_UUID = "00001853-0000-1000-8000-00805f9b34fb"
 
 PROTOCOL_MAJOR_VERSION = 0x01
 NONCE_LENGTH = 8
@@ -65,7 +68,15 @@ CLEANUP_TIMEOUT = 5.0
 PARAMETERS_LENGTH = 16
 RINGING_LENGTH = 3
 PROVISIONING_LENGTHS = (1, 21, 33)
+# Measured on Pixel Buds Pro 2 (firmware 6.144): the specified form plus one byte,
+# covered by the response authentication. Its meaning is not documented.
+PROVISIONING_TRAILING_LENGTHS = (22, 34)
 EID_LENGTHS = (20, 32)
+# Measured on the same earbuds at addresses that advertise an EID: the EID field holds
+# this prefix and zeros otherwise. It is no curve point, so it is no EID.
+_EID_PLACEHOLDER_PREFIX = b"\x00\xff"
+_FMDN_FRAME_TYPES = (0x40, 0x41)
+LEGACY_EID_BYTES = 20
 MIN_FAST_PAIR_FRAME_LENGTH = 2
 # A tracker can change its address while the old one is still cached, so one call
 # may try several addresses. Untried addresses share the time, capped, because a dead
@@ -81,6 +92,10 @@ EID_SEARCH_TIME_BUDGET = 300.0
 EID_SEARCH_MAX_SECONDS = 172800
 _EID_SEARCH_CHECK_EVERY = 256
 _FHNA_K_BYTE = 10
+DERIVATION_WINDOWS_MAX = 256
+_DERIVATION_MIXING_BYTES = range(8)
+_DERIVATION_COMPONENT_BYTES = (1, 2, 3)
+_DERIVATION_K_BYTES = (8, 9, 11, 12, 13, 14, 15)
 
 # First byte forms of an account key. The stored key usually starts with 0x04; the
 # advertised filter also uses 0x05 while the key is in use (measured on Pixel Buds
@@ -118,6 +133,19 @@ class OperationStatus(StrEnum):
     RESPONSE_AUTH_INVALID = "response_auth_invalid"
     SKIPPED_NO_KEY = "skipped_no_key"
     NOT_ATTEMPTED = "not_attempted"
+
+
+class IdentityForm(StrEnum):
+    """What an advertiser announces next to its Fast Pair frame.
+
+    Earbuds can run two identities under rotating addresses: a locator that sends
+    the FMDN frame and an audio device that announces Common Audio (0x1853).
+    """
+
+    ANY = "any"
+    LOCATOR = "locator"
+    AUDIO = "audio"
+    OTHER = "other"
 
 
 class BeaconProtocolError(ValueError):
@@ -244,9 +272,16 @@ def decrypt_parameters(account_key: bytes, data: bytes) -> dict[str, int]:
 
 def parse_provisioning(data: bytes) -> tuple[bool, bool, bytes]:
     """Return EIK bit, owner bit and the current EID from the ``0x01`` data."""
+    if len(data) in PROVISIONING_TRAILING_LENGTHS:
+        return bool(data[0] & 0x01), bool(data[0] & 0x02), data[1:-1]
     if len(data) not in PROVISIONING_LENGTHS:
         raise BeaconProtocolError("unexpected provisioning state length")
     return bool(data[0] & 0x01), bool(data[0] & 0x02), data[1:]
+
+
+def is_placeholder_eid(eid: bytes) -> bool:
+    """Tell whether an EID field holds the placeholder instead of an identifier."""
+    return eid.startswith(_EID_PLACEHOLDER_PREFIX) and not any(eid[2:])
 
 
 def parse_ringing(data: bytes) -> dict[str, int]:
@@ -343,6 +378,27 @@ def filter_matches(frame: FastPairFrame, account_key: bytes) -> bool:
     return False
 
 
+def identity_form(service_data: Mapping[str, bytes]) -> IdentityForm:
+    """Return the identity an advertisement belongs to."""
+    if FMDN_SERVICE_DATA_UUID in service_data:
+        return IdentityForm.LOCATOR
+    if COMMON_AUDIO_SERVICE_DATA_UUID in service_data:
+        return IdentityForm.AUDIO
+    return IdentityForm.OTHER
+
+
+def advertised_eid(service_data: Mapping[str, bytes]) -> bytes | None:
+    """Return the EID of an FMDN frame: frame type, EID, optional hashed flags."""
+    raw = service_data.get(FMDN_SERVICE_DATA_UUID)
+    if not raw or raw[0] not in _FMDN_FRAME_TYPES:
+        return None
+    body = bytes(raw[1:])
+    for length in EID_LENGTHS:
+        if len(body) in (length, length + 1):
+            return body[:length]
+    return None
+
+
 @dataclass(frozen=True)
 class CandidateSelection:
     """Connectable Fast Pair advertisers that match an account key."""
@@ -352,17 +408,23 @@ class CandidateSelection:
     frames_matched: int
     frames_unparsed: int
     seen_at: Mapping[str, float] = field(default_factory=dict)
+    frames_other_form: int = 0
 
 
-def select_candidates(infos: Iterable[Any], account_key: bytes) -> CandidateSelection:
+def select_candidates(
+    infos: Iterable[Any],
+    account_key: bytes,
+    form: IdentityForm = IdentityForm.ANY,
+) -> CandidateSelection:
     """Return advertisers whose filter holds the key, newest sighting first.
 
     The cache keeps an address after the tracker moved on to the next one, and the
     old entry can still hold the stronger RSSI (measured on Pixel Buds Pro 2). RSSI
-    only breaks ties between equally recent sightings.
+    only breaks ties between equally recent sightings. With a ``form`` other than
+    ``ANY``, a match of another identity only counts as ``frames_other_form``.
     """
     matched: list[tuple[float, int, str]] = []
-    seen = unparsed = 0
+    seen = unparsed = other_form = 0
     for info in infos:
         service_data: Mapping[str, bytes] = info.service_data or {}
         raw = service_data.get(FAST_PAIR_SERVICE_DATA_UUID)
@@ -374,6 +436,9 @@ def select_candidates(infos: Iterable[Any], account_key: bytes) -> CandidateSele
             unparsed += 1
             continue
         if filter_matches(frame, account_key):
+            if form is not IdentityForm.ANY and identity_form(service_data) is not form:
+                other_form += 1
+                continue
             seen_at = float(getattr(info, "time", 0.0) or 0.0)
             matched.append((seen_at, int(info.rssi), str(info.address)))
     matched.sort(key=lambda item: item[:2], reverse=True)
@@ -383,6 +448,7 @@ def select_candidates(infos: Iterable[Any], account_key: bytes) -> CandidateSele
         frames_matched=len(matched),
         frames_unparsed=unparsed,
         seen_at={address: seen for seen, _rssi, address in matched},
+        frames_other_form=other_form,
     )
 
 
@@ -512,6 +578,224 @@ def search_eid_counter(  # noqa: PLR0913
     return report
 
 
+def _mixing_key_candidates(eik: bytes) -> list[tuple[str, bytes]]:
+    """Return keys derived from the EIK with one extra byte."""
+    candidates: list[tuple[str, bytes]] = []
+    for value in _DERIVATION_MIXING_BYTES:
+        byte = bytes((value,))
+        candidates += [
+            (f"sha256_eik_then_{value}", hashlib.sha256(eik + byte).digest()),
+            (f"sha256_{value}_then_eik", hashlib.sha256(byte + eik).digest()),
+            (f"hmac_eik_{value}", hmac.new(eik, byte, hashlib.sha256).digest()),
+        ]
+    return candidates
+
+
+def _account_key_candidates(
+    name: str, account_key: bytes, eik: bytes | None
+) -> list[tuple[str, bytes]]:
+    """Return the AES keys one form of the account key can stand for."""
+    candidates = [
+        (f"account_key_{name}", account_key),
+        (f"account_key_{name}_twice", account_key + account_key),
+        (f"account_key_{name}_zero_padded", account_key.ljust(EIK_LENGTH, b"\x00")),
+        (f"sha256_account_key_{name}", hashlib.sha256(account_key).digest()),
+    ]
+    if eik is not None:
+        candidates += [
+            (
+                f"sha256_eik_then_account_key_{name}",
+                hashlib.sha256(eik + account_key).digest(),
+            ),
+            (
+                f"sha256_account_key_{name}_then_eik",
+                hashlib.sha256(account_key + eik).digest(),
+            ),
+            (
+                f"hmac_eik_account_key_{name}",
+                hmac.new(eik, account_key, hashlib.sha256).digest(),
+            ),
+            (
+                f"hmac_account_key_{name}_eik",
+                hmac.new(account_key, eik, hashlib.sha256).digest(),
+            ),
+        ]
+    return candidates
+
+
+def derivation_keys(keys: BeaconKeys) -> list[tuple[str, bytes]]:
+    """Return the named AES keys of the derivation search, without duplicates.
+
+    Each is a guess: the specification names only the EIK. The names go into the
+    report, the bytes never do.
+    """
+    candidates: list[tuple[str, bytes]] = []
+    if keys.eik is not None:
+        candidates += [
+            ("eik", keys.eik),
+            ("eik_reversed", keys.eik[::-1]),
+            ("sha256_eik", hashlib.sha256(keys.eik).digest()),
+        ]
+        candidates += _mixing_key_candidates(keys.eik)
+    if keys.account_key is not None:
+        for name, form in account_key_forms(keys.account_key):
+            candidates += _account_key_candidates(name, form, keys.eik)
+    seen: set[bytes] = set()
+    unique: list[tuple[str, bytes]] = []
+    for name, key in candidates:
+        if key not in seen:
+            seen.add(key)
+            unique.append((name, key))
+    return unique
+
+
+def _block(  # noqa: PLR0913
+    counter: bytes,
+    *,
+    k_byte: int = _FHNA_K_BYTE,
+    first_pad: bytes = b"\xff" * 11,
+    second_pad: bytes = b"\x00" * 11,
+) -> bytes:
+    """Return a 32-byte PRF input laid out like Table 10."""
+    k = bytes((k_byte,))
+    return first_pad + k + counter + second_pad + k + counter
+
+
+def derivation_blocks(counter: int) -> list[tuple[str, bytes]]:
+    """Return the named PRF inputs for a counter; the first is the specified one."""
+    raw = counter.to_bytes(4, "big")
+    blocks = [
+        ("table10", _block(raw)),
+        ("counter_little_endian", _block(counter.to_bytes(4, "little"))),
+        ("pads_swapped", _block(raw, first_pad=b"\x00" * 11, second_pad=b"\xff" * 11)),
+        ("pads_zero", _block(raw, first_pad=b"\x00" * 11)),
+        ("pads_full", _block(raw, second_pad=b"\xff" * 11)),
+    ]
+    blocks += [(f"k_byte_{k}", _block(raw, k_byte=k)) for k in _DERIVATION_K_BYTES]
+    for value in _DERIVATION_COMPONENT_BYTES:
+        byte = bytes((value,))
+        blocks += [
+            (
+                f"component_{value}_first_pad",
+                _block(raw, first_pad=b"\xff" * 10 + byte),
+            ),
+            (
+                f"component_{value}_second_pad",
+                _block(raw, second_pad=b"\x00" * 10 + byte),
+            ),
+        ]
+    return blocks
+
+
+def _prf_any_key(key: bytes, block: bytes) -> bytes:
+    """Encrypt a block with AES-ECB under a key of any AES length."""
+    from .FMDNCrypto._lazy_crypto import (  # noqa: PLC0415 - heavy, executor only
+        get_algorithms_module,
+        get_cipher_class,
+        get_modes_module,
+    )
+
+    encryptor = (
+        get_cipher_class()(get_algorithms_module().AES(key), get_modes_module().ECB())
+    ).encryptor()
+    output: bytes = encryptor.update(block) + encryptor.finalize()
+    return output
+
+
+def search_eid_derivations(  # noqa: PLR0913
+    keys: BeaconKeys,
+    clock: int,
+    targets: Mapping[bytes, str],
+    windows: int,
+    stop: threading.Event | None = None,
+    *,
+    time_budget: float = EID_SEARCH_TIME_BUDGET,
+    now: Callable[[], float] = time.monotonic,
+) -> dict[str, Any]:
+    """Try key, block and scalar forms on secp160r1 against the target EIDs.
+
+    Runs in an executor. The counters are the rotation boundaries around the clock,
+    nearest first, so a stop at the time budget has covered the likeliest ones. A
+    hit names the forms that produced it; ``no_match`` only says that none of these
+    guesses holds, not that no derivation exists.
+    """
+    from .FMDNCrypto.curve_profile import (  # noqa: PLC0415 - heavy, executor only
+        BE_MOD_N,
+        BE_PLUS_ONE,
+        LE_PLUS_ONE,
+        SECP160R1_ORDER,
+        ScalarDerivation,
+        ScalarRule,
+        reduce_scalar,
+    )
+    from .FMDNCrypto.eid_generator import (  # noqa: PLC0415 - heavy, executor only
+        _serialize_legacy_x,
+    )
+
+    wanted = {
+        eid: name for eid, name in targets.items() if len(eid) == LEGACY_EID_BYTES
+    }
+    key_candidates = derivation_keys(keys)
+    scalars = (
+        ("big_mod_n", BE_MOD_N),
+        ("little_mod_n", ScalarDerivation("little", ScalarRule.MOD_N)),
+        ("big_plus_one", BE_PLUS_ONE),
+        ("little_plus_one", LE_PLUS_ONE),
+    )
+    report: dict[str, Any] = {
+        "result": "no_match",
+        "windows": windows,
+        "keys": len(key_candidates),
+        "blocks": len(derivation_blocks(0)),
+        "scalars": len(scalars),
+        "targets": len(wanted),
+    }
+    if not wanted:
+        report["result"] = "no_target"
+        return report
+    started = now()
+    checked = 0
+    base = clock - clock % ROTATION_SECONDS
+    for offset in _search_offsets(windows):
+        counter = base + offset * ROTATION_SECONDS
+        if not 0 <= counter <= MAX_COUNTER:
+            continue
+        for block_name, block in derivation_blocks(counter):
+            for key_name, key in key_candidates:
+                if stop is not None and stop.is_set():
+                    report["result"] = "cancelled"
+                elif now() - started > time_budget:
+                    report["result"] = "time_budget_exhausted"
+                if report["result"] != "no_match":
+                    report["combinations_checked"] = checked
+                    report["duration_s"] = round(now() - started, 1)
+                    return report
+                output = _prf_any_key(key, block)
+                for scalar_name, derivation in scalars:
+                    checked += 1
+                    scalar = reduce_scalar(
+                        derivation.read_prf_output(output),
+                        SECP160R1_ORDER,
+                        derivation.rule,
+                    )
+                    source = wanted.get(_serialize_legacy_x(scalar)) if scalar else None
+                    if source is not None:
+                        report.update(
+                            result="match",
+                            source=source,
+                            key=key_name,
+                            block=block_name,
+                            scalar=scalar_name,
+                            window_offset=offset,
+                            combinations_checked=checked,
+                            duration_s=round(now() - started, 1),
+                        )
+                        return report
+    report["combinations_checked"] = checked
+    report["duration_s"] = round(now() - started, 1)
+    return report
+
+
 # ---------------------------------------------------------------------------
 # GATT flow
 # ---------------------------------------------------------------------------
@@ -588,6 +872,7 @@ class _Runs:
     ringing: _Operation
     key_form: str | None
     include_raw: bool = False
+    protocol_version: int | None = None
 
 
 @dataclass(repr=False)
@@ -623,6 +908,7 @@ class _BeaconSession:
         self._timeout = timeout
         self._deadline = deadline
         self._waiting: tuple[int, asyncio.Future[bytes]] | None = None
+        self.protocol_version: int | None = None
 
     def on_notify(self, _sender: Any, data: bytearray) -> None:
         """Hand a notification with the expected data ID to the waiting operation."""
@@ -656,6 +942,7 @@ class _BeaconSession:
         try:
             async with asyncio.timeout(budget):
                 version, nonce = await self._read_nonce()
+                self.protocol_version = version
                 # The Provider notifies before the write completes, so the future
                 # exists before the write goes out.
                 await self._client.write_gatt_char(
@@ -866,6 +1153,7 @@ async def _read_state(
             ringing=ringing,
             key_form=form_name or provisioning_form,
             include_raw=include_raw,
+            protocol_version=session.protocol_version,
         ),
     )
 
@@ -903,8 +1191,14 @@ def _provisioning_report(
             provisioning.invalid_stage = "length"
             eids = _eid_candidates(provisioning.data)
         else:
-            known_form = True
-            eids = (reported_eid,) if reported_eid else ()
+            trailing = len(provisioning.data) in PROVISIONING_TRAILING_LENGTHS
+            known_form = not trailing
+            if trailing:
+                report["trailing_byte"] = provisioning.data[-1]
+            if reported_eid and is_placeholder_eid(reported_eid):
+                report["eid_placeholder"] = True
+            elif reported_eid:
+                eids = (reported_eid,)
             report["eik_set"] = eik_set
             report["is_owner"] = is_owner
             report["eid_prefix"] = reported_eid[:4].hex()
@@ -952,6 +1246,7 @@ def _build_report(keys: BeaconKeys, runs: _Runs) -> _Reading:
             eid_check["inferred_form"] = True
 
     report = {
+        "protocol_version": runs.protocol_version,
         "key_form": runs.key_form,
         "eik_set": eik_set,
         "is_owner": is_owner,
@@ -996,6 +1291,26 @@ class _BleStack:
     establish_connection: Any
 
 
+@dataclass(repr=False)
+class _Target:
+    """What the last chosen address advertised; the EID stays out of the report."""
+
+    eid: bytes | None = None
+
+
+def _note_advertisement(info: Any, report: dict[str, Any], target: _Target) -> None:
+    """Report signal and identity of the chosen address and keep its advertised EID."""
+    report["rssi"] = getattr(info, "rssi", None)
+    service_data: Mapping[str, bytes] = getattr(info, "service_data", None) or {}
+    target.eid = advertised_eid(service_data)
+    report["identity_form"] = identity_form(service_data).value
+    report["advertised_tx_power"] = getattr(info, "tx_power", None)
+    if target.eid is None:
+        report.pop("advertised_eid_prefix", None)
+    else:
+        report["advertised_eid_prefix"] = target.eid[:4].hex()
+
+
 async def _async_connect_once(  # noqa: PLR0913
     stack: _BleStack,
     device: Any,
@@ -1028,8 +1343,14 @@ async def _async_connect_once(  # noqa: PLR0913
     return client
 
 
-async def _async_connect_address(
-    hass: Any, stack: _BleStack, target: str, report: dict[str, Any], timeout: float
+async def _async_connect_address(  # noqa: PLR0913
+    hass: Any,
+    stack: _BleStack,
+    target: str,
+    report: dict[str, Any],
+    timeout: float,
+    *,
+    seen: _Target,
 ) -> Any:
     """Connect to the address the caller named."""
     report["address_masked"] = mask_address(target)
@@ -1039,8 +1360,11 @@ async def _async_connect_address(
     if device is None:
         report["connection"] = "device_not_connectable"
         return None
-    last_info = stack.bluetooth.async_last_service_info(hass, target, connectable=True)
-    report["rssi"] = getattr(last_info, "rssi", None)
+    _note_advertisement(
+        stack.bluetooth.async_last_service_info(hass, target, connectable=True),
+        report,
+        seen,
+    )
     return await _async_connect_once(
         stack, device, target, report, budget=timeout, max_attempts=2
     )
@@ -1052,12 +1376,15 @@ def _attempt_budget(remaining: float, untried: int, attempts_left: int) -> float
     return min(remaining / shares, CONNECT_ATTEMPT_LIMIT)
 
 
-async def _async_connect_search(
+async def _async_connect_search(  # noqa: PLR0913
     hass: Any,
     stack: _BleStack,
     account_key: bytes,
     report: dict[str, Any],
     connect_until: float,
+    *,
+    seen: _Target,
+    form: IdentityForm = IdentityForm.ANY,
 ) -> Any:
     """Connect to the newest matching advertiser, moving on when one fails.
 
@@ -1074,10 +1401,13 @@ async def _async_connect_search(
             select_candidates,
             list(stack.bluetooth.async_discovered_service_info(hass, connectable=True)),
             account_key,
+            form,
         )
         report["frames_seen"] = selection.frames_seen
         report["frames_matched"] = selection.frames_matched
         report["frames_unparsed"] = selection.frames_unparsed
+        if form is not IdentityForm.ANY:
+            report["frames_other_form"] = selection.frames_other_form
         if not selection.addresses:
             if not attempts:
                 report["connection"] = "no_matching_frame"
@@ -1094,10 +1424,11 @@ async def _async_connect_search(
         )
         tried.append(target)
         report["address_masked"] = mask_address(target)
-        last_info = stack.bluetooth.async_last_service_info(
-            hass, target, connectable=True
+        _note_advertisement(
+            stack.bluetooth.async_last_service_info(hass, target, connectable=True),
+            report,
+            seen,
         )
-        report["rssi"] = getattr(last_info, "rssi", None)
         seen_at = selection.seen_at.get(target, 0.0)
         attempt: dict[str, Any] = {
             "address_masked": mask_address(target),
@@ -1137,12 +1468,16 @@ async def async_probe_tracker(  # noqa: PLR0913
     include_raw: bool = False,
     search_seconds: int = 0,
     search_eid: bytes | None = None,
+    form: IdentityForm = IdentityForm.ANY,
+    derivation_windows: int = 0,
 ) -> dict[str, Any]:
     """Find the tracker, connect and read its state, holding one connection.
 
     Radio outcomes are part of the response, because the counters are the diagnosis.
-    An EID search runs only when ``search_seconds`` is set, after the link is closed,
-    so it does not hold a proxy connection slot.
+    An EID search runs only when ``search_seconds`` is set, the derivation search only
+    when ``derivation_windows`` is set, both after the link is closed, so they do not
+    hold a proxy connection slot. ``form`` restricts the filter search to one identity
+    and has no effect on a named address.
     """
     (
         bluetooth,
@@ -1160,10 +1495,14 @@ async def async_probe_tracker(  # noqa: PLR0913
         "frames_matched": 0,
         "frames_unparsed": 0,
     }
+    seen = _Target()
+    searches = _Searches(search_seconds, search_eid, derivation_windows)
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     if address is not None:
-        client = await _async_connect_address(hass, stack, address, report, timeout)
+        client = await _async_connect_address(
+            hass, stack, address, report, timeout, seen=seen
+        )
     elif keys.account_key is None:
         report["connection"] = "no_account_key_for_search"
         client = None
@@ -1174,12 +1513,13 @@ async def async_probe_tracker(  # noqa: PLR0913
             keys.account_key,
             report,
             deadline - min(READ_RESERVE_SECONDS, timeout / 3),
+            seen=seen,
+            form=form,
         )
     if client is None:
-        if search_seconds > 0:
-            report["eid_search"] = await _async_search(
-                hass, keys, None, search_seconds, search_eid
-            )
+        await _async_run_searches(
+            hass, keys, None, seen=seen, searches=searches, report=report
+        )
         return report
 
     reading: _Reading | None = None
@@ -1198,36 +1538,111 @@ async def async_probe_tracker(  # noqa: PLR0913
                 await client.disconnect()
         except Exception as err:  # noqa: BLE001 - nothing left to do
             _LOGGER.debug("Beacon disconnect failed: %s", type(err).__name__)
-    if search_seconds > 0:
-        report["eid_search"] = await _async_search(
-            hass, keys, reading, search_seconds, search_eid
-        )
+    await _async_run_searches(
+        hass, keys, reading, seen=seen, searches=searches, report=report
+    )
     return report
+
+
+@dataclass(frozen=True, repr=False)
+class _Searches:
+    """The searches one call asked for."""
+
+    seconds: int = 0
+    eid: bytes | None = None
+    derivation_windows: int = 0
+
+
+def _search_targets(
+    reading: _Reading, seen: _Target, searches: _Searches
+) -> dict[bytes, str]:
+    """Return the EIDs to look for and the name of their source."""
+    targets = dict.fromkeys(reading.eids, "reported")
+    if seen.eid is not None:
+        targets[seen.eid] = "advertised"
+    if searches.eid is not None:
+        targets[searches.eid] = "supplied"
+    return targets
+
+
+async def _async_run_searches(  # noqa: PLR0913
+    hass: Any,
+    keys: BeaconKeys,
+    reading: _Reading | None,
+    *,
+    seen: _Target,
+    searches: _Searches,
+    report: dict[str, Any],
+) -> None:
+    """Run what the call asked for, after the link is closed."""
+    if keys.eik is not None and reading is not None and reading.clock is not None:
+        if seen.eid is not None:
+            report["advertised_eid_check"] = await hass.async_add_executor_job(
+                compare_eid, keys.eik, reading.clock, seen.eid
+            )
+    if searches.seconds > 0:
+        report["eid_search"] = await _async_search(hass, keys, reading, seen, searches)
+    if searches.derivation_windows > 0:
+        report["derivation_search"] = await _async_derivation_search(
+            hass, keys, reading, seen, searches
+        )
+
+
+async def _async_in_executor_with_stop(
+    hass: Any, function: Callable[..., dict[str, Any]], *args: Any
+) -> dict[str, Any]:
+    """Run a search in the executor and stop it when the caller is cancelled."""
+    stop = threading.Event()
+    try:
+        result: dict[str, Any] = await hass.async_add_executor_job(
+            function, *args, stop
+        )
+    except asyncio.CancelledError:
+        stop.set()
+        raise
+    return result
 
 
 async def _async_search(
     hass: Any,
     keys: BeaconKeys,
     reading: _Reading | None,
-    search_seconds: int,
-    search_eid: bytes | None,
+    seen: _Target,
+    searches: _Searches,
 ) -> dict[str, Any]:
     """Run the requested EID search, or say why there is nothing to search."""
     if keys.eik is None:
         return {"result": "no_eik"}
     if reading is None or reading.clock is None:
         return {"result": "no_clock"}
-    targets = dict.fromkeys(reading.eids, "reported")
-    if search_eid is not None:
-        targets[search_eid] = "supplied"
+    targets = _search_targets(reading, seen, searches)
     if not targets:
         return {"result": "no_target"}
-    stop = threading.Event()
-    try:
-        result: dict[str, Any] = await hass.async_add_executor_job(
-            search_eid_counter, keys.eik, reading.clock, targets, search_seconds, stop
-        )
-    except asyncio.CancelledError:
-        stop.set()
-        raise
-    return result
+    return await _async_in_executor_with_stop(
+        hass, search_eid_counter, keys.eik, reading.clock, targets, searches.seconds
+    )
+
+
+async def _async_derivation_search(
+    hass: Any,
+    keys: BeaconKeys,
+    reading: _Reading | None,
+    seen: _Target,
+    searches: _Searches,
+) -> dict[str, Any]:
+    """Run the requested derivation search, or say why there is nothing to search."""
+    if keys.eik is None and keys.account_key is None:
+        return {"result": "no_key"}
+    if reading is None or reading.clock is None:
+        return {"result": "no_clock"}
+    targets = _search_targets(reading, seen, searches)
+    if not targets:
+        return {"result": "no_target"}
+    return await _async_in_executor_with_stop(
+        hass,
+        search_eid_derivations,
+        keys,
+        reading.clock,
+        targets,
+        searches.derivation_windows,
+    )

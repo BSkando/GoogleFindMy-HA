@@ -217,7 +217,31 @@ read_beacon_state:
           unit_of_measurement: s
     search_eid:
       name: EID to search for (optional)
-      description: "An EID seen in an advertisement, 20 or 32 bytes in hexadecimal. Searched in addition to the EID the tracker reports. Used only with a search window."
+      description: "An EID seen in an advertisement, 20 or 32 bytes in hexadecimal. Searched in addition to the EID the tracker reports and the EID the chosen address advertises. Used only with a search."
       required: false
       selector:
         text:
+    identity_form:
+      name: Identity to connect to (optional)
+      description: "Which identity of the tracker to connect to: any, the locator that sends the FMDN frame, or the audio device that announces Common Audio. Ignored when an address is given."
+      required: false
+      default: any
+      selector:
+        select:
+          options:
+            - any
+            - locator
+            - audio
+    derivation_windows:
+      name: Derivation search window (optional)
+      description: >-
+        Rotation windows of 1024 s to search on each side of the tracker's clock, trying
+        other key and block forms against the target EIDs. 0 turns it off. It runs after
+        the connection has closed, adds up to 5 minutes and loads the CPU meanwhile.
+      required: false
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 256
+          mode: box

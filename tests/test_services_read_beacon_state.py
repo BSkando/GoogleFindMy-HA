@@ -14,7 +14,7 @@ from homeassistant.core import ServiceCall, SupportsResponse
 from homeassistant.exceptions import ServiceValidationError
 
 from custom_components.googlefindmy import const, services
-from custom_components.googlefindmy.beacon_actions import BeaconKeys
+from custom_components.googlefindmy.beacon_actions import BeaconKeys, IdentityForm
 from tests.helpers.config_entries_stub import make_config_entry
 from tests.helpers.service_doubles import FakeServiceRegistry
 
@@ -461,3 +461,39 @@ async def test_search_window_arrives_as_a_whole_number(harness: _Harness) -> Non
     call = harness.call(search_seconds=1.5)
     assert call.data["search_seconds"] == 1
     assert type(call.data["search_seconds"]) is int
+
+
+@pytest.mark.asyncio
+async def test_identity_form_and_derivation_default_to_off(harness: _Harness) -> None:
+    await harness.register()
+    await harness.handler(harness.call())
+    call = harness.probe_calls[0]
+    assert call["form"] is IdentityForm.ANY
+    assert call["derivation_windows"] == 0
+
+
+@pytest.mark.asyncio
+async def test_identity_form_and_derivation_reach_the_probe(harness: _Harness) -> None:
+    await harness.register()
+    await harness.handler(harness.call(identity_form="locator", derivation_windows=8))
+    call = harness.probe_calls[0]
+    assert call["form"] is IdentityForm.LOCATOR
+    assert call["derivation_windows"] == 8
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"identity_form": "other"},
+        {"identity_form": "both"},
+        {"derivation_windows": -1},
+        {"derivation_windows": 257},
+    ],
+)
+@pytest.mark.asyncio
+async def test_identity_form_and_derivation_outside_the_limits_are_rejected(
+    harness: _Harness, fields: dict[str, Any]
+) -> None:
+    await harness.register()
+    with pytest.raises(vol.Invalid):
+        harness.call(**fields)

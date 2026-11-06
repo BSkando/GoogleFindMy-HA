@@ -457,7 +457,15 @@
         },
         "search_eid": {
           "name": "Szukany EID (opcjonalnie)",
-          "description": "EID widziany w reklamie, 20 lub 32 bajty szesnastkowo. Szukany oprócz EID zgłaszanego przez tracker. Używany tylko z oknem wyszukiwania."
+          "description": "EID widziany w reklamie, 20 lub 32 bajty szesnastkowo. Szukany oprócz EID zgłaszanego przez tracker i EID rozgłaszanego przez wybrany adres. Używany tylko z wyszukiwaniem."
+        },
+        "identity_form": {
+          "name": "Tożsamość do połączenia (opcjonalnie)",
+          "description": "Z którą tożsamością trackera się połączyć: dowolną, lokalizatorem wysyłającym ramkę FMDN lub urządzeniem audio ogłaszającym Common Audio. Ignorowane, gdy podano adres."
+        },
+        "derivation_windows": {
+          "name": "Okno wyszukiwania wyprowadzeń (opcjonalnie)",
+          "description": "Okna rotacji po 1024 s przeszukiwane po obu stronach zegara trackera, z próbą innych form klucza i bloku względem szukanych EID. 0 wyłącza. Działa po zamknięciu połączenia, dodaje do 5 minut i w tym czasie obciąża procesor."
         }
       }
     }

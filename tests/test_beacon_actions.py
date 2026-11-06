@@ -1428,7 +1428,9 @@ async def test_search_says_why_it_cannot_run(
     search_eid: bytes | None,
     result: str,
 ) -> None:
-    report = await ba._async_search(_Hass(), keys, reading, 5, search_eid)
+    report = await ba._async_search(
+        _Hass(), keys, reading, ba._Target(), ba._Searches(5, search_eid)
+    )
     assert report == {"result": result}
 
 
@@ -1559,8 +1561,8 @@ async def test_read_reserve_is_ten_seconds_at_most_and_a_third_at_most(
 ) -> None:
     seen: list[float] = []
 
-    async def _search(*args: Any) -> None:
-        seen.append(args[-1])
+    async def _search(*args: Any, **_kw: Any) -> None:
+        seen.append(args[4])
 
     monkeypatch.setattr(ba, "_async_connect_search", _search)
     _install(monkeypatch, _Bluetooth([]), print)
@@ -1670,7 +1672,7 @@ async def test_cancelled_caller_stops_the_search() -> None:
 
     class _WaitingHass(_Hass):
         async def async_add_executor_job(self, _target: Any, *args: Any) -> Any:
-            seen.append(args[-1])
+            seen.append(args[4])
             started.set()
             await release.wait()
 
@@ -1679,8 +1681,8 @@ async def test_cancelled_caller_stops_the_search() -> None:
             _WaitingHass(),
             ba.BeaconKeys(ACCOUNT_KEY, EIK),
             ba._Reading({}, 5, (bytes(20),)),
-            5,
-            None,
+            ba._Target(),
+            ba._Searches(5),
         )
     )
     await started.wait()
@@ -1829,7 +1831,7 @@ async def test_used_up_time_after_an_error_drops_the_old_error_class(
     monkeypatch.setattr(loop, "time", later)
     try:
         await ba._async_connect_search(
-            _Hass(), stack, ACCOUNT_KEY, report, original() + 10.0
+            _Hass(), stack, ACCOUNT_KEY, report, original() + 10.0, seen=ba._Target()
         )
     finally:
         monkeypatch.undo()
@@ -1854,3 +1856,748 @@ async def test_search_without_account_key_says_why(
     )
     assert report["connection"] == "no_account_key_for_search"
     assert report["eid_search"] == {"result": expected}
+
+
+# --- two identities, the form with one more byte, derivations ------------------------
+
+
+LOCATOR_EID = bytes(range(100, 120))
+
+
+def _identity_info(  # noqa: PLR0913
+    address: str,
+    *,
+    seen: float = 1.0,
+    fmdn: bytes | None = None,
+    audio: bool = False,
+    tx_power: int | None = None,
+    key: bytes = ACCOUNT_KEY,
+) -> SimpleNamespace:
+    service_data = {ba.FAST_PAIR_SERVICE_DATA_UUID: _frame_for(key)}
+    if fmdn is not None:
+        service_data[ba.FMDN_SERVICE_DATA_UUID] = fmdn
+    if audio:
+        service_data[ba.COMMON_AUDIO_SERVICE_DATA_UUID] = b""
+    return SimpleNamespace(
+        address=address,
+        rssi=-60,
+        time=seen,
+        service_data=service_data,
+        tx_power=tx_power,
+    )
+
+
+class _IdentityBluetooth(_Bluetooth):
+    """Answers the last service info from the given advertisements."""
+
+    def async_last_service_info(
+        self, _hass: Any, address: str, connectable: bool = True
+    ) -> SimpleNamespace:
+        assert connectable is True
+        return next(info for info in self.infos if info.address == address)
+
+
+LOCATOR_INFO = _identity_info(
+    "AA:AA:AA:AA:AA:01", seen=1.0, fmdn=b"\x40" + LOCATOR_EID + b"\x63", tx_power=-9
+)
+AUDIO_INFO = _identity_info("AA:AA:AA:AA:AA:02", seen=2.0, audio=True, tx_power=-10)
+
+
+@pytest.mark.parametrize(
+    ("data", "eid"),
+    [
+        (b"\x03" + bytes(range(20)) + b"\x00", bytes(range(20))),
+        (b"\x03" + bytes(range(32)) + b"\x00", bytes(range(32))),
+        (b"\x03" + bytes(range(20)), bytes(range(20))),
+    ],
+)
+def test_form_with_one_more_byte_keeps_the_eid_field(data: bytes, eid: bytes) -> None:
+    assert ba.parse_provisioning(data) == (True, True, eid)
+
+
+@pytest.mark.asyncio
+async def test_one_more_byte_is_a_verified_answer_and_stays_marked() -> None:
+    report = await _run(
+        _LongEidProvider(trailer=b"\x00"), ba.BeaconKeys(ACCOUNT_KEY, EIK)
+    )
+    state = report["operations"]["read_provisioning_state"]
+    assert state["status"] == "ok"
+    assert state["trailing_byte"] == 0
+    assert "response" not in state
+    assert report["eik_set"] is True
+    assert report["is_owner"] is True
+    assert report["eid_check"]["result"] == "match"
+    assert report["eid_check"]["inferred_form"] is True
+
+
+@pytest.mark.asyncio
+async def test_specified_form_has_no_trailing_byte_and_is_not_inferred() -> None:
+    report = await _run(FakeProvider(), ba.BeaconKeys(ACCOUNT_KEY, EIK))
+    state = report["operations"]["read_provisioning_state"]
+    assert "trailing_byte" not in state
+    assert "eid_placeholder" not in state
+    assert "inferred_form" not in report["eid_check"]
+    assert report["protocol_version"] == 1
+
+
+class _PlaceholderProvider(_LongEidProvider):
+    """Answers ``0x01`` the way the locator of the measured earbuds does."""
+
+    def _provisioning_frame(self, version_nonce: bytes, eid: bytes) -> bytes:
+        return super()._provisioning_frame(version_nonce, b"\x00\xff" + bytes(18))
+
+
+@pytest.mark.asyncio
+async def test_placeholder_is_reported_and_is_no_eid() -> None:
+    provider = _PlaceholderProvider(trailer=b"\x00")
+    reading = await ba._read_state(provider, ba.BeaconKeys(ACCOUNT_KEY, EIK))
+    state = reading.report["operations"]["read_provisioning_state"]
+    assert state["eid_placeholder"] is True
+    assert state["eid_prefix"] == "00ff0000"
+    assert reading.eids == ()
+    assert reading.report["eid_check"] == {"result": "not_checked"}
+    assert reading.report["eik_set"] is True
+
+
+@pytest.mark.parametrize(
+    ("eid", "expected"),
+    [
+        (b"\x00\xff" + bytes(18), True),
+        (b"\x00\xff" + bytes(17) + b"\x01", False),
+        (b"\x00\xfe" + bytes(18), False),
+        (bytes(20), False),
+    ],
+)
+def test_placeholder_needs_its_exact_form(eid: bytes, expected: bool) -> None:
+    assert ba.is_placeholder_eid(eid) is expected
+
+
+@pytest.mark.parametrize(
+    ("service_data", "form"),
+    [
+        ({ba.FMDN_SERVICE_DATA_UUID: b"\x40"}, ba.IdentityForm.LOCATOR),
+        ({ba.COMMON_AUDIO_SERVICE_DATA_UUID: b""}, ba.IdentityForm.AUDIO),
+        (
+            {
+                ba.FMDN_SERVICE_DATA_UUID: b"\x40",
+                ba.COMMON_AUDIO_SERVICE_DATA_UUID: b"",
+            },
+            ba.IdentityForm.LOCATOR,
+        ),
+        ({ba.FAST_PAIR_SERVICE_DATA_UUID: b"\x10"}, ba.IdentityForm.OTHER),
+        ({}, ba.IdentityForm.OTHER),
+    ],
+)
+def test_identity_form_follows_the_service_data(
+    service_data: dict[str, bytes], form: ba.IdentityForm
+) -> None:
+    assert ba.identity_form(service_data) is form
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (b"\x40" + LOCATOR_EID, LOCATOR_EID),
+        (b"\x40" + LOCATOR_EID + b"\x63", LOCATOR_EID),
+        (b"\x41" + LOCATOR_EID + b"\x63", LOCATOR_EID),
+        (b"\x41" + bytes(range(32)) + b"\x63", bytes(range(32))),
+        (b"\x10" + LOCATOR_EID, None),
+        (b"\x40" + LOCATOR_EID[:19], None),
+        (b"\x40" + bytes(25), None),
+        (b"", None),
+    ],
+)
+def test_advertised_eid_reads_only_the_fmdn_frame_form(
+    raw: bytes, expected: bytes | None
+) -> None:
+    assert ba.advertised_eid({ba.FMDN_SERVICE_DATA_UUID: raw}) == expected
+
+
+def test_selection_without_a_form_takes_every_identity() -> None:
+    selection = ba.select_candidates([LOCATOR_INFO, AUDIO_INFO], ACCOUNT_KEY)
+    assert selection.addresses == ("AA:AA:AA:AA:AA:02", "AA:AA:AA:AA:AA:01")
+    assert selection.frames_other_form == 0
+
+
+@pytest.mark.parametrize(
+    ("form", "address"),
+    [
+        (ba.IdentityForm.LOCATOR, "AA:AA:AA:AA:AA:01"),
+        (ba.IdentityForm.AUDIO, "AA:AA:AA:AA:AA:02"),
+    ],
+)
+def test_selection_with_a_form_counts_the_other_identity(
+    form: ba.IdentityForm, address: str
+) -> None:
+    selection = ba.select_candidates([LOCATOR_INFO, AUDIO_INFO], ACCOUNT_KEY, form)
+    assert selection.addresses == (address,)
+    assert selection.frames_matched == 1
+    assert selection.frames_other_form == 1
+    assert selection.frames_seen == 2
+
+
+def test_selection_does_not_count_a_foreign_frame_as_the_other_identity() -> None:
+    foreign = _identity_info(
+        "AA:AA:AA:AA:AA:03", audio=True, key=bytes.fromhex("04" + "77" * 15)
+    )
+    selection = ba.select_candidates(
+        [LOCATOR_INFO, foreign], ACCOUNT_KEY, ba.IdentityForm.LOCATOR
+    )
+    assert selection.frames_other_form == 0
+
+
+def _probe_kwargs(monkeypatch: pytest.MonkeyPatch, provider: FakeProvider) -> None:
+    async def connect(*_args: Any, **_kw: Any) -> FakeProvider:
+        return provider
+
+    _install(monkeypatch, _IdentityBluetooth([LOCATOR_INFO, AUDIO_INFO]), connect)
+
+
+@pytest.mark.asyncio
+async def test_probe_reports_the_identity_it_connected_to(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _probe_kwargs(monkeypatch, _ConnectedProvider())
+    report = await ba.async_probe_tracker(
+        _Hass(),
+        ba.BeaconKeys(ACCOUNT_KEY, EIK),
+        address=None,
+        timeout=5,
+        form=ba.IdentityForm.LOCATOR,
+    )
+    assert report["address_masked"] == "...A:01"
+    assert report["identity_form"] == "locator"
+    assert report["advertised_tx_power"] == -9
+    assert report["advertised_eid_prefix"] == LOCATOR_EID[:4].hex()
+    assert report["frames_other_form"] == 1
+    assert report["advertised_eid_check"]["result"] == "no_match"
+    assert LOCATOR_EID.hex() not in repr(report)
+
+
+@pytest.mark.asyncio
+async def test_probe_without_a_form_reports_no_skipped_frames(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _probe_kwargs(monkeypatch, _ConnectedProvider())
+    report = await ba.async_probe_tracker(
+        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address=None, timeout=5
+    )
+    assert report["identity_form"] == "audio"
+    assert report["advertised_tx_power"] == -10
+    assert "frames_other_form" not in report
+    assert "advertised_eid_prefix" not in report
+    assert "advertised_eid_check" not in report
+
+
+@pytest.mark.asyncio
+async def test_advertised_eid_check_finds_the_derived_eid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    eid = generate_eid_variant(EIK, CLOCK, EidVariant.LEGACY_SECP160R1_X20_BE)
+    info = _identity_info("AA:AA:AA:AA:AA:01", fmdn=b"\x40" + eid)
+
+    async def connect(*_args: Any, **_kw: Any) -> FakeProvider:
+        return _ConnectedProvider()
+
+    _install(monkeypatch, _IdentityBluetooth([info]), connect)
+    report = await ba.async_probe_tracker(
+        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address=None, timeout=5
+    )
+    assert report["advertised_eid_check"]["result"] == "match"
+
+
+@pytest.mark.asyncio
+async def test_a_named_address_ignores_the_form(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _probe_kwargs(monkeypatch, _ConnectedProvider())
+    report = await ba.async_probe_tracker(
+        _Hass(),
+        ba.BeaconKeys(ACCOUNT_KEY, EIK),
+        address="AA:AA:AA:AA:AA:02",
+        timeout=5,
+        form=ba.IdentityForm.LOCATOR,
+    )
+    assert report["address_masked"] == "...A:02"
+    assert report["identity_form"] == "audio"
+    assert "frames_other_form" not in report
+
+
+@pytest.mark.asyncio
+async def test_no_frame_of_the_form_means_no_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def connect(*_args: Any, **_kw: Any) -> FakeProvider:
+        raise AssertionError("must not connect")
+
+    _install(monkeypatch, _IdentityBluetooth([AUDIO_INFO]), connect)
+    report = await ba.async_probe_tracker(
+        _Hass(),
+        ba.BeaconKeys(ACCOUNT_KEY, EIK),
+        address=None,
+        timeout=5,
+        form=ba.IdentityForm.LOCATOR,
+    )
+    assert report["connection"] == "no_matching_frame"
+    assert report["frames_other_form"] == 1
+
+
+def _sha(data: bytes) -> bytes:
+    return hashlib.sha256(data).digest()
+
+
+def _keyed(key: bytes, data: bytes) -> bytes:
+    return hmac.new(key, data, hashlib.sha256).digest()
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("eik", EIK),
+        ("eik_reversed", EIK[::-1]),
+        ("sha256_eik", _sha(EIK)),
+        ("sha256_eik_then_1", _sha(EIK + b"\x01")),
+        ("sha256_3_then_eik", _sha(b"\x03" + EIK)),
+        ("hmac_eik_7", _keyed(EIK, b"\x07")),
+        ("account_key_raw", ACCOUNT_KEY),
+        ("account_key_raw_twice", ACCOUNT_KEY + ACCOUNT_KEY),
+        ("account_key_raw_zero_padded", ACCOUNT_KEY + bytes(16)),
+        ("sha256_account_key_raw", _sha(ACCOUNT_KEY)),
+        ("sha256_eik_then_account_key_raw", _sha(EIK + ACCOUNT_KEY)),
+        ("sha256_account_key_raw_then_eik", _sha(ACCOUNT_KEY + EIK)),
+        ("hmac_eik_account_key_raw", _keyed(EIK, ACCOUNT_KEY)),
+        ("hmac_account_key_raw_eik", _keyed(ACCOUNT_KEY, EIK)),
+        ("account_key_first_byte_05", b"\x05" + ACCOUNT_KEY[1:]),
+    ],
+)
+def test_derivation_key_holds_what_its_name_says(name: str, expected: bytes) -> None:
+    assert dict(ba.derivation_keys(ba.BeaconKeys(ACCOUNT_KEY, EIK)))[name] == expected
+
+
+def test_derivation_keys_have_no_duplicates_and_valid_lengths() -> None:
+    candidates = ba.derivation_keys(ba.BeaconKeys(ACCOUNT_KEY, EIK))
+    assert len({key for _name, key in candidates}) == len(candidates)
+    assert len({name for name, _key in candidates}) == len(candidates)
+    assert {len(key) for _name, key in candidates} == {16, 32}
+
+
+def test_derivation_keys_follow_the_keys_at_hand() -> None:
+    assert not ba.derivation_keys(ba.BeaconKeys(None, None))
+    only_eik = dict(ba.derivation_keys(ba.BeaconKeys(None, EIK)))
+    assert "eik" in only_eik and not [n for n in only_eik if "account" in n]
+    only_account = dict(ba.derivation_keys(ba.BeaconKeys(ACCOUNT_KEY, None)))
+    assert "account_key_raw" in only_account and "eik" not in only_account
+    assert not [n for n in only_account if "eik" in n]
+
+
+COUNTER_BYTES = bytes.fromhex("00012000")
+COUNTER_VALUE = 0x00012000
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        (
+            "table10",
+            b"\xff" * 11
+            + b"\x0a"
+            + COUNTER_BYTES
+            + bytes(11)
+            + b"\x0a"
+            + COUNTER_BYTES,
+        ),
+        (
+            "counter_little_endian",
+            b"\xff" * 11
+            + b"\x0a"
+            + COUNTER_BYTES[::-1]
+            + bytes(11)
+            + b"\x0a"
+            + COUNTER_BYTES[::-1],
+        ),
+        (
+            "pads_swapped",
+            bytes(11)
+            + b"\x0a"
+            + COUNTER_BYTES
+            + b"\xff" * 11
+            + b"\x0a"
+            + COUNTER_BYTES,
+        ),
+        (
+            "pads_zero",
+            bytes(11) + b"\x0a" + COUNTER_BYTES + bytes(11) + b"\x0a" + COUNTER_BYTES,
+        ),
+        (
+            "pads_full",
+            b"\xff" * 11
+            + b"\x0a"
+            + COUNTER_BYTES
+            + b"\xff" * 11
+            + b"\x0a"
+            + COUNTER_BYTES,
+        ),
+        (
+            "k_byte_9",
+            b"\xff" * 11
+            + b"\x09"
+            + COUNTER_BYTES
+            + bytes(11)
+            + b"\x09"
+            + COUNTER_BYTES,
+        ),
+        (
+            "component_2_first_pad",
+            b"\xff" * 10
+            + b"\x02\x0a"
+            + COUNTER_BYTES
+            + bytes(11)
+            + b"\x0a"
+            + COUNTER_BYTES,
+        ),
+        (
+            "component_3_second_pad",
+            b"\xff" * 11
+            + b"\x0a"
+            + COUNTER_BYTES
+            + bytes(10)
+            + b"\x03\x0a"
+            + COUNTER_BYTES,
+        ),
+    ],
+)
+def test_derivation_block_holds_what_its_name_says(name: str, expected: bytes) -> None:
+    assert dict(ba.derivation_blocks(COUNTER_VALUE))[name] == expected
+
+
+def test_first_derivation_block_is_the_specified_one() -> None:
+    from custom_components.googlefindmy.FMDNCrypto.eid_generator import (  # noqa: PLC0415
+        build_table10_prf_input,
+    )
+
+    assert ba.derivation_blocks(COUNTER_VALUE)[0] == (
+        "table10",
+        build_table10_prf_input(COUNTER_VALUE),
+    )
+    blocks = ba.derivation_blocks(COUNTER_VALUE)
+    assert len({block for _name, block in blocks}) == len(blocks)
+    assert {len(block) for _name, block in blocks} == {32}
+
+
+def _derived_target(key: bytes, block: bytes, order: str, plus_one: bool) -> bytes:
+    """Compute a target EID with the curve library, apart from the search."""
+    import ecdsa  # noqa: PLC0415
+
+    encryptor = Cipher(algorithms.AES(key), modes.ECB()).encryptor()  # noqa: S305
+    value = int.from_bytes(encryptor.update(block) + encryptor.finalize(), order)
+    curve = ecdsa.SECP160r1
+    scalar = (value % (curve.order - 1)) + 1 if plus_one else value % curve.order
+    return int((curve.generator * scalar).x()).to_bytes(20, "big")
+
+
+def _narrow(
+    monkeypatch: pytest.MonkeyPatch, keys: list[str], blocks: list[str]
+) -> None:
+    all_keys = ba.derivation_keys
+    all_blocks = ba.derivation_blocks
+    monkeypatch.setattr(
+        ba,
+        "derivation_keys",
+        lambda given: [item for item in all_keys(given) if item[0] in keys],
+    )
+    monkeypatch.setattr(
+        ba,
+        "derivation_blocks",
+        lambda counter: [item for item in all_blocks(counter) if item[0] in blocks],
+    )
+
+
+@pytest.mark.parametrize(
+    ("key_name", "block_name", "order", "plus_one", "scalar"),
+    [
+        ("eik", "table10", "big", False, "big_mod_n"),
+        ("eik", "pads_swapped", "little", False, "little_mod_n"),
+        ("account_key_raw", "table10", "big", True, "big_plus_one"),
+        (
+            "sha256_eik_then_1",
+            "component_1_second_pad",
+            "little",
+            True,
+            "little_plus_one",
+        ),
+    ],
+)
+def test_derivation_search_names_the_forms_it_hit(  # noqa: PLR0913
+    monkeypatch: pytest.MonkeyPatch,
+    key_name: str,
+    block_name: str,
+    order: str,
+    plus_one: bool,
+    scalar: str,
+) -> None:
+    keys = ba.BeaconKeys(ACCOUNT_KEY, EIK)
+    boundary = CLOCK - CLOCK % 1024
+    key = dict(ba.derivation_keys(keys))[key_name]
+    block = dict(ba.derivation_blocks(boundary))[block_name]
+    target = _derived_target(key, block, order, plus_one)
+    _narrow(monkeypatch, ["eik", key_name], ["table10", block_name])
+    report = ba.search_eid_derivations(keys, CLOCK, {target: "advertised"}, 1)
+    assert report["result"] == "match"
+    assert report["source"] == "advertised"
+    assert report["key"] == key_name
+    assert report["block"] == block_name
+    assert report["scalar"] == scalar
+    assert report["window_offset"] == 0
+    assert key.hex() not in repr(report)
+
+
+@pytest.mark.parametrize("window_offset", [-2, 2])
+def test_derivation_search_reaches_its_outer_windows(
+    monkeypatch: pytest.MonkeyPatch, window_offset: int
+) -> None:
+    keys = ba.BeaconKeys(ACCOUNT_KEY, EIK)
+    boundary = CLOCK - CLOCK % 1024 + window_offset * 1024
+    target = _derived_target(
+        EIK, dict(ba.derivation_blocks(boundary))["table10"], "big", False
+    )
+    _narrow(monkeypatch, ["eik"], ["table10"])
+    report = ba.search_eid_derivations(keys, CLOCK, {target: "supplied"}, 2)
+    assert report["result"] == "match"
+    assert report["window_offset"] == window_offset
+    narrow = ba.search_eid_derivations(keys, CLOCK, {target: "supplied"}, 1)
+    assert narrow["result"] == "no_match"
+    assert narrow["combinations_checked"] == 3 * 1 * 1 * 4
+
+
+def test_derivation_search_uses_the_boundary_not_the_clock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    keys = ba.BeaconKeys(ACCOUNT_KEY, EIK)
+    target = _derived_target(
+        EIK, dict(ba.derivation_blocks(CLOCK))["table10"], "big", False
+    )
+    assert CLOCK % 1024
+    _narrow(monkeypatch, ["eik"], ["table10"])
+    report = ba.search_eid_derivations(keys, CLOCK, {target: "supplied"}, 1)
+    assert report["result"] == "no_match"
+
+
+def test_derivation_search_counts_what_it_tried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _narrow(monkeypatch, ["eik", "account_key_raw"], ["table10", "pads_zero"])
+    report = ba.search_eid_derivations(
+        ba.BeaconKeys(ACCOUNT_KEY, EIK), CLOCK, {bytes(20): "supplied"}, 0
+    )
+    assert report["result"] == "no_match"
+    assert report["keys"] == 2
+    assert report["blocks"] == 2
+    assert report["scalars"] == 4
+    assert report["targets"] == 1
+    assert report["combinations_checked"] == 16
+
+
+def test_derivation_search_needs_a_target_of_the_curve_length() -> None:
+    report = ba.search_eid_derivations(
+        ba.BeaconKeys(ACCOUNT_KEY, EIK), CLOCK, {bytes(32): "supplied"}, 1
+    )
+    assert report["result"] == "no_target"
+    assert "combinations_checked" not in report
+
+
+def test_derivation_search_stops_at_the_time_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ticks = iter(range(0, 10_000, 10))
+    report = ba.search_eid_derivations(
+        ba.BeaconKeys(ACCOUNT_KEY, EIK),
+        CLOCK,
+        {bytes(20): "supplied"},
+        1,
+        time_budget=25,
+        now=lambda: float(next(ticks)),
+    )
+    assert report["result"] == "time_budget_exhausted"
+    assert report["combinations_checked"] == 8
+
+
+def test_derivation_search_stops_when_asked() -> None:
+    stop = threading.Event()
+    stop.set()
+    report = ba.search_eid_derivations(
+        ba.BeaconKeys(ACCOUNT_KEY, EIK), CLOCK, {bytes(20): "supplied"}, 1, stop
+    )
+    assert report["result"] == "cancelled"
+    assert report["combinations_checked"] == 0
+
+
+def test_derivation_search_skips_counters_out_of_range(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _narrow(monkeypatch, ["eik"], ["table10"])
+    report = ba.search_eid_derivations(
+        ba.BeaconKeys(None, EIK), 100, {bytes(20): "supplied"}, 1
+    )
+    assert report["combinations_checked"] == 8
+
+
+@pytest.mark.asyncio
+async def test_no_derivation_search_runs_unless_asked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _search(*_args: Any) -> dict[str, Any]:
+        raise AssertionError("must not run")
+
+    monkeypatch.setattr(ba, "search_eid_derivations", _search)
+    _probe_kwargs(monkeypatch, _ConnectedProvider())
+    report = await ba.async_probe_tracker(
+        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address=None, timeout=5
+    )
+    assert "derivation_search" not in report
+
+
+@pytest.mark.asyncio
+async def test_derivation_search_runs_after_disconnect_with_every_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _ConnectedProvider()
+    seen: dict[str, Any] = {}
+
+    def _search(
+        _keys: ba.BeaconKeys,
+        clock: int,
+        targets: dict[bytes, str],
+        windows: int,
+        _stop: Any,
+    ) -> dict[str, Any]:
+        seen.update(
+            clock=clock,
+            sources=sorted(targets.values()),
+            windows=windows,
+            disconnects=provider.disconnects,
+            advertised=LOCATOR_EID in targets,
+        )
+        return {"result": "no_match"}
+
+    monkeypatch.setattr(ba, "search_eid_derivations", _search)
+    _probe_kwargs(monkeypatch, provider)
+    report = await ba.async_probe_tracker(
+        _Hass(),
+        ba.BeaconKeys(ACCOUNT_KEY, EIK),
+        address=None,
+        timeout=5,
+        form=ba.IdentityForm.LOCATOR,
+        search_eid=bytes(20),
+        derivation_windows=3,
+    )
+    assert report["derivation_search"] == {"result": "no_match"}
+    assert seen == {
+        "clock": CLOCK,
+        "sources": ["advertised", "reported", "supplied"],
+        "windows": 3,
+        "disconnects": 1,
+        "advertised": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_counter_search_also_looks_for_the_advertised_eid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[str] = []
+
+    def _search(
+        _eik: bytes, _clock: int, targets: dict[bytes, str], _window: int, _stop: Any
+    ) -> dict[str, Any]:
+        seen.extend(sorted(targets.values()))
+        return {"result": "no_match"}
+
+    monkeypatch.setattr(ba, "search_eid_counter", _search)
+    _probe_kwargs(monkeypatch, _ConnectedProvider())
+    await ba.async_probe_tracker(
+        _Hass(),
+        ba.BeaconKeys(ACCOUNT_KEY, EIK),
+        address=None,
+        timeout=5,
+        form=ba.IdentityForm.LOCATOR,
+        search_seconds=9,
+    )
+    assert seen == ["advertised", "reported"]
+
+
+@pytest.mark.parametrize(
+    ("keys", "reading", "searches", "result"),
+    [
+        (ba.BeaconKeys(None, None), None, ba._Searches(), "no_key"),
+        (ba.BeaconKeys(ACCOUNT_KEY, None), None, ba._Searches(), "no_clock"),
+        (
+            ba.BeaconKeys(ACCOUNT_KEY, EIK),
+            ba._Reading({}, None, (bytes(20),)),
+            ba._Searches(),
+            "no_clock",
+        ),
+        (
+            ba.BeaconKeys(ACCOUNT_KEY, EIK),
+            ba._Reading({}, 5, ()),
+            ba._Searches(),
+            "no_target",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_derivation_search_says_why_it_cannot_run(
+    keys: ba.BeaconKeys,
+    reading: ba._Reading | None,
+    searches: ba._Searches,
+    result: str,
+) -> None:
+    report = await ba._async_derivation_search(
+        _Hass(), keys, reading, ba._Target(), searches
+    )
+    assert report == {"result": result}
+
+
+@pytest.mark.asyncio
+async def test_failed_connection_says_why_the_derivation_search_did_not_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(monkeypatch, _IdentityBluetooth([]), None)
+    report = await ba.async_probe_tracker(
+        _Hass(),
+        ba.BeaconKeys(ACCOUNT_KEY, EIK),
+        address=None,
+        timeout=5,
+        derivation_windows=1,
+    )
+    assert report["connection"] == "no_matching_frame"
+    assert report["derivation_search"] == {"result": "no_clock"}
+
+
+@pytest.mark.asyncio
+async def test_cancelled_caller_stops_the_derivation_search() -> None:
+    stops: list[threading.Event] = []
+
+    class _HangingHass(_Hass):
+        async def async_add_executor_job(self, _target: Any, *args: Any) -> Any:
+            stops.append(args[-1])
+            await asyncio.Event().wait()
+
+    task = asyncio.create_task(
+        ba._async_derivation_search(
+            _HangingHass(),
+            ba.BeaconKeys(ACCOUNT_KEY, EIK),
+            ba._Reading({}, CLOCK, (bytes(20),)),
+            ba._Target(),
+            ba._Searches(derivation_windows=1),
+        )
+    )
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert stops[0].is_set()
+
+
+def test_new_limits_hold_their_values() -> None:
+    assert ba.DERIVATION_WINDOWS_MAX == 256
+    assert ba.PROVISIONING_TRAILING_LENGTHS == (22, 34)
