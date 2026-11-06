@@ -457,7 +457,15 @@
         },
         "search_eid": {
           "name": "Te zoeken EID (optioneel)",
-          "description": "Een EID uit een advertentie, 20 of 32 bytes als hexadecimale waarde. Wordt gezocht naast de EID die de tracker meldt. Alleen gebruikt met een zoekvenster."
+          "description": "Een EID uit een advertentie, 20 of 32 bytes als hexadecimale waarde. Wordt gezocht naast de EID die de tracker meldt en de EID die het gekozen adres uitzendt. Alleen gebruikt met een zoekopdracht."
+        },
+        "identity_form": {
+          "name": "Identiteit om mee te verbinden (optioneel)",
+          "description": "Met welke identiteit van de tracker wordt verbonden: elke, de locator die het FMDN-frame verstuurt, of het audioapparaat dat Common Audio aankondigt. Genegeerd als een adres is opgegeven."
+        },
+        "derivation_windows": {
+          "name": "Zoekvenster voor afleidingen (optioneel)",
+          "description": "Rotatievensters van 1024 s om aan elke kant van de klok van de tracker te doorzoeken, waarbij andere sleutel- en blokvormen tegen de gezochte EID's worden geprobeerd. 0 schakelt het uit. Het draait nadat de verbinding is gesloten, duurt tot 5 minuten langer en belast intussen de CPU."
         }
       }
     }

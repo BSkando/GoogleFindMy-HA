@@ -457,7 +457,15 @@
         },
         "search_eid": {
           "name": "EID à rechercher (facultatif)",
-          "description": "Un EID vu dans une annonce, 20 ou 32 octets en hexadécimal. Recherché en plus de l'EID signalé par le traceur. Utilisé uniquement avec une fenêtre de recherche."
+          "description": "Un EID vu dans une annonce, 20 ou 32 octets en hexadécimal. Recherché en plus de l'EID signalé par le traceur et de celui annoncé par l'adresse choisie. Utilisé uniquement avec une recherche."
+        },
+        "identity_form": {
+          "name": "Identité à connecter (facultatif)",
+          "description": "À quelle identité du traceur se connecter : n'importe laquelle, le localisateur qui envoie la trame FMDN ou l'appareil audio qui annonce Common Audio. Ignoré si une adresse est indiquée."
+        },
+        "derivation_windows": {
+          "name": "Fenêtre de recherche de dérivations (facultatif)",
+          "description": "Fenêtres de rotation de 1024 s à parcourir de chaque côté de l'horloge du traceur, en essayant d'autres formes de clé et de bloc sur les EID recherchés. 0 la désactive. Elle s'exécute après la fermeture de la connexion, ajoute jusqu'à 5 minutes et sollicite le processeur pendant ce temps."
         }
       }
     }

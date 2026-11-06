@@ -457,7 +457,15 @@
         },
         "search_eid": {
           "name": "Gesuchte EID (optional)",
-          "description": "Eine in einer Anzeige gesehene EID, 20 oder 32 Byte als Hexadezimalwert. Wird zusätzlich zur vom Tracker gemeldeten EID gesucht. Nur mit Suchfenster wirksam."
+          "description": "Eine in einer Anzeige gesehene EID, 20 oder 32 Byte als Hexadezimalwert. Wird zusätzlich zur vom Tracker gemeldeten und zur von der gewählten Adresse gesendeten EID gesucht. Nur mit einer Suche wirksam."
+        },
+        "identity_form": {
+          "name": "Identität für die Verbindung (optional)",
+          "description": "Mit welcher Identität des Trackers verbunden wird: einer beliebigen, dem Locator, der den FMDN-Rahmen sendet, oder dem Audiogerät, das Common Audio ankündigt. Wird ignoriert, wenn eine Adresse angegeben ist."
+        },
+        "derivation_windows": {
+          "name": "Fenster der Ableitungssuche (optional)",
+          "description": "Rotationsfenster von je 1024 s, die auf jeder Seite der Tracker-Uhr durchsucht werden; dabei werden andere Schlüssel- und Blockformen gegen die Ziel-EIDs probiert. 0 schaltet sie aus. Die Suche läuft nach dem Trennen der Verbindung, dauert bis zu 5 Minuten länger und belastet währenddessen die CPU."
         }
       }
     }

@@ -40,8 +40,10 @@ from homeassistant.helpers.service import async_register_admin_service
 
 from .Auth.log_safety import describe_exception
 from .beacon_actions import (
+    DERIVATION_WINDOWS_MAX,
     EID_SEARCH_MAX_SECONDS,
     BeaconKeys,
+    IdentityForm,
     async_probe_tracker,
 )
 from .const import (
@@ -153,6 +155,14 @@ _READ_BEACON_STATE_SCHEMA = vol.Schema(
             vol.Coerce(int),
         ),
         vol.Optional("search_eid"): str,
+        vol.Optional("identity_form", default=IdentityForm.ANY.value): vol.In(
+            [form.value for form in IdentityForm if form is not IdentityForm.OTHER]
+        ),
+        vol.Optional("derivation_windows", default=0): vol.All(
+            vol.Coerce(float),
+            vol.Range(min=0, max=DERIVATION_WINDOWS_MAX),
+            vol.Coerce(int),
+        ),
     }
 )
 
@@ -1901,6 +1911,8 @@ async def async_register_services(hass: HomeAssistant, ctx: dict[str, Any]) -> N
                 include_raw=call.data["include_raw_response"],
                 search_seconds=call.data["search_seconds"],
                 search_eid=bytes.fromhex(search_eid) if search_eid else None,
+                form=IdentityForm(call.data["identity_form"]),
+                derivation_windows=call.data["derivation_windows"],
             )
 
     # ---- Actual service registrations (global; visible even without entries) ----

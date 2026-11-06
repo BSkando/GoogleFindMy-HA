@@ -457,7 +457,15 @@
         },
         "search_eid": {
           "name": "EID que buscar (opcional)",
-          "description": "Un EID visto en un anuncio, 20 o 32 bytes en hexadecimal. Se busca además del EID que informa el rastreador. Solo se usa con una ventana de búsqueda."
+          "description": "Un EID visto en un anuncio, 20 o 32 bytes en hexadecimal. Se busca además del EID que informa el rastreador y del que anuncia la dirección elegida. Solo se usa con una búsqueda."
+        },
+        "identity_form": {
+          "name": "Identidad para conectar (opcional)",
+          "description": "A qué identidad del rastreador conectarse: cualquiera, el localizador que envía la trama FMDN o el dispositivo de audio que anuncia Common Audio. Se ignora si se indica una dirección."
+        },
+        "derivation_windows": {
+          "name": "Ventana de búsqueda de derivaciones (opcional)",
+          "description": "Ventanas de rotación de 1024 s que se buscan a cada lado del reloj del rastreador, probando otras formas de clave y de bloque contra los EID buscados. 0 la desactiva. Se ejecuta después de cerrar la conexión, añade hasta 5 minutos y carga la CPU mientras tanto."
         }
       }
     }

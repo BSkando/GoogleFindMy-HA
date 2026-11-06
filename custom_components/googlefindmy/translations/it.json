@@ -457,7 +457,15 @@
         },
         "search_eid": {
           "name": "EID da cercare (facoltativo)",
-          "description": "Un EID visto in un annuncio, 20 o 32 byte in esadecimale. Cercato in aggiunta all'EID riportato dal tracker. Usato solo con una finestra di ricerca."
+          "description": "Un EID visto in un annuncio, 20 o 32 byte in esadecimale. Cercato in aggiunta all'EID riportato dal tracker e a quello annunciato dall'indirizzo scelto. Usato solo con una ricerca."
+        },
+        "identity_form": {
+          "name": "Identità a cui connettersi (facoltativo)",
+          "description": "A quale identità del tracker connettersi: una qualsiasi, il localizzatore che invia il frame FMDN o il dispositivo audio che annuncia Common Audio. Ignorato se è indicato un indirizzo."
+        },
+        "derivation_windows": {
+          "name": "Finestra di ricerca delle derivazioni (facoltativo)",
+          "description": "Finestre di rotazione da 1024 s da cercare su ciascun lato dell'orologio del tracker, provando altre forme di chiave e di blocco sugli EID cercati. 0 la disattiva. Viene eseguita dopo la chiusura della connessione, aggiunge fino a 5 minuti e nel frattempo carica la CPU."
         }
       }
     }

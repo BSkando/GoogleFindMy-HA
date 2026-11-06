@@ -330,7 +330,7 @@ The integration provides a couple of Home Assistant Actions for use with automat
 | googlefindmy.locate_external | Device ID (required), Device Name (optional) | Trigger the locate flow via the external helper while optionally labeling logs with a human-readable device name. Requires control permission on the device's entities when called by a user (see [Permissions](#permissions)). |
 | googlefindmy.refresh_device_urls | - | Refreshes all device Map View URLs.  Useful if you are having problems with accessing Map View pages. Administrators only when called by a user. |
 | googlefindmy.rebuild_device_registry | - | Maintenance: rebuilds device registry links for Google Find My hubs and removes tracker devices incorrectly tied to the parent entry. Administrators only when called by a user. |
-| googlefindmy.read_beacon_state | Device ID (required), Bluetooth address (optional), Timeout (optional), Include raw response (optional), EID search window (optional), EID to search for (optional) | Diagnostic for administrators, returns a response: connects to the tracker over Bluetooth and reports whether it holds the integration's EIK, whether the account key is the owner key, and whether its EID matches. Read-only and silent unless called; see `docs/FMDN.md` section S13. |
+| googlefindmy.read_beacon_state | Device ID (required), Bluetooth address (optional), Timeout (optional), Include raw response (optional), EID search window (optional), EID to search for (optional), Identity to connect to (optional), Derivation search window (optional) | Diagnostic for administrators, returns a response: connects to the tracker over Bluetooth and reports whether it holds the integration's EIK, whether the account key is the owner key, and whether its EID matches. Read-only and silent unless called; see `docs/FMDN.md` section S13. |
 | googlefindmy.rebuild_registry | Mode (optional), Config Entry ID(s) (optional) | Maintenance. Mode *Rebuild* (the default) unloads each target entry, removes the entities and devices registered to its subentries and sets the entry up again, which creates them anew; the entry is set up again even when that removal fails. Mode *Migrate* reapplies the data→options, unique ID and button relinking migrations and reloads. Without a payload the first configured entry is targeted; pass one or many `entry_id` values to target specific entries. A disabled entry is cleared but stays disabled. Administrators only when called by a user. |
 
 ### Permissions
@@ -1037,6 +1037,7 @@ message listing the available IDs so you can pick the right account.
 ## Credits
 
 - Böttger, L. (2024). GoogleFindMyTools [Computer software]. https://github.com/leonboe1/GoogleFindMyTools
+- Böttger, L. (2026). Spot: an unofficial iPhone and iPad client for Google Find My Device / Find Hub trackers [Computer software]. https://github.com/leonboe1/Spot
 - Firebase Cloud Messaging integration. https://github.com/home-assistant/mobile-apps-fcm-push
 - @txitxo0 for his amazing work on the MQTT based tool that I used to help kickstart this project!
 - Open Location Code (Plus Code) encoder, (c) Google (Apache-2.0), vendored from
