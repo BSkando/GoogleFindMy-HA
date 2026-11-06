@@ -762,7 +762,7 @@ def test_wrong_data_lengths_are_protocol_errors(parser: Callable[[], Any]) -> No
     ],
 )
 def test_malformed_verified_data_is_reported_not_raised(operation: ba._Runs) -> None:
-    report = ba._build_report(ba.BeaconKeys(ACCOUNT_KEY, EIK), operation)
+    report = ba._build_report(ba.BeaconKeys(ACCOUNT_KEY, EIK), operation).report
     assert "invalid_response" in {o["status"] for o in report["operations"].values()}
     assert report["eik_matches"] is None
 
@@ -969,3 +969,462 @@ async def test_hanging_subscription_is_bounded_by_the_deadline(
     assert report["connection"] == "gatt_setup_failed"
     assert report["error_class"] == "TimeoutError"
     assert provider.disconnects == 1
+
+
+# --- address choice -----------------------------------------------------------------
+
+
+def _timed_info(address: str, rssi: int, seen: float) -> SimpleNamespace:
+    info = _info(address, rssi, _frame_for(ACCOUNT_KEY))
+    info.time = seen
+    return info
+
+
+def test_newest_sighting_beats_the_stronger_old_address() -> None:
+    selection = ba.select_candidates(
+        [
+            _timed_info("AA:AA:AA:AA:AA:01", -40, 100.0),
+            _timed_info("AA:AA:AA:AA:AA:02", -80, 200.0),
+        ],
+        ACCOUNT_KEY,
+    )
+    assert selection.addresses[0] == "AA:AA:AA:AA:AA:02"
+
+
+def test_signal_breaks_a_tie_between_equally_recent_sightings() -> None:
+    selection = ba.select_candidates(
+        [
+            _timed_info("AA:AA:AA:AA:AA:01", -80, 100.0),
+            _timed_info("AA:AA:AA:AA:AA:02", -40, 100.0),
+        ],
+        ACCOUNT_KEY,
+    )
+    assert selection.addresses[0] == "AA:AA:AA:AA:AA:02"
+
+
+@pytest.mark.asyncio
+async def test_failed_address_moves_on_to_the_next_and_holds_one_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _ConnectedProvider()
+    names: list[str] = []
+
+    async def connect(_cls: Any, _device: object, name: str, **kw: Any) -> FakeProvider:
+        names.append(name)
+        assert kw["max_attempts"] == 1
+        if name == "...A:02":
+            raise ProviderError(0x85)
+        return provider
+
+    bluetooth = _Bluetooth(
+        [
+            _timed_info("AA:AA:AA:AA:AA:01", -40, 100.0),
+            _timed_info("AA:AA:AA:AA:AA:02", -80, 200.0),
+        ]
+    )
+    _install(monkeypatch, bluetooth, connect)
+    report = await ba.async_probe_tracker(
+        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address=None, timeout=5
+    )
+    assert names == ["...A:02", "...A:01"]
+    assert report["connection"] == "connected"
+    assert report["address_masked"] == "...A:01"
+    assert "error_class" not in report
+    assert [a["result"] for a in report["connection_attempts"]] == [
+        "connection_failed",
+        "connected",
+    ]
+    assert provider.disconnects == 1
+    assert "AA:AA:AA" not in repr(report)
+
+
+@pytest.mark.asyncio
+async def test_address_that_appears_after_a_failure_is_next_in_line(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _ConnectedProvider()
+    names: list[str] = []
+    bluetooth = _Bluetooth([_timed_info("AA:AA:AA:AA:AA:01", -40, 100.0)])
+
+    async def connect(_cls: Any, _device: object, name: str, **_kw: Any) -> Any:
+        names.append(name)
+        if name == "...A:01":
+            bluetooth.infos.append(_timed_info("AA:AA:AA:AA:AA:02", -80, 200.0))
+            raise ProviderError(0x85)
+        return provider
+
+    _install(monkeypatch, bluetooth, connect)
+    report = await ba.async_probe_tracker(
+        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address=None, timeout=5
+    )
+    assert names == ["...A:01", "...A:02"]
+    assert report["connection"] == "connected"
+
+
+@pytest.mark.asyncio
+async def test_tries_stop_at_the_limit_and_keep_the_last_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    names: list[str] = []
+
+    async def connect(_cls: Any, _device: object, name: str, **_kw: Any) -> None:
+        names.append(name)
+        raise ProviderError(0x85)
+
+    _install(
+        monkeypatch,
+        _Bluetooth([_timed_info("AA:AA:AA:AA:AA:01", -40, 100.0)]),
+        connect,
+    )
+    report = await ba.async_probe_tracker(
+        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address=None, timeout=5
+    )
+    assert len(names) == ba.MAX_CONNECT_ATTEMPTS
+    assert report["connection"] == "connection_failed"
+    assert report["error_class"] == "ProviderError"
+
+
+@pytest.mark.asyncio
+async def test_a_hanging_address_gets_only_its_share_of_the_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _ConnectedProvider()
+
+    async def connect(_cls: Any, _device: object, name: str, **_kw: Any) -> Any:
+        if name == "...A:02":
+            await asyncio.sleep(60)
+        return provider
+
+    _install(
+        monkeypatch,
+        _Bluetooth(
+            [
+                _timed_info("AA:AA:AA:AA:AA:01", -40, 100.0),
+                _timed_info("AA:AA:AA:AA:AA:02", -80, 200.0),
+            ]
+        ),
+        connect,
+    )
+    report = await ba.async_probe_tracker(
+        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address=None, timeout=0.3
+    )
+    assert report["connection"] == "connected"
+    assert report["connection_attempts"][0]["result"] == "timeout"
+
+
+@pytest.mark.asyncio
+async def test_device_gone_from_the_cache_counts_as_a_try(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def connect(*_args: Any, **_kw: Any) -> None:
+        raise AssertionError("no device, no connection")
+
+    _install(
+        monkeypatch,
+        _Bluetooth([_timed_info("AA:AA:AA:AA:AA:01", -40, 100.0)], device=None),
+        connect,
+    )
+    report = await ba.async_probe_tracker(
+        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address=None, timeout=5
+    )
+    assert report["connection"] == "device_not_connectable"
+    assert len(report["connection_attempts"]) == ba.MAX_CONNECT_ATTEMPTS
+
+
+@pytest.mark.asyncio
+async def test_named_address_is_tried_once_and_lists_no_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _ConnectedProvider()
+
+    async def connect(_cls: Any, _device: object, _name: str, **kw: Any) -> Any:
+        assert kw["max_attempts"] == 2
+        return provider
+
+    _install(monkeypatch, _Bluetooth([]), connect)
+    report = await ba.async_probe_tracker(
+        _Hass(),
+        ba.BeaconKeys(ACCOUNT_KEY, EIK),
+        address="AA:BB:CC:DD:EE:FF",
+        timeout=5,
+    )
+    assert report["connection"] == "connected"
+    assert "connection_attempts" not in report
+
+
+# --- responses the parser does not know ---------------------------------------------
+
+
+class _LongEidProvider(_ConnectedProvider):
+    """Answers ``0x01`` with extra bytes behind the EID, correctly authenticated."""
+
+    def __init__(self, trailer: bytes = b"\x07\x07", **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.trailer = trailer
+        self.length_field: int | None = None
+
+    def _provisioning_frame(self, version_nonce: bytes, eid: bytes) -> bytes:
+        additional = b"\x03" + eid + self.trailer
+        length = (
+            self.length_field if self.length_field is not None else len(additional) + 8
+        )
+        head = bytes((0x01, length))
+        auth = _sign(self.account_key, version_nonce, head, additional, b"\x01")
+        return head + auth + additional
+
+    async def write_gatt_char(
+        self, uuid: str, data: bytes, response: bool = True
+    ) -> None:
+        if data[0] != 0x01:
+            await super().write_gatt_char(uuid, data, response)
+            return
+        self.calls.append(("write", data[0]))
+        assert self.nonce is not None and self.callback is not None
+        eid = generate_eid_variant(EIK, self.eid_clock, self.eid_variant)
+        self.callback(
+            None,
+            bytearray(self._provisioning_frame(b"\x01" + self.nonce, eid)),
+        )
+        self.nonce = None
+
+
+@pytest.mark.asyncio
+async def test_unknown_length_reports_its_shape_and_still_checks_the_eid() -> None:
+    provider = _LongEidProvider()
+    report = await _run(provider, ba.BeaconKeys(ACCOUNT_KEY, EIK))
+    state = report["operations"]["read_provisioning_state"]
+    assert state["status"] == "invalid_response"
+    response = state["response"]
+    assert response["stage"] == "length"
+    assert response["additional_length"] == 23
+    assert response["frame_length"] == 33
+    assert response["auth_valid"] is True
+    assert response["flags_byte"] == 0x03
+    assert report["eik_set"] is None
+    assert report["eid_check"]["result"] == "match"
+    assert report["eid_check"]["inferred_form"] is True
+    assert "raw_frame" not in state
+    eid = generate_eid_variant(EIK, CLOCK, EidVariant.LEGACY_SECP160R1_X20_BE)
+    assert eid.hex() not in repr(report)
+
+
+@pytest.mark.asyncio
+async def test_wrong_length_field_reports_stage_frame_and_field_value() -> None:
+    provider = _LongEidProvider(trailer=b"")
+    provider.length_field = 21
+    report = await _run(provider, ba.BeaconKeys(ACCOUNT_KEY, EIK))
+    response = report["operations"]["read_provisioning_state"]["response"]
+    assert response["stage"] == "frame"
+    assert response["data_length_field"] == 21
+    assert response["auth_valid"] is True
+    assert report["eid_check"]["result"] == "match"
+    assert report["eid_check"]["inferred_form"] is True
+
+
+@pytest.mark.asyncio
+async def test_forged_frame_of_unknown_form_yields_no_flags_and_no_eid() -> None:
+    provider = _LongEidProvider(account_key=ACCOUNT_KEY)
+    original = provider._provisioning_frame
+
+    def forged(version_nonce: bytes, eid: bytes) -> bytes:
+        frame = bytearray(original(version_nonce, eid))
+        frame[2] ^= 0xFF
+        frame[1] = 21
+        return bytes(frame)
+
+    provider._provisioning_frame = forged  # type: ignore[method-assign]
+    report = await _run(provider, ba.BeaconKeys(ACCOUNT_KEY, EIK))
+    response = report["operations"]["read_provisioning_state"]["response"]
+    assert response["auth_valid"] is False
+    assert "flags_byte" not in response
+    assert "data_prefix" not in response
+    assert report["eid_check"]["result"] == "not_checked"
+
+
+@pytest.mark.asyncio
+async def test_raw_frame_appears_only_on_request_and_only_for_provisioning() -> None:
+    report = await ba.read_beacon_state(
+        FakeProvider(), ba.BeaconKeys(ACCOUNT_KEY, EIK), include_raw=True
+    )
+    operations = report["operations"]
+    assert len(operations["read_provisioning_state"]["raw_frame"]) == 2 * (2 + 8 + 21)
+    assert "raw_frame" not in operations["read_beacon_parameters"]
+    assert "raw_frame" not in operations["read_ringing_state"]
+    assert "response" not in operations["read_provisioning_state"]
+    plain = await _run(FakeProvider(), ba.BeaconKeys(ACCOUNT_KEY, EIK))
+    assert "raw_frame" not in plain["operations"]["read_provisioning_state"]
+
+
+@pytest.mark.parametrize(
+    ("additional", "expected"),
+    [
+        (b"\x03", ()),
+        (b"\x03" + bytes(19), (b"\x03" + bytes(19),)),
+        (bytes(20), (bytes(20),)),
+        (b"\x03" + bytes(20), (bytes(20),)),
+        (b"\x03" + bytes(32), (bytes(20), bytes(32))),
+        (bytes(32), (bytes(20), bytes(32))),
+    ],
+)
+def test_eid_candidates_follow_the_data_length(
+    additional: bytes, expected: tuple[bytes, ...]
+) -> None:
+    assert ba._eid_candidates(additional) == expected
+
+
+# --- second-by-second search --------------------------------------------------------
+
+
+def _unmasked_eid(counter: int, variant: EidVariant) -> bytes:
+    """Compute the expected EID independently of the module's block builder."""
+    raw = counter.to_bytes(4, "big")
+    block = b"\xff" * 11 + b"\x0a" + raw + b"\x00" * 11 + b"\x0a" + raw
+    encryptor = Cipher(algorithms.AES(EIK), modes.ECB()).encryptor()
+    from custom_components.googlefindmy.FMDNCrypto.eid_generator import (
+        _serialize_variant,
+    )
+
+    return _serialize_variant(encryptor.update(block) + encryptor.finalize(), variant)
+
+
+@pytest.mark.parametrize("variant", list(EidVariant))
+def test_block_equals_the_specified_one_on_a_rotation_boundary(
+    variant: EidVariant,
+) -> None:
+    counter = 1024 * 977
+    target = generate_eid_variant(EIK, counter, variant)
+    report = ba.search_eid_counter(EIK, counter, {target: "reported"}, 1)
+    assert report["result"] == "match"
+    assert report["variant"] == variant.value
+    assert report["counter_offset"] == 0
+    assert report["counter_low_bits"] == 0
+
+
+@pytest.mark.parametrize("delta", [-37, 37])
+def test_search_finds_a_counter_off_the_raster(delta: int) -> None:
+    clock = 1024 * 977 + 500
+    target = _unmasked_eid(clock + delta, EidVariant.LEGACY_SECP160R1_X20_BE)
+    report = ba.search_eid_counter(EIK, clock, {target: "supplied"}, 40)
+    assert report["result"] == "match"
+    assert report["source"] == "supplied"
+    assert report["variant"] == EidVariant.LEGACY_SECP160R1_X20_BE.value
+    assert report["counter_offset"] == delta
+    assert report["counter_low_bits"] == 500 + delta
+    assert report["counters_checked"] == 2 * abs(delta) + (0 if delta < 0 else 1)
+    assert target.hex() not in repr(report)
+
+
+def test_search_ignores_variants_of_another_length() -> None:
+    report = ba.search_eid_counter(EIK, 5000, {bytes(20): "supplied"}, 1)
+    assert report["result"] == "no_match"
+    assert report["variants"] == 4
+    assert report["counters_checked"] == 3
+    report = ba.search_eid_counter(EIK, 5000, {bytes(32): "supplied"}, 0)
+    assert report["variants"] == 3
+
+
+def test_search_stays_inside_the_counter_range() -> None:
+    assert ba.search_eid_counter(EIK, 0, {bytes(20): "s"}, 2)["counters_checked"] == 3
+    top = ba.search_eid_counter(EIK, ba.MAX_COUNTER, {bytes(20): "s"}, 2)
+    assert top["counters_checked"] == 3
+
+
+def test_search_stops_at_the_time_budget() -> None:
+    ticks = iter(float(n) * 100 for n in range(100))
+    report = ba.search_eid_counter(
+        EIK,
+        1_000_000,
+        {bytes(20): "s"},
+        100_000,
+        time_budget=150.0,
+        now=lambda: next(ticks),
+    )
+    assert report["result"] == "time_budget_exhausted"
+    assert report["counters_checked"] == 256
+
+
+@pytest.mark.asyncio
+async def test_no_search_runs_unless_asked(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _forbidden(*_args: Any, **_kw: Any) -> None:
+        raise AssertionError("the search must stay off")
+
+    monkeypatch.setattr(ba, "search_eid_counter", _forbidden)
+    provider = _ConnectedProvider()
+
+    async def connect(*_args: Any, **_kw: Any) -> FakeProvider:
+        return provider
+
+    _install(monkeypatch, _Bluetooth([]), connect)
+    report = await ba.async_probe_tracker(
+        _Hass(),
+        ba.BeaconKeys(ACCOUNT_KEY, EIK),
+        address="AA:BB:CC:DD:EE:FF",
+        timeout=5,
+    )
+    assert "eid_search" not in report
+
+
+@pytest.mark.asyncio
+async def test_search_runs_after_disconnect_with_both_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _ConnectedProvider()
+    seen: dict[str, Any] = {}
+
+    def _search(
+        _eik: bytes, clock: int, targets: dict[bytes, str], window: int
+    ) -> dict[str, Any]:
+        seen.update(
+            clock=clock,
+            sources=sorted(targets.values()),
+            window=window,
+            disconnects=provider.disconnects,
+        )
+        return {"result": "no_match"}
+
+    monkeypatch.setattr(ba, "search_eid_counter", _search)
+
+    async def connect(*_args: Any, **_kw: Any) -> FakeProvider:
+        return provider
+
+    _install(monkeypatch, _Bluetooth([]), connect)
+    report = await ba.async_probe_tracker(
+        _Hass(),
+        ba.BeaconKeys(ACCOUNT_KEY, EIK),
+        address="AA:BB:CC:DD:EE:FF",
+        timeout=5,
+        search_seconds=9,
+        search_eid=bytes(20),
+    )
+    assert report["eid_search"] == {"result": "no_match"}
+    assert seen == {
+        "clock": CLOCK,
+        "sources": ["reported", "supplied"],
+        "window": 9,
+        "disconnects": 1,
+    }
+
+
+@pytest.mark.parametrize(
+    ("keys", "reading", "search_eid", "result"),
+    [
+        (ba.BeaconKeys(ACCOUNT_KEY, None), None, None, "no_eik"),
+        (ba.BeaconKeys(ACCOUNT_KEY, EIK), None, None, "no_clock"),
+        (
+            ba.BeaconKeys(ACCOUNT_KEY, EIK),
+            ba._Reading({}, None, (bytes(20),)),
+            None,
+            "no_clock",
+        ),
+        (ba.BeaconKeys(ACCOUNT_KEY, EIK), ba._Reading({}, 5, ()), None, "no_target"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_search_says_why_it_cannot_run(
+    keys: ba.BeaconKeys,
+    reading: ba._Reading | None,
+    search_eid: bytes | None,
+    result: str,
+) -> None:
+    report = await ba._async_search(_Hass(), keys, reading, 5, search_eid)
+    assert report == {"result": result}

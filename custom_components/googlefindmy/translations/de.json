@@ -446,6 +446,18 @@
         "timeout": {
           "name": "Zeitlimit (optional)",
           "description": "Zeitlimit in Sekunden, 5 bis 120, für die Schlüsselsuche und erneut für Verbindung und Lesen. Das Aufräumen kann einige Sekunden hinzufügen."
+        },
+        "include_raw_response": {
+          "name": "Rohantwort einschließen (optional)",
+          "description": "Gibt zusätzlich die rohe Antwort zum Bereitstellungsstatus als Hexadezimalwert aus. Sie enthält die vollständige aktuelle EID des Trackers, behandle die Ausgabe entsprechend."
+        },
+        "search_seconds": {
+          "name": "EID-Suchfenster (optional)",
+          "description": "Sekunden je Seite der Tracker-Uhr, in denen sekundengenau nach dem Zähler einer EID gesucht wird. 0 schaltet die Suche ab. Sie läuft nach dem Ende der Verbindung, dauert bis zu 5 Minuten länger und belastet in dieser Zeit die CPU."
+        },
+        "search_eid": {
+          "name": "Gesuchte EID (optional)",
+          "description": "Eine in einer Anzeige gesehene EID, 20 oder 32 Byte als Hexadezimalwert. Wird zusätzlich zur vom Tracker gemeldeten EID gesucht. Nur mit Suchfenster wirksam."
         }
       }
     }
@@ -933,6 +945,9 @@
     },
     "beacon_invalid_address": {
       "message": "Die Adresse ist keine gültige Bluetooth-Adresse."
+    },
+    "beacon_invalid_eid": {
+      "message": "Die EID muss 20 oder 32 Byte als Hexadezimalwert umfassen."
     },
     "beacon_bluetooth_unavailable": {
       "message": "Die Bluetooth-Integration ist nicht geladen."

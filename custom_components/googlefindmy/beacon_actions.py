@@ -14,10 +14,12 @@ Scope and guarantees
   provisioning state, ``0x06`` read ringing state. Everything else is rejected
   before any GATT access, see ``_BeaconSession.run``.
 - Nothing here runs unless the action is called: no timer, no listener, no entity.
-  The only log calls are at DEBUG level.
+  The only log calls are at DEBUG level. The second-by-second EID search runs only
+  when the caller asks for it and stops at a fixed time budget.
 - Keys never leave this module's call chain: not in logs, responses, exceptions or
   ``repr``. Bleak error texts carry the hardware address, so they are reduced to an
-  ATT error code and the exception class.
+  ATT error code and the exception class. The raw ``0x01`` frame, which holds the
+  public EID, is returned only when the caller asks for it.
 
 Specification: https://developers.google.com/nearby/fast-pair/specifications/extensions/fmdn
 """
@@ -29,6 +31,7 @@ import hashlib
 import hmac
 import logging
 import re
+import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
@@ -61,7 +64,18 @@ CLEANUP_TIMEOUT = 5.0
 PARAMETERS_LENGTH = 16
 RINGING_LENGTH = 3
 PROVISIONING_LENGTHS = (1, 21, 33)
+EID_LENGTHS = (20, 32)
 MIN_FAST_PAIR_FRAME_LENGTH = 2
+# A tracker can change its address while the old one is still cached, so one call
+# may try several addresses. Each try gets a share of the limit, capped, because a
+# dead address would otherwise use all of it (measured: 40 to 57 s per failed call).
+MAX_CONNECT_ATTEMPTS = 3
+CONNECT_ATTEMPT_LIMIT = 20.0
+# Upper bound of one EID search, however wide the requested window is.
+EID_SEARCH_TIME_BUDGET = 300.0
+EID_SEARCH_MAX_SECONDS = 172800
+_EID_SEARCH_YIELD_EVERY = 256
+_FHNA_K_BYTE = 10
 
 # First byte forms of an account key. The stored key usually starts with 0x04; the
 # advertised filter also uses 0x05 while the key is in use (measured on Pixel Buds
@@ -332,11 +346,17 @@ class CandidateSelection:
     frames_seen: int
     frames_matched: int
     frames_unparsed: int
+    seen_at: Mapping[str, float] = field(default_factory=dict)
 
 
 def select_candidates(infos: Iterable[Any], account_key: bytes) -> CandidateSelection:
-    """Return advertisers whose filter holds the key, strongest first."""
-    matched: list[tuple[int, str]] = []
+    """Return advertisers whose filter holds the key, newest sighting first.
+
+    The cache keeps an address after the tracker moved on to the next one, and the
+    old entry can still hold the stronger RSSI (measured on Pixel Buds Pro 2). RSSI
+    only breaks ties between equally recent sightings.
+    """
+    matched: list[tuple[float, int, str]] = []
     seen = unparsed = 0
     for info in infos:
         service_data: Mapping[str, bytes] = info.service_data or {}
@@ -349,13 +369,15 @@ def select_candidates(infos: Iterable[Any], account_key: bytes) -> CandidateSele
             unparsed += 1
             continue
         if filter_matches(frame, account_key):
-            matched.append((int(info.rssi), str(info.address)))
-    matched.sort(key=lambda item: item[0], reverse=True)
+            seen_at = float(getattr(info, "time", 0.0) or 0.0)
+            matched.append((seen_at, int(info.rssi), str(info.address)))
+    matched.sort(key=lambda item: item[:2], reverse=True)
     return CandidateSelection(
-        addresses=tuple(address for _rssi, address in matched),
+        addresses=tuple(address for _seen, _rssi, address in matched),
         frames_seen=seen,
         frames_matched=len(matched),
         frames_unparsed=unparsed,
+        seen_at={address: seen for seen, _rssi, address in matched},
     )
 
 
@@ -395,6 +417,89 @@ def compare_eid(eik: bytes, clock: int, reported_eid: bytes) -> dict[str, Any]:
         "window_offset": None,
         "variants_checked": checked,
     }
+
+
+def _unmasked_prf_input(counter: int) -> bytes:
+    """Return the Table 10 block with the counter's low bits left in place.
+
+    The specification clears them, and ``build_table10_prf_input`` always does. This
+    form exists only to test whether a tracker departs from that.
+    """
+    raw = counter.to_bytes(4, "big")
+    head = b"\xff" * 11 + bytes((_FHNA_K_BYTE,)) + raw
+    return head + b"\x00" * 11 + bytes((_FHNA_K_BYTE,)) + raw
+
+
+def _search_offsets(window_seconds: int) -> Iterable[int]:
+    """Yield offsets outward from the clock, older counters first at each distance."""
+    yield 0
+    for distance in range(1, window_seconds + 1):
+        yield -distance
+        yield distance
+
+
+def search_eid_counter(  # noqa: PLR0913
+    eik: bytes,
+    clock: int,
+    targets: Mapping[bytes, str],
+    window_seconds: int,
+    *,
+    time_budget: float = EID_SEARCH_TIME_BUDGET,
+    now: Callable[[], float] = time.monotonic,
+) -> dict[str, Any]:
+    """Look for the counter that yields a target EID, second by second around the clock.
+
+    Runs in an executor and gives way to the event loop thread regularly. ``targets``
+    maps an EID to the name of its source; only the name is reported. A hit on a
+    counter whose low 10 bits are zero is what the specification prescribes, any
+    other hit shows a tracker that departs from it.
+    """
+    from .FMDNCrypto.eid_generator import (  # noqa: PLC0415 - heavy, executor only
+        EidVariant,
+        _serialize_variant,
+        prf_aes_256_ecb,
+    )
+
+    lengths = {len(target) for target in targets}
+    variants = [
+        variant
+        for variant in EidVariant
+        if (32 if "x32" in variant.value else 20) in lengths
+    ]
+    started = now()
+    checked = 0
+    report: dict[str, Any] = {
+        "result": "no_match",
+        "window_seconds": window_seconds,
+        "variants": len(variants),
+    }
+    for offset in _search_offsets(window_seconds):
+        counter = clock + offset
+        if not 0 <= counter <= MAX_COUNTER:
+            continue
+        if checked % _EID_SEARCH_YIELD_EVERY == 0:
+            if now() - started > time_budget:
+                report["result"] = "time_budget_exhausted"
+                break
+            time.sleep(0)
+        checked += 1
+        block = prf_aes_256_ecb(eik, _unmasked_prf_input(counter))
+        for variant in variants:
+            source = targets.get(_serialize_variant(block, variant))
+            if source is not None:
+                report.update(
+                    result="match",
+                    source=source,
+                    variant=variant.value,
+                    counter_offset=offset,
+                    counter_low_bits=counter % ROTATION_SECONDS,
+                )
+                report["counters_checked"] = checked
+                report["duration_s"] = round(now() - started, 1)
+                return report
+    report["counters_checked"] = checked
+    report["duration_s"] = round(now() - started, 1)
+    return report
 
 
 # ---------------------------------------------------------------------------
@@ -447,12 +552,20 @@ def _status_from_att(code: int | None) -> OperationStatus:
 
 @dataclass
 class _Operation:
-    """Result of one operation; ``data`` holds verified additional data."""
+    """Result of one operation; ``data`` holds verified additional data.
+
+    ``frame`` is the notification as received, whatever became of it, and
+    ``auth_valid`` tells whether its authentication segment matched under the
+    request's key. ``invalid_stage`` names where an invalid response failed.
+    """
 
     status: OperationStatus
     data: bytes = b""
     error_class: str | None = None
     att_error: int | None = None
+    frame: bytes | None = field(default=None, repr=False)
+    auth_valid: bool | None = None
+    invalid_stage: str | None = None
 
 
 @dataclass(repr=False)
@@ -464,6 +577,16 @@ class _Runs:
     provisioning: _Operation
     ringing: _Operation
     key_form: str | None
+    include_raw: bool = False
+
+
+@dataclass(repr=False)
+class _Reading:
+    """A finished report plus what a later EID search needs from the same link."""
+
+    report: dict[str, Any]
+    clock: int | None
+    eids: tuple[bytes, ...]
 
 
 def _failed_operation(
@@ -518,6 +641,8 @@ class _BeaconSession:
             return _Operation(OperationStatus.NOT_ATTEMPTED)
         future: asyncio.Future[bytes] = loop.create_future()
         self._waiting = (checked, future)
+        frame: bytes | None = None
+        version, nonce = 0, b""
         try:
             async with asyncio.timeout(budget):
                 version, nonce = await self._read_nonce()
@@ -532,13 +657,29 @@ class _BeaconSession:
             operation = _Operation(
                 OperationStatus.OK,
                 verify_response(frame, checked, key, version, nonce),
+                frame=frame,
+                auth_valid=True,
             )
         except TimeoutError:
             operation = _Operation(OperationStatus.TIMEOUT)
         except _ResponseAuthError:
-            operation = _Operation(OperationStatus.RESPONSE_AUTH_INVALID)
+            operation = _Operation(
+                OperationStatus.RESPONSE_AUTH_INVALID,
+                frame=frame,
+                auth_valid=False,
+                invalid_stage="auth",
+            )
         except BeaconProtocolError:
-            operation = _Operation(OperationStatus.INVALID_RESPONSE)
+            operation = _Operation(
+                OperationStatus.INVALID_RESPONSE,
+                frame=frame,
+                auth_valid=(
+                    None
+                    if frame is None
+                    else _frame_auth_valid(frame, key, version, nonce)
+                ),
+                invalid_stage="nonce" if frame is None else "frame",
+            )
         except _NonceReadError as err:
             operation = _failed_operation(
                 checked, err.cause, OperationStatus.GATT_ERROR
@@ -560,6 +701,51 @@ class _BeaconSession:
         except Exception as err:  # noqa: BLE001 - the backend's error types vary
             raise _NonceReadError(err) from err
         return parse_nonce(value)
+
+
+def _frame_auth_valid(frame: bytes, key: bytes, version: int, nonce: bytes) -> bool:
+    """Tell whether a frame that failed the format check still authenticates."""
+    if len(frame) < 2 + AUTH_LENGTH:
+        return False
+    expected = _auth(
+        key,
+        bytes((version,)),
+        nonce,
+        frame[:2],
+        frame[2 + AUTH_LENGTH :],
+        b"\x01",
+    )
+    return hmac.compare_digest(expected, frame[2 : 2 + AUTH_LENGTH])
+
+
+def _response_shape(operation: _Operation) -> dict[str, Any]:
+    """Describe a response without its EID, for a form the parser does not know."""
+    frame = operation.frame
+    if frame is None:
+        return {"stage": operation.invalid_stage}
+    additional = frame[2 + AUTH_LENGTH :]
+    shape: dict[str, Any] = {
+        "stage": operation.invalid_stage,
+        "frame_length": len(frame),
+        "data_length_field": frame[1] if len(frame) > 1 else None,
+        "additional_length": len(additional),
+        "auth_valid": operation.auth_valid,
+    }
+    if operation.auth_valid and additional:
+        shape["flags_byte"] = additional[0]
+        shape["data_prefix"] = additional[:5].hex()
+    return shape
+
+
+def _eid_candidates(additional: bytes) -> tuple[bytes, ...]:
+    """Return the EIDs an authenticated response of unknown form might carry."""
+    candidates: list[bytes] = []
+    for length in EID_LENGTHS:
+        if len(additional) >= 1 + length:
+            candidates.append(additional[1 : 1 + length])
+        if len(additional) == length:
+            candidates.append(additional)
+    return tuple(candidates)
 
 
 def _operation_report(operation: _Operation) -> dict[str, Any]:
@@ -596,7 +782,27 @@ async def read_beacon_state(
     *,
     operation_timeout: float = 10.0,
     deadline: float | None = None,
+    include_raw: bool = False,
 ) -> dict[str, Any]:
+    """Run the read operations on one connection and return the report."""
+    reading = await _read_state(
+        client,
+        keys,
+        operation_timeout=operation_timeout,
+        deadline=deadline,
+        include_raw=include_raw,
+    )
+    return reading.report
+
+
+async def _read_state(
+    client: BeaconGattClient,
+    keys: BeaconKeys,
+    *,
+    operation_timeout: float = 10.0,
+    deadline: float | None = None,
+    include_raw: bool = False,
+) -> _Reading:
     """Run ``0x00``, ``0x01``, ``0x06`` on one connection and report the results.
 
     ``eik_matches`` is ``True`` only after a verified ``0x06`` response and ``False``
@@ -649,40 +855,71 @@ async def read_beacon_state(
             provisioning=provisioning,
             ringing=ringing,
             key_form=form_name or provisioning_form,
+            include_raw=include_raw,
         ),
     )
 
 
-def _build_report(keys: BeaconKeys, runs: _Runs) -> dict[str, Any]:
-    """Build the response mapping; the crypto parts run off the event loop."""
+def _parameters_report(runs: _Runs) -> tuple[dict[str, Any], int | None]:
+    """Return the ``0x00`` report and the clock it holds."""
     parameters, parameters_key = runs.parameters, runs.parameters_key
-    provisioning, ringing = runs.provisioning, runs.ringing
-    report_parameters = _operation_report(parameters)
-    clock: int | None = None
-    if parameters.status is OperationStatus.OK and parameters_key is not None:
-        try:
-            values = decrypt_parameters(parameters_key, parameters.data)
-        except BeaconProtocolError:
-            report_parameters["status"] = OperationStatus.INVALID_RESPONSE.value
-        else:
-            report_parameters.update(values)
-            clock = values["clock"]
+    report = _operation_report(parameters)
+    if parameters.status is not OperationStatus.OK or parameters_key is None:
+        return report, None
+    try:
+        values = decrypt_parameters(parameters_key, parameters.data)
+    except BeaconProtocolError:
+        report["status"] = OperationStatus.INVALID_RESPONSE.value
+        return report, None
+    report.update(values)
+    return report, values["clock"]
 
-    report_provisioning = _operation_report(provisioning)
+
+def _provisioning_report(
+    runs: _Runs,
+) -> tuple[dict[str, Any], bool | None, bool | None, tuple[bytes, ...], bool]:
+    """Return the ``0x01`` report, both bits, the EIDs and whether the form is known."""
+    provisioning = runs.provisioning
+    report = _operation_report(provisioning)
     eik_set: bool | None = None
     is_owner: bool | None = None
-    reported_eid = b""
+    eids: tuple[bytes, ...] = ()
+    known_form = False
     if provisioning.status is OperationStatus.OK:
         try:
             eik_set, is_owner, reported_eid = parse_provisioning(provisioning.data)
         except BeaconProtocolError:
-            report_provisioning["status"] = OperationStatus.INVALID_RESPONSE.value
+            report["status"] = OperationStatus.INVALID_RESPONSE.value
+            provisioning.invalid_stage = "length"
+            eids = _eid_candidates(provisioning.data)
         else:
-            report_provisioning["eik_set"] = eik_set
-            report_provisioning["is_owner"] = is_owner
-            report_provisioning["eid_prefix"] = reported_eid[:4].hex()
-            report_provisioning["eid_length"] = len(reported_eid)
+            known_form = True
+            eids = (reported_eid,) if reported_eid else ()
+            report["eik_set"] = eik_set
+            report["is_owner"] = is_owner
+            report["eid_prefix"] = reported_eid[:4].hex()
+            report["eid_length"] = len(reported_eid)
+    if provisioning.invalid_stage is not None:
+        report["response"] = _response_shape(provisioning)
+        if provisioning.auth_valid and provisioning.frame is not None and not eids:
+            eids = _eid_candidates(provisioning.frame[2 + AUTH_LENGTH :])
+    if runs.include_raw and provisioning.frame is not None:
+        report["raw_frame"] = provisioning.frame.hex()
+    return report, eik_set, is_owner, eids, known_form
 
+
+def _build_report(keys: BeaconKeys, runs: _Runs) -> _Reading:
+    """Build the response mapping; the crypto parts run off the event loop."""
+    report_parameters, clock = _parameters_report(runs)
+    (
+        report_provisioning,
+        eik_set,
+        is_owner,
+        eids,
+        known_form,
+    ) = _provisioning_report(runs)
+
+    ringing = runs.ringing
     report_ringing = _operation_report(ringing)
     eik_matches: bool | None = None
     if ringing.status is OperationStatus.OK:
@@ -695,10 +932,16 @@ def _build_report(keys: BeaconKeys, runs: _Runs) -> dict[str, Any]:
         eik_matches = False
 
     eid_check: dict[str, Any] = {"result": "not_checked"}
-    if keys.eik and clock is not None and reported_eid:
-        eid_check = compare_eid(keys.eik, clock, reported_eid)
+    if keys.eik and clock is not None and eids:
+        for eid in eids:
+            eid_check = compare_eid(keys.eik, clock, eid)
+            if eid_check["result"] == "match":
+                break
+        if not known_form:
+            # Read from a response form the specification does not define.
+            eid_check["inferred_form"] = True
 
-    return {
+    report = {
         "key_form": runs.key_form,
         "eik_set": eik_set,
         "is_owner": is_owner,
@@ -710,6 +953,7 @@ def _build_report(keys: BeaconKeys, runs: _Runs) -> dict[str, Any]:
             "read_ringing_state": report_ringing,
         },
     }
+    return _Reading(report, clock, eids)
 
 
 # ---------------------------------------------------------------------------
@@ -733,22 +977,160 @@ def _load_ble_modules() -> tuple[Any, Any, Any]:
     return bluetooth, BleakClientWithServiceCache, establish_connection
 
 
-async def async_probe_tracker(
+@dataclass(frozen=True)
+class _BleStack:
+    """The Bluetooth functions of one call."""
+
+    bluetooth: Any
+    client_class: Any
+    establish_connection: Any
+
+
+async def _async_connect_once(  # noqa: PLR0913
+    stack: _BleStack,
+    device: Any,
+    target: str,
+    report: dict[str, Any],
+    *,
+    budget: float,
+    max_attempts: int,
+) -> Any:
+    """Connect to one device; return the client, or ``None`` with the reason set."""
+    try:
+        async with asyncio.timeout(budget):
+            client = await stack.establish_connection(
+                stack.client_class,
+                device,
+                mask_address(target),
+                max_attempts=max_attempts,
+            )
+    except TimeoutError:
+        report["connection"] = "timeout"
+        report.pop("error_class", None)
+        return None
+    except Exception as err:  # noqa: BLE001 - the backend's error types vary
+        report["connection"] = "connection_failed"
+        report["error_class"] = type(err).__name__
+        _LOGGER.debug("Beacon connection failed: %s", type(err).__name__)
+        return None
+    report["connection"] = "connected"
+    report.pop("error_class", None)
+    return client
+
+
+async def _async_connect_address(
+    hass: Any, stack: _BleStack, target: str, report: dict[str, Any], timeout: float
+) -> Any:
+    """Connect to the address the caller named."""
+    report["address_masked"] = mask_address(target)
+    device = stack.bluetooth.async_ble_device_from_address(
+        hass, target, connectable=True
+    )
+    if device is None:
+        report["connection"] = "device_not_connectable"
+        return None
+    last_info = stack.bluetooth.async_last_service_info(hass, target, connectable=True)
+    report["rssi"] = getattr(last_info, "rssi", None)
+    return await _async_connect_once(
+        stack, device, target, report, budget=timeout, max_attempts=2
+    )
+
+
+async def _async_connect_search(
+    hass: Any,
+    stack: _BleStack,
+    account_key: bytes,
+    report: dict[str, Any],
+    deadline: float,
+) -> Any:
+    """Connect to the newest matching advertiser, moving on when one fails.
+
+    The selection repeats before every try, so an address that appears meanwhile is
+    next in line. An address is tried again only when no untried one is left. Exactly
+    one connection is held at the end, and only to an address that matched the filter.
+    """
+    loop = asyncio.get_running_loop()
+    tried: list[str] = []
+    attempts: list[dict[str, Any]] = []
+    while len(attempts) < MAX_CONNECT_ATTEMPTS:
+        selection = await hass.async_add_executor_job(
+            select_candidates,
+            list(stack.bluetooth.async_discovered_service_info(hass, connectable=True)),
+            account_key,
+        )
+        report["frames_seen"] = selection.frames_seen
+        report["frames_matched"] = selection.frames_matched
+        report["frames_unparsed"] = selection.frames_unparsed
+        if not selection.addresses:
+            if not attempts:
+                report["connection"] = "no_matching_frame"
+            break
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            report["connection"] = "timeout"
+            break
+        target = next(
+            (item for item in selection.addresses if item not in tried),
+            selection.addresses[0],
+        )
+        tried.append(target)
+        report["address_masked"] = mask_address(target)
+        last_info = stack.bluetooth.async_last_service_info(
+            hass, target, connectable=True
+        )
+        report["rssi"] = getattr(last_info, "rssi", None)
+        seen_at = selection.seen_at.get(target, 0.0)
+        attempt: dict[str, Any] = {
+            "address_masked": mask_address(target),
+            "seen_ago_s": round(time.monotonic() - seen_at, 1) if seen_at else None,
+        }
+        attempts.append(attempt)
+        report["connection_attempts"] = attempts
+        device = stack.bluetooth.async_ble_device_from_address(
+            hass, target, connectable=True
+        )
+        if device is None:
+            report["connection"] = attempt["result"] = "device_not_connectable"
+            continue
+        client = await _async_connect_once(
+            stack,
+            device,
+            target,
+            report,
+            budget=min(
+                remaining / (MAX_CONNECT_ATTEMPTS - len(attempts) + 1),
+                CONNECT_ATTEMPT_LIMIT,
+            ),
+            max_attempts=1,
+        )
+        attempt["result"] = report["connection"]
+        if client is not None:
+            return client
+    return None
+
+
+async def async_probe_tracker(  # noqa: PLR0913
     hass: Any,
     keys: BeaconKeys,
     *,
     address: str | None,
     timeout: float,
+    include_raw: bool = False,
+    search_seconds: int = 0,
+    search_eid: bytes | None = None,
 ) -> dict[str, Any]:
     """Find the tracker, connect once and read its state.
 
     Radio outcomes are part of the response, because the counters are the diagnosis.
+    An EID search runs only when ``search_seconds`` is set, after the link is closed,
+    so it does not hold a proxy connection slot.
     """
     (
         bluetooth,
         client_class,
         establish_connection,
     ) = await hass.async_add_import_executor_job(_load_ble_modules)
+    stack = _BleStack(bluetooth, client_class, establish_connection)
 
     report: dict[str, Any] = {
         "connection": "not_attempted",
@@ -759,55 +1141,26 @@ async def async_probe_tracker(
         "frames_matched": 0,
         "frames_unparsed": 0,
     }
-    target = address
-    if target is None:
-        if keys.account_key is None:
-            report["connection"] = "no_account_key_for_search"
-            return report
-        selection = await hass.async_add_executor_job(
-            select_candidates,
-            list(bluetooth.async_discovered_service_info(hass, connectable=True)),
-            keys.account_key,
-        )
-        report["frames_seen"] = selection.frames_seen
-        report["frames_matched"] = selection.frames_matched
-        report["frames_unparsed"] = selection.frames_unparsed
-        if not selection.addresses:
-            report["connection"] = "no_matching_frame"
-            return report
-        target = selection.addresses[0]
-
-    report["address_masked"] = mask_address(target)
-    device = bluetooth.async_ble_device_from_address(hass, target, connectable=True)
-    if device is None:
-        report["connection"] = "device_not_connectable"
-        return report
-    last_info = bluetooth.async_last_service_info(hass, target, connectable=True)
-    report["rssi"] = getattr(last_info, "rssi", None)
-
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
-    client: Any = None
-    try:
-        async with asyncio.timeout(timeout):
-            client = await establish_connection(
-                client_class,
-                device,
-                mask_address(target),
-                max_attempts=2,
-            )
-    except TimeoutError:
-        report["connection"] = "timeout"
+    if address is not None:
+        client = await _async_connect_address(hass, stack, address, report, timeout)
+    elif keys.account_key is None:
+        report["connection"] = "no_account_key_for_search"
         return report
-    except Exception as err:  # noqa: BLE001 - the backend's error types vary
-        report["connection"] = "connection_failed"
-        report["error_class"] = type(err).__name__
-        _LOGGER.debug("Beacon connection failed: %s", type(err).__name__)
+    else:
+        client = await _async_connect_search(
+            hass, stack, keys.account_key, report, deadline
+        )
+    if client is None:
         return report
 
-    report["connection"] = "connected"
+    reading: _Reading | None = None
     try:
-        report.update(await read_beacon_state(client, keys, deadline=deadline))
+        reading = await _read_state(
+            client, keys, deadline=deadline, include_raw=include_raw
+        )
+        report.update(reading.report)
     except Exception as err:  # noqa: BLE001 - e.g. the characteristic is missing
         report["connection"] = "gatt_setup_failed"
         report["error_class"] = type(err).__name__
@@ -818,4 +1171,31 @@ async def async_probe_tracker(
                 await client.disconnect()
         except Exception as err:  # noqa: BLE001 - nothing left to do
             _LOGGER.debug("Beacon disconnect failed: %s", type(err).__name__)
+    if search_seconds > 0:
+        report["eid_search"] = await _async_search(
+            hass, keys, reading, search_seconds, search_eid
+        )
     return report
+
+
+async def _async_search(
+    hass: Any,
+    keys: BeaconKeys,
+    reading: _Reading | None,
+    search_seconds: int,
+    search_eid: bytes | None,
+) -> dict[str, Any]:
+    """Run the requested EID search, or say why there is nothing to search."""
+    if keys.eik is None:
+        return {"result": "no_eik"}
+    if reading is None or reading.clock is None:
+        return {"result": "no_clock"}
+    targets = dict.fromkeys(reading.eids, "reported")
+    if search_eid is not None:
+        targets[search_eid] = "supplied"
+    if not targets:
+        return {"result": "no_target"}
+    result: dict[str, Any] = await hass.async_add_executor_job(
+        search_eid_counter, keys.eik, reading.clock, targets, search_seconds
+    )
+    return result
