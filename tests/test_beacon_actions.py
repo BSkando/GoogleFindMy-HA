@@ -1278,15 +1278,15 @@ def test_eid_candidates_follow_the_data_length(
 
 
 def _unmasked_eid(counter: int, variant: EidVariant) -> bytes:
-    """Compute the expected EID independently of the module's block builder."""
+    """Compute the expected EID without the module's block builder."""
     raw = counter.to_bytes(4, "big")
     block = b"\xff" * 11 + b"\x0a" + raw + b"\x00" * 11 + b"\x0a" + raw
-    encryptor = Cipher(algorithms.AES(EIK), modes.ECB()).encryptor()
     from custom_components.googlefindmy.FMDNCrypto.eid_generator import (
         _serialize_variant,
+        prf_aes_256_ecb,
     )
 
-    return _serialize_variant(encryptor.update(block) + encryptor.finalize(), variant)
+    return _serialize_variant(prf_aes_256_ecb(EIK, block), variant)
 
 
 @pytest.mark.parametrize("variant", list(EidVariant))
