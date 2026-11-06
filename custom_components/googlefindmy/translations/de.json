@@ -465,7 +465,7 @@
         },
         "derivation_windows": {
           "name": "Fenster der Ableitungssuche (optional)",
-          "description": "Rotationsfenster von je 1024 s, die auf jeder Seite der Tracker-Uhr durchsucht werden; dabei werden andere Schlüssel- und Blockformen gegen die Ziel-EIDs probiert. 0 schaltet sie aus. Sie läuft nach dem Trennen der Verbindung, dauert bis zu 5 Minuten länger und belastet währenddessen die CPU."
+          "description": "Rotationsfenster von je 1024 s, die auf jeder Seite der Tracker-Uhr durchsucht werden; dabei werden andere Schlüssel- und Blockformen gegen die Ziel-EIDs probiert. 0 schaltet sie aus. Die Suche läuft nach dem Trennen der Verbindung, dauert bis zu 5 Minuten länger und belastet währenddessen die CPU."
         }
       }
     }

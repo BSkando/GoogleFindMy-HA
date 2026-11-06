@@ -265,6 +265,20 @@ This integration already uses the following **confirmed working** Spot API endpo
    - Protocol: gRPC over HTTP/2
    - Source: `SpotApi/UploadPrecomputedPublicKeyIds/upload_precomputed_public_key_ids.py:43`
 
+### Spot API Endpoint Known From `leonboe1/Spot` (Not Used by This Integration)
+
+[`leonboe1/Spot`](https://github.com/leonboe1/Spot) is an unofficial iOS client by the author of GoogleFindMyTools, published on 2026-10-23 under GPL-3.0. Its field names are reverse engineered and not confirmed by Google. Its `DeviceUpdate.proto` defines 96 messages including nested ones, the copy in this repository 42.
+
+**`ListEidsForBleDevices`**
+- Full URL: `https://spot-pa.googleapis.com/google.internal.spot.v1.SpotService/ListEidsForBleDevices`
+- Purpose: Returns, per device, `rotationPeriod` and a list of `timestamp`, the first 10 bytes of the EID, and `trackableComponent`
+- Protocol: gRPC over HTTP/2, empty request message
+
+Measured once on 2026-11-06 for one account with 11 devices:
+- Every device reported `rotationPeriod` 1024 and, per series, 87 or 88 entries spaced 1024 s apart, starting 43 to 59 minutes before the call and reaching about 24 hours ahead.
+- All 22 EIDs seen over the air in a 21-minute capture (17 in frame type 0x40, 5 in 0x41) were in the list, including those of the Pixel Buds Pro 2.
+- Single-component trackers omit `trackableComponent`. Pixel Buds Pro 2 (firmware 6.144) list five parallel series with the values 0, 1, 2, 254 and 255, not only the right = 1, left = 2, case = 3 that Spot names. With the earbuds in the closed case the EIDs heard from them belonged to the series 255; a second capture with the earbuds out of the case also heard the series 2 and 254. What the values mean is not established.
+
 ### API Pattern Analysis
 
 **Common Pattern:**

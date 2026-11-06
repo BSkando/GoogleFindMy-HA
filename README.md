@@ -1037,6 +1037,7 @@ message listing the available IDs so you can pick the right account.
 ## Credits
 
 - Böttger, L. (2024). GoogleFindMyTools [Computer software]. https://github.com/leonboe1/GoogleFindMyTools
+- Böttger, L. (2026). Spot: an unofficial iPhone and iPad client for Google Find My Device / Find Hub trackers [Computer software]. https://github.com/leonboe1/Spot
 - Firebase Cloud Messaging integration. https://github.com/home-assistant/mobile-apps-fcm-push
 - @txitxo0 for his amazing work on the MQTT based tool that I used to help kickstart this project!
 - Open Location Code (Plus Code) encoder, (c) Google (Apache-2.0), vendored from
