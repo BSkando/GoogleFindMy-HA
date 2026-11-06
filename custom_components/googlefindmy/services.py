@@ -1847,6 +1847,10 @@ async def async_register_services(hass: HomeAssistant, ctx: dict[str, Any]) -> N
 
     async def async_read_beacon_state_service(call: ServiceCall) -> dict[str, Any]:
         """Read a tracker's FMDN state over GATT and return it to the caller."""
+        await _async_authorize_device_call(hass, call, call.data.get("device_id"), ctx)
+        runtime, canonical_id = await _resolve_runtime_for_device_id(
+            str(call.data["device_id"])
+        )
         address: str | None = call.data.get("address")
         if address is not None:
             address = address.strip().upper()
@@ -1866,9 +1870,6 @@ async def async_register_services(hass: HomeAssistant, ctx: dict[str, Any]) -> N
                 translation_key="beacon_diagnostic_busy",
             )
         async with beacon_lock:
-            runtime, canonical_id = await _resolve_runtime_for_device_id(
-                str(call.data["device_id"])
-            )
             keys = await _async_beacon_keys(
                 hass, runtime, canonical_id, call.data["timeout"]
             )

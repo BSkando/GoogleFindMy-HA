@@ -386,3 +386,24 @@ async def test_handler_passes_its_timeout_to_the_key_lookup(
     monkeypatch.setattr(services, "_async_beacon_keys", lookup)
     await harness.handler(harness.call(timeout=7))
     assert seen == [7]
+
+
+@pytest.mark.asyncio
+async def test_permission_check_runs_before_input_validation(
+    monkeypatch: pytest.MonkeyPatch, harness: _Harness
+) -> None:
+    await harness.register()
+    calls: list[object] = []
+
+    class _Denied(Exception):
+        pass
+
+    async def deny(_hass: Any, _call: Any, device_id: object, _ctx: Any) -> None:
+        calls.append(device_id)
+        raise _Denied
+
+    monkeypatch.setattr(services, "_async_authorize_device_call", deny)
+    with pytest.raises(_Denied):
+        await harness.handler(harness.call(address="not-a-mac"))
+    assert calls == [DEVICE_ID]
+    assert harness.probe_calls == []

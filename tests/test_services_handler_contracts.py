@@ -902,10 +902,11 @@ _DEVICE_HANDLERS = (
     "async_play_sound_service",
     "async_stop_sound_service",
     "async_locate_external_service",
+    "async_read_beacon_state_service",
 )
-# Admin-only: the helper's wrapper authorizes before the handler body runs, so no
-# per-device permission check spans its resolution.
-_ADMIN_DEVICE_HANDLERS = ("async_read_beacon_state_service",)
+# Device handlers with no coordinator call: the registry state only has to hold from
+# the permission check to the resolver, so the span ends there.
+_RESOLVER_ONLY_HANDLERS = ("async_read_beacon_state_service",)
 _SYNC_RESOLVERS = ("_resolve_runtime_for_device_id", "_iter_runtimes")
 _SUSPENDING = (ast.Await, ast.AsyncFor, ast.AsyncWith)
 
@@ -972,8 +973,8 @@ def _suspension_violations(source: str) -> list[str]:
             (n for n in nodes if _awaited_call(n) == "_resolve_runtime_for_device_id"),
             None,
         )
-        dispatch = None
-        if resolver is not None:
+        dispatch = resolver if name in _RESOLVER_ONLY_HANDLERS else None
+        if resolver is not None and dispatch is None:
             dispatch = next(
                 (
                     n
@@ -1020,11 +1021,7 @@ def _device_handler_names(source: str) -> list[str]:
         if func not in ("hass.services.async_register", "async_register_admin_service"):
             continue
         for arg in node.args:
-            if (
-                isinstance(arg, ast.Name)
-                and arg.id in handlers
-                and arg.id not in _ADMIN_DEVICE_HANDLERS
-            ):
+            if isinstance(arg, ast.Name) and arg.id in handlers:
                 if "'device_id'" in ast.unparse(handlers[arg.id]):
                     names.append(arg.id)
     return names
