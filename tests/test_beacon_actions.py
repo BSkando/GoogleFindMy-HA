@@ -1980,6 +1980,13 @@ def test_placeholder_needs_its_exact_form(eid: bytes, expected: bool) -> None:
         ({ba.FMDN_SERVICE_DATA_UUID: b"\x41"}, ba.IdentityForm.LOCATOR),
         ({ba.FMDN_SERVICE_DATA_UUID: b"\x00" + bytes(16)}, ba.IdentityForm.OTHER),
         ({ba.FMDN_SERVICE_DATA_UUID: b""}, ba.IdentityForm.OTHER),
+        (
+            {
+                ba.FMDN_SERVICE_DATA_UUID: b"\x00",
+                ba.COMMON_AUDIO_SERVICE_DATA_UUID: b"",
+            },
+            ba.IdentityForm.AUDIO,
+        ),
         ({ba.COMMON_AUDIO_SERVICE_DATA_UUID: b""}, ba.IdentityForm.AUDIO),
         (
             {
@@ -2580,10 +2587,12 @@ async def test_failed_connection_says_why_the_derivation_search_did_not_run(
 @pytest.mark.asyncio
 async def test_cancelled_caller_stops_the_derivation_search() -> None:
     stops: list[threading.Event] = []
+    started = asyncio.Event()
 
     class _HangingHass(_Hass):
         async def async_add_executor_job(self, _target: Any, *args: Any) -> Any:
             stops.append(args[-1])
+            started.set()
             await asyncio.Event().wait()
 
     task = asyncio.create_task(
@@ -2595,7 +2604,8 @@ async def test_cancelled_caller_stops_the_derivation_search() -> None:
             ba._Searches(derivation_windows=1),
         )
     )
-    await asyncio.sleep(0)
+    await started.wait()
+    assert not stops[0].is_set()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -2773,3 +2783,53 @@ def test_a_key_that_repeats_keeps_its_first_name() -> None:
     names = dict(ba.derivation_keys(ba.BeaconKeys(None, bytes(32))))
     assert "eik" in names
     assert "eik_reversed" not in names
+
+
+def _placeholder_report(data: bytes) -> tuple[dict[str, Any], tuple[bytes, ...]]:
+    idle = ba._Operation(ba.OperationStatus.NOT_ATTEMPTED)
+    report, _eik, _owner, eids, _known = ba._provisioning_report(
+        ba._Runs(
+            parameters=idle,
+            parameters_key=None,
+            provisioning=ba._Operation(ba.OperationStatus.OK, data),
+            ringing=idle,
+            key_form=None,
+        )
+    )
+    return report, eids
+
+
+@pytest.mark.parametrize("field", [18, 30])
+@pytest.mark.parametrize("trailer", [b"", b"\x00", b"\x00\x00"])
+def test_placeholder_is_reported_in_every_response_length(
+    field: int, trailer: bytes
+) -> None:
+    report, eids = _placeholder_report(b"\x03\x00\xff" + bytes(field) + trailer)
+    assert report["eid_placeholder"] is True
+    assert eids == ()
+
+
+def test_a_real_eid_in_an_unknown_length_is_no_placeholder() -> None:
+    report, eids = _placeholder_report(b"\x03" + LOCATOR_EID + b"\x00\x00")
+    assert "eid_placeholder" not in report
+    assert eids == (LOCATOR_EID,)
+
+
+def test_a_reported_eid_that_is_also_advertised_stays_reported() -> None:
+    targets = ba._search_targets(
+        ba._Reading({}, CLOCK, (LOCATOR_EID,)),
+        ba._Target(eid=LOCATOR_EID),
+        ba._Searches(),
+    )
+    assert targets == {LOCATOR_EID: "reported"}
+
+
+def test_derivation_search_stays_below_the_top_of_the_counter_range(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _narrow(monkeypatch, ["eik"], ["table10"])
+    report = ba.search_eid_derivations(
+        ba.BeaconKeys(None, EIK), 0xFFFFFFFF, {bytes(20): "supplied"}, 1
+    )
+    assert report["result"] == "no_match"
+    assert report["combinations_checked"] == 8

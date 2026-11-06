@@ -391,7 +391,11 @@ def identity_form(service_data: Mapping[str, bytes]) -> IdentityForm:
 
 
 def advertised_eid(service_data: Mapping[str, bytes]) -> bytes | None:
-    """Return the EID of an FMDN frame: frame type, EID, optional hashed flags."""
+    """Return the EID of an FMDN frame: frame type, EID, optional hashed flags.
+
+    Only these exact lengths count, unlike the resolver, which also reads an EID out
+    of longer payloads: a diagnostic should not name a value as advertised on a guess.
+    """
     raw = service_data.get(FMDN_SERVICE_DATA_UUID)
     if not raw or raw[0] not in _FMDN_FRAME_TYPES:
         return None
@@ -1049,6 +1053,15 @@ def _eid_candidates(additional: bytes) -> tuple[bytes, ...]:
     return tuple(eid for eid in candidates if not is_placeholder_eid(eid))
 
 
+def _holds_placeholder(additional: bytes) -> bool:
+    """Tell whether response data of any length holds the placeholder after the flags."""
+    return any(
+        is_placeholder_eid(additional[1 : 1 + length])
+        for length in EID_LENGTHS
+        if len(additional) >= 1 + length
+    )
+
+
 def _operation_report(operation: _Operation) -> dict[str, Any]:
     """Return the status fields of an operation."""
     report: dict[str, Any] = {"status": operation.status.value}
@@ -1194,6 +1207,8 @@ def _provisioning_report(
             report["status"] = OperationStatus.INVALID_RESPONSE.value
             provisioning.invalid_stage = "length"
             eids = _eid_candidates(provisioning.data)
+            if _holds_placeholder(provisioning.data):
+                report["eid_placeholder"] = True
         else:
             trailing = len(provisioning.data) in PROVISIONING_TRAILING_LENGTHS
             known_form = not trailing
@@ -1566,7 +1581,8 @@ def _search_targets(
     """Return the EIDs to look for and the name of their source."""
     targets = dict.fromkeys(reading.eids, "reported")
     if seen.eid is not None:
-        targets[seen.eid] = "advertised"
+        # A value the tracker also reports stays "reported", the stronger source.
+        targets.setdefault(seen.eid, "advertised")
     if searches.eid is not None and not is_placeholder_eid(searches.eid):
         targets[searches.eid] = "supplied"
     return targets
@@ -1581,7 +1597,7 @@ async def _async_run_searches(  # noqa: PLR0913
     searches: _Searches,
     report: dict[str, Any],
 ) -> None:
-    """Run what the call asked for, after the link is closed."""
+    """Check the advertised EID, then run what the call asked for, link closed."""
     if keys.eik is not None and reading is not None and reading.clock is not None:
         if seen.eid is not None:
             report["advertised_eid_check"] = await hass.async_add_executor_job(
