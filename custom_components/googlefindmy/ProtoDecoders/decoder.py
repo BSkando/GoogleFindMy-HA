@@ -505,8 +505,9 @@ def trackable_components_of(registration: object) -> int | None:
     raw = getattr(registration, "capabilities", None)
     if not isinstance(raw, bytes) or not raw:
         return None
+    capabilities = DeviceUpdate_pb2.DeviceCapabilities()
     try:
-        capabilities = DeviceUpdate_pb2.DeviceCapabilities.FromString(raw)
+        capabilities.ParseFromString(raw)
     except DecodeError:
         return None
     count = capabilities.trackableComponents

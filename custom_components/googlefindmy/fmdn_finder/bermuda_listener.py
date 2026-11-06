@@ -779,7 +779,7 @@ async def _async_get_device_eid(  # noqa: PLR0911, PLR0912
         from ..FMDNCrypto.eid_generator import (  # noqa: PLC0415
             EidVariant as _EidVariant,
         )
-        from ..FMDNCrypto.eid_generator import (
+        from ..FMDNCrypto.eid_generator import (  # noqa: PLC0415
             derive_component_key,
         )
 
