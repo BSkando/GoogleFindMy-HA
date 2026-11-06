@@ -16,7 +16,9 @@ Compatibility
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from typing import Any
@@ -24,7 +26,7 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.auth.permissions.const import POLICY_CONTROL
 from homeassistant.components.device_tracker import DOMAIN as DEVICE_TRACKER_DOMAIN
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import (
     HomeAssistantError,
     ServiceValidationError,
@@ -37,7 +39,9 @@ from homeassistant.helpers.network import NoURLAvailableError, get_url
 from homeassistant.helpers.service import async_register_admin_service
 
 from .Auth.log_safety import describe_exception
+from .beacon_actions import BeaconKeys, async_probe_tracker
 from .const import (
+    DATA_EID_RESOLVER,
     DEFAULT_MAP_VIEW_TOKEN_EXPIRATION,
     DOMAIN,
     LEGACY_SERVICE_IDENTIFIER,
@@ -68,6 +72,7 @@ from .coordinator.helpers.registry import (
     read_device_ownership,
     resolve_device_by_identifiers,
 )
+from .eid_resolver import _normalize_encrypted_blob
 from .map_view import _is_map_view_enabled_for_entry
 
 _LOGGER = logging.getLogger(__name__)
@@ -126,6 +131,18 @@ def _service_validation_error(
 
 
 SERVICE_REBUILD_DEVICE_REGISTRY: str = "rebuild_device_registry"
+SERVICE_READ_BEACON_STATE: str = "read_beacon_state"
+
+_BLE_ADDRESS_PATTERN = re.compile(r"^(?:[0-9A-F]{2}:){5}[0-9A-F]{2}$")
+_READ_BEACON_STATE_SCHEMA = vol.Schema(
+    {
+        vol.Required("device_id"): str,
+        vol.Optional("address"): str,
+        vol.Optional("timeout", default=45): vol.All(
+            vol.Coerce(float), vol.Range(min=5, max=120)
+        ),
+    }
+)
 
 
 async def async_rebuild_device_registry(hass: HomeAssistant, call: ServiceCall) -> None:
@@ -861,6 +878,66 @@ async def _async_authorize_device_call(
             call.service,
         )
         raise Unauthorized(context=call.context, permission=POLICY_CONTROL)
+
+
+def _decrypt_account_key(owner_key: bytes, blob: bytes) -> bytes:
+    """Decrypt an account key; the crypto import and the work stay off the loop."""
+    from .KeyBackup.cloud_key_decryptor import decrypt_account_key  # noqa: PLC0415
+
+    return bytes(decrypt_account_key(owner_key, blob))
+
+
+async def _async_beacon_keys(
+    hass: HomeAssistant, runtime: Any, canonical_id: str
+) -> BeaconKeys:
+    """Return the tracker's account key and EIK, or raise a translated error.
+
+    Uses the resolver's own key path, so a key mismatch found by the diagnostic is
+    about the key the resolver works with. Keys stay out of every error text.
+    """
+    unavailable = _service_validation_error(
+        "No key material is available for this device.",
+        translation_key="beacon_keys_unavailable",
+    )
+    coordinator = getattr(runtime, "coordinator", None)
+    resolver = hass.data.get(DOMAIN, {}).get(DATA_EID_RESOLVER)
+    if coordinator is None or resolver is None:
+        raise unavailable
+    identity = next(
+        (
+            item
+            for item in coordinator.get_active_device_identities()
+            if str(item.canonical_id).rsplit(":", 1)[-1]
+            == canonical_id.rsplit(":", 1)[-1]
+        ),
+        None,
+    )
+    if identity is None:
+        raise unavailable
+
+    cache = getattr(coordinator, "cache", None)
+    normalized = await resolver._normalize_identities([identity], cache=cache)
+    eik = _normalize_encrypted_blob(normalized[0].identity_key) if normalized else None
+
+    account_key: bytes | None = None
+    blob = _normalize_encrypted_blob(identity.encrypted_account_key)
+    if blob is not None:
+        owner = await resolver._resolve_owner_key(identity, cache=cache)
+        if owner is not None:
+            try:
+                account_key = await asyncio.to_thread(
+                    _decrypt_account_key, owner.key, blob
+                )
+            except ValueError as err:
+                _LOGGER.debug("Account key not usable: %s", type(err).__name__)
+
+    keys = BeaconKeys(
+        account_key=account_key if account_key and len(account_key) == 16 else None,
+        eik=eik if eik and len(eik) == 32 else None,
+    )
+    if keys.account_key is None and keys.eik is None:
+        raise unavailable
+    return keys
 
 
 async def async_register_services(hass: HomeAssistant, ctx: dict[str, Any]) -> None:
@@ -1757,6 +1834,37 @@ async def async_register_services(hass: HomeAssistant, ctx: dict[str, Any]) -> N
             except Exception as err:
                 _LOGGER.error("Error reloading config entry %s: %s", entry_id, err)
 
+    beacon_lock = asyncio.Lock()
+
+    async def async_read_beacon_state_service(call: ServiceCall) -> dict[str, Any]:
+        """Read a tracker's FMDN state over GATT and return it to the caller."""
+        address: str | None = call.data.get("address")
+        if address is not None:
+            address = address.strip().upper()
+            if not _BLE_ADDRESS_PATTERN.fullmatch(address):
+                raise _service_validation_error(
+                    "The address is not a valid Bluetooth address.",
+                    translation_key="beacon_invalid_address",
+                )
+        if "bluetooth" not in hass.config.components:
+            raise _service_validation_error(
+                "The Bluetooth integration is not loaded.",
+                translation_key="beacon_bluetooth_unavailable",
+            )
+        if beacon_lock.locked():
+            raise _service_validation_error(
+                "Another beacon diagnostic is running.",
+                translation_key="beacon_diagnostic_busy",
+            )
+        async with beacon_lock:
+            runtime, canonical_id = await _resolve_runtime_for_device_id(
+                str(call.data["device_id"])
+            )
+            keys = await _async_beacon_keys(hass, runtime, canonical_id)
+            return await async_probe_tracker(
+                hass, keys, address=address, timeout=call.data["timeout"]
+            )
+
     # ---- Actual service registrations (global; visible even without entries) ----
     # NOTE: Field validation lives in the handlers; services.yaml only
     # describes the fields for the UI. The maintenance actions pass
@@ -1790,4 +1898,12 @@ async def async_register_services(hass: HomeAssistant, ctx: dict[str, Any]) -> N
         SERVICE_REBUILD_REGISTRY,
         async_rebuild_registry_service,
         _ADMIN_PASSTHROUGH_SCHEMA,
+    )
+    async_register_admin_service(
+        hass,
+        DOMAIN,
+        SERVICE_READ_BEACON_STATE,
+        async_read_beacon_state_service,
+        _READ_BEACON_STATE_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
     )

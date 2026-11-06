@@ -32,6 +32,7 @@ from __future__ import annotations
 import functools
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from types import ModuleType
 from typing import Any
 
@@ -166,7 +167,15 @@ def install_service_auth_stubs(
     class UnknownUser(Unauthorized):
         """Stub of ``homeassistant.exceptions.UnknownUser``."""
 
+    class SupportsResponse(StrEnum):
+        """Stub of ``homeassistant.core.SupportsResponse``."""
+
+        NONE = "none"
+        OPTIONAL = "optional"
+        ONLY = "only"
+
     core_module.ServiceCall = FakeServiceCall  # type: ignore[attr-defined]
+    core_module.SupportsResponse = SupportsResponse  # type: ignore[attr-defined]
     core_module.Context = FakeContext  # type: ignore[attr-defined]
     exceptions_module.Unauthorized = Unauthorized  # type: ignore[attr-defined]
     exceptions_module.UnknownUser = UnknownUser  # type: ignore[attr-defined]

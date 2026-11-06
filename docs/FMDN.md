@@ -321,6 +321,30 @@ Fetch secrets → Unwrap EIK (if wrapped) → Precompute rolling EIDs → Fetch 
 
 ---
 
+## S13. On-demand Beacon Actions Diagnostic `⟦BEACON_DIAGNOSTIC⟧`
+
+`googlefindmy.read_beacon_state` (administrators only, always returns a response) asks a tracker directly what it holds. Nothing runs unless it is called: no timer, no listener, no entity, and the module logs at DEBUG only.
+
+**Operations.** The set is closed in code (`beacon_actions.DataId`): `0x00` read beacon parameters, `0x01` read provisioning state, `0x06` read ringing state. Setting or clearing the EIK, ringing, reading the EIK and unwanted-tracking commands are rejected before any GATT access. Each operation reads a fresh nonce, writes the request, waits for the notification and verifies its authentication segment.
+
+**Finding the tracker.** Connectable `0xFE2C` advertisements whose account key filter holds the device's account key; the strongest wins, and other advertisers are never connected to. The spec does not promise such frames for every provisioned tracker (a locator tag may stop them after reading the beacon parameters following a power loss), so `address` can name the target; `filter_checked` is then `false`.
+
+**Reading the result.**
+
+| `eik_set` | `eik_matches` | `is_owner` | Meaning |
+|---|---|---|---|
+| `true` | `true` | any | The tracker holds this EIK. With `eid_check.result: match` the derivation is known; with `no_match` it differs |
+| `true` | `false` | `false` | Another EIK and this account key is not the owner key: the tracker likely belongs to another setup |
+| `true` | `false` | `true` | Another EIK although this key is the owner: the integration likely reads the wrong key |
+| `false` | `false` | any | Not provisioned; the unauthenticated error says nothing about the key here |
+| any | `null` | any | Undecided (timeout or transport error), see `operations`. Never read this as a foreign key |
+
+`eik_matches` is `false` only after an explicit unauthenticated error (`0x80`), which the spec also returns for an unprovisioned Provider, so it is read together with `eik_set`. `eid_check` compares the reported EID with every variant for the windows around the tracker's clock, because rotation happens 1 to 204 s after the calculated boundary.
+
+**Owner account key.** The spec says: "The Provider chooses one of the existing account keys as the owner account key the first time a Seeker accesses the Beacon Actions characteristic. The chosen owner account key can't be changed until the Provider is factory reset." Use the diagnostic on trackers that are already set up.
+
+**Privacy.** Keys never appear in logs, responses or errors. The response carries the masked address and the first four bytes of the EID.
+
 ## Appendix A — Evidence-anchored Pseudocode `⟦APPX_PSEUDOCODE⟧`
 
 ### A1. EID derivation (Measured pattern; secp160r1 default)

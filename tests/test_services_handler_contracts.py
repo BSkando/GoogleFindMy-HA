@@ -127,7 +127,7 @@ def handlers(full_ctx: dict[str, Any]) -> dict[str, Any]:
 
 
 class TestRegistration:
-    def test_all_seven_services_registered(self, handlers: dict[str, Any]) -> None:
+    def test_all_services_registered(self, handlers: dict[str, Any]) -> None:
         """Every documented service name is wired exactly once."""
         assert set(handlers) == {
             services.SERVICE_LOCATE_DEVICE,
@@ -137,6 +137,7 @@ class TestRegistration:
             services.SERVICE_REFRESH_DEVICE_URLS,
             services.SERVICE_REBUILD_DEVICE_REGISTRY,
             services.SERVICE_REBUILD_REGISTRY,
+            services.SERVICE_READ_BEACON_STATE,
         }
 
 
@@ -798,13 +799,16 @@ class TestAdminRegistration:
             (domain, services.SERVICE_REBUILD_DEVICE_REGISTRY),
             (domain, services.SERVICE_REBUILD_REGISTRY),
         }
-        assert registry.admin_services == admin
+        # The diagnostic is admin too, but validates its own fields.
+        diagnostic = (domain, services.SERVICE_READ_BEACON_STATE)
+        assert registry.admin_services == admin | {diagnostic}
+        assert registry.schemas[diagnostic]({"device_id": "d"})["timeout"] == 45
         payload = {"mode": "migrate", "entry_id": ["a"], "device_ids": ["d"]}
         for key in admin:
             schema = registry.schemas[key]
             assert schema is not None
             assert schema(dict(payload)) == payload
-        for key in set(registry.handlers) - admin:
+        for key in set(registry.handlers) - admin - {diagnostic}:
             assert registry.schemas[key] is None
 
 
@@ -899,6 +903,9 @@ _DEVICE_HANDLERS = (
     "async_stop_sound_service",
     "async_locate_external_service",
 )
+# Admin-only: the helper's wrapper authorizes before the handler body runs, so no
+# per-device permission check spans its resolution.
+_ADMIN_DEVICE_HANDLERS = ("async_read_beacon_state_service",)
 _SYNC_RESOLVERS = ("_resolve_runtime_for_device_id", "_iter_runtimes")
 _SUSPENDING = (ast.Await, ast.AsyncFor, ast.AsyncWith)
 
@@ -1013,7 +1020,11 @@ def _device_handler_names(source: str) -> list[str]:
         if func not in ("hass.services.async_register", "async_register_admin_service"):
             continue
         for arg in node.args:
-            if isinstance(arg, ast.Name) and arg.id in handlers:
+            if (
+                isinstance(arg, ast.Name)
+                and arg.id in handlers
+                and arg.id not in _ADMIN_DEVICE_HANDLERS
+            ):
                 if "'device_id'" in ast.unparse(handlers[arg.id]):
                     names.append(arg.id)
     return names

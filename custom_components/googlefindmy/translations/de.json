@@ -430,6 +430,24 @@
           "description": "Begrenzt den Vorgang auf bestimmte Geräte. Leer lassen, um alle Google-Find-My-Geräte zu berücksichtigen."
         }
       }
+    },
+    "read_beacon_state": {
+      "name": "Beacon-Status lesen",
+      "description": "Diagnose: verbindet sich per Bluetooth mit einem Tracker, liest seinen FMDN-Status und gibt ihn als Antwort zurück. Nur lesend und nur bei Aufruf; nur für Administratoren. Der erste Zugriff auf ein Gerät, das noch nie angesprochen wurde, lässt es bis zum Zurücksetzen auf Werkseinstellungen einen Owner-Kontoschlüssel festlegen, deshalb nur bei bereits eingerichteten Trackern verwenden.",
+      "fields": {
+        "device_id": {
+          "name": "Gerät",
+          "description": "Wähle ein Gerät aus (oder übergib eine kanonische ID über die Entwicklerwerkzeuge)."
+        },
+        "address": {
+          "name": "Bluetooth-Adresse (optional)",
+          "description": "Mit dieser Adresse verbinden, statt nach einer Fast-Pair-Anzeige zu suchen, die zum Kontoschlüssel des Geräts passt. Die Adresse wird gegen keinen Schlüssel geprüft."
+        },
+        "timeout": {
+          "name": "Zeitlimit (optional)",
+          "description": "Zeitlimit für die gesamte Diagnose in Sekunden, 5 bis 120."
+        }
+      }
     }
   },
   "entity": {
@@ -909,6 +927,18 @@
     },
     "locate_all_rejected": {
       "message": "Der Server hat die Ortungsanfrage in diesem Durchlauf für alle Geräte ({rejected}) abgelehnt."
+    },
+    "beacon_keys_unavailable": {
+      "message": "Für dieses Gerät ist kein Schlüsselmaterial verfügbar."
+    },
+    "beacon_invalid_address": {
+      "message": "Die Adresse ist keine gültige Bluetooth-Adresse."
+    },
+    "beacon_bluetooth_unavailable": {
+      "message": "Die Bluetooth-Integration ist nicht geladen."
+    },
+    "beacon_diagnostic_busy": {
+      "message": "Eine andere Beacon-Diagnose läuft bereits. Bitte nach ihrem Ende erneut versuchen."
     }
   },
   "system_health": {
