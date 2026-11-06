@@ -148,7 +148,9 @@ _READ_BEACON_STATE_SCHEMA = vol.Schema(
         ),
         vol.Optional("include_raw_response", default=False): bool,
         vol.Optional("search_seconds", default=0): vol.All(
-            vol.Coerce(int), vol.Range(min=0, max=EID_SEARCH_MAX_SECONDS)
+            vol.Coerce(float),
+            vol.Range(min=0, max=EID_SEARCH_MAX_SECONDS),
+            vol.Coerce(int),
         ),
         vol.Optional("search_eid"): str,
     }

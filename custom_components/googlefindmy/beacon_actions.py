@@ -31,6 +31,7 @@ import hashlib
 import hmac
 import logging
 import re
+import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -67,16 +68,17 @@ PROVISIONING_LENGTHS = (1, 21, 33)
 EID_LENGTHS = (20, 32)
 MIN_FAST_PAIR_FRAME_LENGTH = 2
 # A tracker can change its address while the old one is still cached, so one call
-# may try several addresses. Each try gets a share of the limit, capped, because a
-# dead address would otherwise use all of it (measured: 40 to 57 s per failed call).
+# may try several addresses. Untried addresses share the time, capped, because a dead
+# address would otherwise use all of it (measured: 40 to 57 s per failed call). The
+# cap stays above the 20 s bleak allows itself, so a lone address gets its full try.
 MAX_CONNECT_ATTEMPTS = 3
-CONNECT_ATTEMPT_LIMIT = 20.0
-# Share of the limit kept for the reads after a late connection.
-READ_RESERVE_FRACTION = 3
+CONNECT_ATTEMPT_LIMIT = 25.0
+# Time kept for the reads after a late connection: at most this, at most a third.
+READ_RESERVE_SECONDS = 10.0
 # Upper bound of one EID search, however wide the requested window is.
 EID_SEARCH_TIME_BUDGET = 300.0
 EID_SEARCH_MAX_SECONDS = 172800
-_EID_SEARCH_YIELD_EVERY = 256
+_EID_SEARCH_CHECK_EVERY = 256
 _FHNA_K_BYTE = 10
 
 # First byte forms of an account key. The stored key usually starts with 0x04; the
@@ -445,14 +447,16 @@ def search_eid_counter(  # noqa: PLR0913
     clock: int,
     targets: Mapping[bytes, str],
     window_seconds: int,
+    stop: threading.Event | None = None,
     *,
     time_budget: float = EID_SEARCH_TIME_BUDGET,
     now: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
     """Look for the counter that yields a target EID, second by second around the clock.
 
-    Runs in an executor and gives way to the event loop thread regularly. ``targets``
-    maps an EID to the name of its source; only the name is reported. A hit on a
+    Runs in an executor. ``stop`` ends it early when the caller goes away, so a new
+    call cannot run next to a forgotten one. ``targets`` maps an EID to the name of
+    its source; only the name is reported. A hit on a
     counter whose low 10 bits are zero is what the specification prescribes, any
     other hit shows a tracker that departs from it.
     """
@@ -479,11 +483,13 @@ def search_eid_counter(  # noqa: PLR0913
         counter = clock + offset
         if not 0 <= counter <= MAX_COUNTER:
             continue
-        if checked % _EID_SEARCH_YIELD_EVERY == 0:
+        if checked % _EID_SEARCH_CHECK_EVERY == 0:
+            if stop is not None and stop.is_set():
+                report["result"] = "cancelled"
+                break
             if now() - started > time_budget:
                 report["result"] = "time_budget_exhausted"
                 break
-            time.sleep(0)
         checked += 1
         block = prf_aes_256_ecb(eik, _unmasked_prf_input(counter))
         for variant in variants:
@@ -1038,6 +1044,12 @@ async def _async_connect_address(
     )
 
 
+def _attempt_budget(remaining: float, untried: int, attempts_left: int) -> float:
+    """Return the time one try may take: a share among the addresses still untried."""
+    shares = min(max(untried, 1), attempts_left)
+    return min(remaining / shares, CONNECT_ATTEMPT_LIMIT)
+
+
 async def _async_connect_search(
     hass: Any,
     stack: _BleStack,
@@ -1048,8 +1060,9 @@ async def _async_connect_search(
     """Connect to the newest matching advertiser, moving on when one fails.
 
     The selection repeats before every try, so an address that appears meanwhile is
-    next in line. An address is tried again only when no untried one is left. Exactly
-    one connection is held at the end, and only to an address that matched the filter.
+    next in line. An address is tried again only when no untried one is left, also
+    when it is the only one. Exactly one connection is held at the end, and only to
+    an address that matched the filter.
     """
     loop = asyncio.get_running_loop()
     tried: list[str] = []
@@ -1071,9 +1084,10 @@ async def _async_connect_search(
         if remaining <= 0:
             report["connection"] = "timeout"
             break
-        target = next(
-            (item for item in selection.addresses if item not in tried),
-            selection.addresses[0],
+        untried = [item for item in selection.addresses if item not in tried]
+        target = untried[0] if untried else selection.addresses[0]
+        budget = _attempt_budget(
+            remaining, len(untried), MAX_CONNECT_ATTEMPTS - len(attempts)
         )
         tried.append(target)
         report["address_masked"] = mask_address(target)
@@ -1093,19 +1107,19 @@ async def _async_connect_search(
         )
         if device is None:
             report["connection"] = attempt["result"] = "device_not_connectable"
+            report.pop("error_class", None)
             continue
         client = await _async_connect_once(
             stack,
             device,
             target,
             report,
-            budget=min(
-                remaining / (MAX_CONNECT_ATTEMPTS - len(attempts) + 1),
-                CONNECT_ATTEMPT_LIMIT,
-            ),
+            budget=budget,
             max_attempts=1,
         )
         attempt["result"] = report["connection"]
+        if "error_class" in report:
+            attempt["error_class"] = report["error_class"]
         if client is not None:
             return client
     return None
@@ -1121,7 +1135,7 @@ async def async_probe_tracker(  # noqa: PLR0913
     search_seconds: int = 0,
     search_eid: bytes | None = None,
 ) -> dict[str, Any]:
-    """Find the tracker, connect once and read its state.
+    """Find the tracker, connect and read its state, holding one connection.
 
     Radio outcomes are part of the response, because the counters are the diagnosis.
     An EID search runs only when ``search_seconds`` is set, after the link is closed,
@@ -1156,9 +1170,11 @@ async def async_probe_tracker(  # noqa: PLR0913
             stack,
             keys.account_key,
             report,
-            deadline - timeout / READ_RESERVE_FRACTION,
+            deadline - min(READ_RESERVE_SECONDS, timeout / 3),
         )
     if client is None:
+        if search_seconds > 0:
+            report["eid_search"] = {"result": "no_clock"}
         return report
 
     reading: _Reading | None = None
@@ -1201,7 +1217,12 @@ async def _async_search(
         targets[search_eid] = "supplied"
     if not targets:
         return {"result": "no_target"}
-    result: dict[str, Any] = await hass.async_add_executor_job(
-        search_eid_counter, keys.eik, reading.clock, targets, search_seconds
-    )
+    stop = threading.Event()
+    try:
+        result: dict[str, Any] = await hass.async_add_executor_job(
+            search_eid_counter, keys.eik, reading.clock, targets, search_seconds, stop
+        )
+    except asyncio.CancelledError:
+        stop.set()
+        raise
     return result

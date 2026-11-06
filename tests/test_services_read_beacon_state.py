@@ -444,7 +444,7 @@ async def test_invalid_search_eid_is_rejected_without_echo(
     assert harness.probe_calls == []
 
 
-@pytest.mark.parametrize("seconds", [-1, 172801])
+@pytest.mark.parametrize("seconds", [-1, 172801, float("inf"), float("nan")])
 @pytest.mark.asyncio
 async def test_search_window_outside_the_range_is_rejected(
     harness: _Harness, seconds: int

@@ -14,6 +14,8 @@ import hmac
 import logging
 import secrets
 import sys
+import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -1106,7 +1108,7 @@ async def test_a_hanging_address_gets_only_its_share_of_the_limit(
         connect,
     )
     report = await ba.async_probe_tracker(
-        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address=None, timeout=0.3
+        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address=None, timeout=0.6
     )
     assert report["connection"] == "connected"
     assert report["connection_attempts"][0]["result"] == "timeout"
@@ -1372,7 +1374,7 @@ async def test_search_runs_after_disconnect_with_both_targets(
     seen: dict[str, Any] = {}
 
     def _search(
-        _eik: bytes, clock: int, targets: dict[bytes, str], window: int
+        _eik: bytes, clock: int, targets: dict[bytes, str], window: int, _stop: Any
     ) -> dict[str, Any]:
         seen.update(
             clock=clock,
@@ -1443,10 +1445,10 @@ async def test_tries_leave_time_for_the_reads(monkeypatch: pytest.MonkeyPatch) -
     loop = asyncio.get_running_loop()
     started = loop.time()
     report = await ba.async_probe_tracker(
-        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address=None, timeout=0.6
+        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address=None, timeout=1.5
     )
     assert report["connection"] == "timeout"
-    assert loop.time() - started < 0.55
+    assert loop.time() - started < 1.4
 
 
 @pytest.mark.asyncio
@@ -1501,3 +1503,181 @@ async def test_too_short_frame_counts_as_not_authenticated() -> None:
         "additional_length": 0,
         "auth_valid": False,
     }
+
+
+@pytest.mark.parametrize(
+    ("remaining", "untried", "attempts_left", "budget"),
+    [
+        (35.0, 1, 3, ba.CONNECT_ATTEMPT_LIMIT),
+        (10.0, 1, 3, 10.0),
+        (35.0, 2, 3, 17.5),
+        (30.0, 5, 3, 10.0),
+        (9.0, 0, 2, 9.0),
+        (30.0, 2, 1, ba.CONNECT_ATTEMPT_LIMIT),
+    ],
+)
+def test_attempt_budget_shares_time_among_untried_addresses(
+    remaining: float, untried: int, attempts_left: int, budget: float
+) -> None:
+    assert ba._attempt_budget(remaining, untried, attempts_left) == budget
+
+
+@pytest.mark.asyncio
+async def test_slow_connection_to_a_lone_address_succeeds_on_the_first_try(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _ConnectedProvider()
+    calls: list[str] = []
+
+    async def connect(_cls: Any, _device: object, name: str, **_kw: Any) -> Any:
+        calls.append(name)
+        await asyncio.sleep(0.5)
+        return provider
+
+    _install(
+        monkeypatch,
+        _Bluetooth([_timed_info("AA:AA:AA:AA:AA:01", -40, 100.0)]),
+        connect,
+    )
+    report = await ba.async_probe_tracker(
+        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address=None, timeout=1.2
+    )
+    assert report["connection"] == "connected"
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_attempt_reports_how_old_the_sighting_is(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _ConnectedProvider()
+
+    async def connect(*_args: Any, **_kw: Any) -> FakeProvider:
+        return provider
+
+    _install(
+        monkeypatch,
+        _Bluetooth(
+            [_timed_info("AA:AA:AA:AA:AA:01", -40, time.monotonic() - 5.0)],
+        ),
+        connect,
+    )
+    report = await ba.async_probe_tracker(
+        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address=None, timeout=5
+    )
+    assert 4.5 < report["connection_attempts"][0]["seen_ago_s"] < 30
+
+
+@pytest.mark.asyncio
+async def test_timeout_after_an_error_does_not_keep_the_old_error_class(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    async def connect(_cls: Any, _device: object, name: str, **_kw: Any) -> None:
+        calls.append(name)
+        if len(calls) == 1:
+            raise ProviderError(0x85)
+        await asyncio.sleep(60)
+
+    _install(
+        monkeypatch,
+        _Bluetooth([_timed_info("AA:AA:AA:AA:AA:01", -40, 100.0)]),
+        connect,
+    )
+    report = await ba.async_probe_tracker(
+        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address=None, timeout=0.3
+    )
+    assert report["connection"] == "timeout"
+    assert "error_class" not in report
+    assert report["connection_attempts"][0]["error_class"] == "ProviderError"
+
+
+@pytest.mark.asyncio
+async def test_device_gone_after_an_error_drops_the_old_error_class(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bluetooth = _Bluetooth([_timed_info("AA:AA:AA:AA:AA:01", -40, 100.0)])
+
+    async def connect(*_args: Any, **_kw: Any) -> None:
+        bluetooth.device = None
+        raise ProviderError(0x85)
+
+    _install(monkeypatch, bluetooth, connect)
+    report = await ba.async_probe_tracker(
+        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address=None, timeout=5
+    )
+    assert report["connection"] == "device_not_connectable"
+    assert "error_class" not in report
+
+
+class _BareEidProvider(_LongEidProvider):
+    """Answers ``0x01`` with the EID alone, without the flags byte."""
+
+    def _provisioning_frame(self, version_nonce: bytes, eid: bytes) -> bytes:
+        head = bytes((0x01, len(eid) + 8))
+        return head + _sign(self.account_key, version_nonce, head, eid, b"\x01") + eid
+
+
+@pytest.mark.asyncio
+async def test_second_eid_candidate_is_checked_when_the_first_misses() -> None:
+    provider = _BareEidProvider(eid_variant=EidVariant.SPEC_P256_X32_BE)
+    report = await _run(provider, ba.BeaconKeys(ACCOUNT_KEY, EIK))
+    assert report["eid_check"]["result"] == "match"
+    assert report["eid_check"]["variant"] == EidVariant.SPEC_P256_X32_BE.value
+    assert report["eid_check"]["inferred_form"] is True
+
+
+def test_search_stops_when_asked() -> None:
+    stop = threading.Event()
+    stop.set()
+    report = ba.search_eid_counter(EIK, 1_000_000, {bytes(20): "s"}, 100_000, stop)
+    assert report["result"] == "cancelled"
+    assert report["counters_checked"] == 0
+
+
+@pytest.mark.asyncio
+async def test_cancelled_caller_stops_the_search() -> None:
+    seen: list[threading.Event] = []
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class _WaitingHass(_Hass):
+        async def async_add_executor_job(self, _target: Any, *args: Any) -> Any:
+            seen.append(args[-1])
+            started.set()
+            await release.wait()
+
+    task = asyncio.create_task(
+        ba._async_search(
+            _WaitingHass(),
+            ba.BeaconKeys(ACCOUNT_KEY, EIK),
+            ba._Reading({}, 5, (bytes(20),)),
+            5,
+            None,
+        )
+    )
+    await started.wait()
+    assert not seen[0].is_set()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert seen[0].is_set()
+
+
+@pytest.mark.asyncio
+async def test_failed_connection_says_why_the_search_did_not_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def connect(*_args: Any, **_kw: Any) -> None:
+        raise ProviderError(0x85)
+
+    _install(monkeypatch, _Bluetooth([]), connect)
+    report = await ba.async_probe_tracker(
+        _Hass(),
+        ba.BeaconKeys(ACCOUNT_KEY, EIK),
+        address="AA:BB:CC:DD:EE:FF",
+        timeout=5,
+        search_seconds=9,
+    )
+    assert report["eid_search"] == {"result": "no_clock"}
