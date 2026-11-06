@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import fields
 from typing import Any
 
@@ -177,18 +176,19 @@ def test_priming_the_location_cache_sets_no_value(
     assert coordinator.get_active_device_identities()[0].trackable_components is None
 
 
-def test_resolver_mapping_branch_normalizes_the_value() -> None:
+@pytest.mark.asyncio
+async def test_resolver_mapping_branch_normalizes_the_value() -> None:
     resolver = GoogleFindMyEIDResolver.__new__(GoogleFindMyEIDResolver)
 
-    def normalize(value: object) -> DeviceIdentity:
+    async def normalize(value: object) -> DeviceIdentity:
         identity = {
             "registry_id": "r",
             "canonical_id": "c",
             "identity_key": b"\x01" * 32,
             "trackable_components": value,
         }
-        return asyncio.run(resolver._normalize_identities([identity], cache=None))[0]
+        return (await resolver._normalize_identities([identity], cache=None))[0]
 
-    assert normalize(3).trackable_components == 3
-    assert normalize("3").trackable_components is None
-    assert normalize(None).trackable_components is None
+    assert (await normalize(3)).trackable_components == 3
+    assert (await normalize("3")).trackable_components is None
+    assert (await normalize(None)).trackable_components is None

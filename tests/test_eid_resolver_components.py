@@ -34,7 +34,7 @@ from custom_components.googlefindmy.FMDNCrypto.eid_generator import (
 
 EIK = bytes(range(32))
 NOW = 1_780_000_000
-COUNTER = 150528  # Vielfaches von 1024, siehe tests/test_eid_generator_components.py
+COUNTER = 150528  # A multiple of 1024, see tests/test_eid_generator_components.py
 PAIR_DATE = NOW - COUNTER
 LEGACY = EidVariant.LEGACY_SECP160R1_X20_BE
 
@@ -45,7 +45,7 @@ KNOWN_EIDS = {
     255: "79b8497c94159e0121d470fc6df88911de63ac77",
 }
 
-# Measured on commit d2ea140c, /mnt/nas backup golden_erzeugen.py.
+# Measured on commit d2ea140c with the same computation as _golden().
 GOLDEN_NO_LOCK = "7cbf36f0a862017a1e4c532f357aabbc6e37d8f18094c13399b8305fbe48e7ec"
 GOLDEN_LOCKED = "5460395d2f234f1c8d7259acc791fe19f0b25f45fc27b678c1498e40bf0beb7b"
 

@@ -2943,6 +2943,6 @@ def test_derivation_search_finds_a_series_with_another_label(
     _narrow(monkeypatch, ["eik", name], [block_name])
     report = ba.search_eid_derivations(keys, CLOCK, {target: "advertised"}, 1)
     assert report["result"] == "match"
-    assert report["key_name"] == name
+    assert report["key"] == name
     assert key.hex() not in repr(report)
     assert _COMPONENT_EIK.hex() not in repr(report)

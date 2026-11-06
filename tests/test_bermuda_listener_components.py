@@ -62,6 +62,7 @@ async def _upload(sighting: ConfirmedSighting | None) -> object:
         return await bermuda_listener._async_get_device_eid(hass, coordinator, "dev-1")
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("component", "eid"), sorted(KNOWN_EIDS.items()))
 async def test_report_carries_the_eid_of_the_series(component: int, eid: str) -> None:
     upload = await _upload(_sighting(component=component))
@@ -71,6 +72,7 @@ async def test_report_carries_the_eid_of_the_series(component: int, eid: str) ->
     assert upload.uwt_mode is False
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize("component", MEASURED_COMPONENT_ROWS)
 async def test_report_can_be_read_with_the_series_key(component: int) -> None:
     upload = await _upload(_sighting(component=component))
@@ -83,20 +85,24 @@ async def test_report_can_be_read_with_the_series_key(component: int) -> None:
         cryptor.decrypt_foreign_report([EIK], encrypted, sx, COUNTER)
 
 
+@pytest.mark.asyncio
 async def test_single_component_sighting_stays_with_the_eik() -> None:
     upload = await _upload(_sighting(component=None))
     assert upload.eid == generate_eid_variant(EIK, COUNTER, LEGACY)
 
 
+@pytest.mark.asyncio
 async def test_foreign_fingerprint_reports_nothing() -> None:
     fingerprint = identity_key_fingerprint(b"\x09" * 32)
     assert await _upload(_sighting(key_fingerprint=fingerprint)) is None
 
 
+@pytest.mark.asyncio
 async def test_unknown_fingerprint_reports_nothing() -> None:
     assert await _upload(_sighting(key_fingerprint=None)) is None
 
 
+@pytest.mark.asyncio
 async def test_component_with_another_variant_reports_nothing(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -106,15 +112,18 @@ async def test_component_with_another_variant_reports_nothing(
     assert derive_component_key(EIK, 2).hex() not in caplog.text
 
 
+@pytest.mark.asyncio
 async def test_old_sighting_reports_nothing() -> None:
     assert await _upload(_sighting(observed_at=NOW - 10_000)) is None
 
 
+@pytest.mark.asyncio
 async def test_unknown_mode_travels_with_the_report() -> None:
     upload = await _upload(_sighting(uwt_mode=None))
     assert upload.uwt_mode is None
 
 
+@pytest.mark.asyncio
 async def test_debug_line_names_the_component_without_key_material(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

@@ -68,6 +68,7 @@ async def _records(update: DeviceUpdate_pb2.DeviceUpdate) -> list[dict[str, obje
     return [r for r in result if decrypt_locations.is_real_location_record(r)]
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize("component", MEASURED_COMPONENT_ROWS)
 async def test_report_on_a_series_decrypts_and_the_eik_stays(component: int) -> None:
     key = derive_component_key(EIK, component)
@@ -78,6 +79,7 @@ async def test_report_on_a_series_decrypts_and_the_eik_stays(component: int) -> 
     assert records[0]["identity_key_candidates"] == [EIK]
 
 
+@pytest.mark.asyncio
 async def test_series_key_does_not_reach_any_output(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -90,6 +92,7 @@ async def test_series_key_does_not_reach_any_output(
     assert key.hex() not in caplog.text
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize("capabilities", [None, _capabilities(1), b"\xff\xfe"])
 async def test_without_a_count_above_one_only_the_eik_is_tried(
     capabilities: bytes | None, monkeypatch: pytest.MonkeyPatch
@@ -107,6 +110,7 @@ async def test_without_a_count_above_one_only_the_eik_is_tried(
     assert tried == [(EIK,)]
 
 
+@pytest.mark.asyncio
 async def test_report_on_an_unknown_series_still_fails_and_counts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -115,6 +119,7 @@ async def test_report_on_an_unknown_series_still_fails_and_counts(
     assert await _records(_update(eid, _capabilities(3))) == []
 
 
+@pytest.mark.asyncio
 async def test_own_reports_stay_on_their_path(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[bytes] = []
 

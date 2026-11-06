@@ -184,7 +184,7 @@ def test_garbage_capabilities_survive_the_whole_device_list() -> None:
 
 
 def test_declared_message_would_fail_on_the_same_bytes() -> None:
-    """Rot-Probe of the rule: this is what `bytes` protects the list from."""
+    """Red probe of the rule: this is what `bytes` protects the list from."""
     wire = _length_delimited(
         DeviceUpdate_pb2.DeviceRegistration.DESCRIPTOR.fields_by_name[
             "deviceTypeInformation"
