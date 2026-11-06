@@ -12,7 +12,7 @@ Scope and guarantees
 --------------------
 - The set of data IDs is closed: ``0x00`` read beacon parameters, ``0x01`` read
   provisioning state, ``0x06`` read ringing state. Everything else is rejected
-  before any GATT access, see ``build_request``.
+  before any GATT access, see ``_BeaconSession.run``.
 - Nothing here runs unless the action is called: no timer, no listener, no entity.
   The only log calls are at DEBUG level.
 - Keys never leave this module's call chain: not in logs, responses, exceptions or
@@ -55,6 +55,9 @@ ROTATION_SECONDS = 1024
 # behind). The current window goes first.
 EID_WINDOW_OFFSETS = (0, -1, 1)
 MAX_COUNTER = 0xFFFFFFFF
+FULL_BYTE = 0xFF
+# Stop and disconnect can hang on a dead link; a hung cleanup must not hold the lock.
+CLEANUP_TIMEOUT = 5.0
 PARAMETERS_LENGTH = 16
 RINGING_LENGTH = 3
 PROVISIONING_LENGTHS = (1, 21, 33)
@@ -69,7 +72,10 @@ _KEY_FIRST_BYTES: tuple[tuple[str, int | None], ...] = (
     ("first_byte_05", 0x05),
 )
 
-_ATT_CODE_PATTERN = re.compile(r"\berror[=: ]+(0x[0-9a-fA-F]{1,2}|\d{1,3})\b")
+# The two text forms an ATT code is known to take: ``error=128`` from aioesphomeapi
+# and ``ATT error: 0x80`` from BlueZ-style backends. Anything looser reads numbers
+# out of unrelated messages.
+_ATT_CODE_PATTERN = re.compile(r"\berror=(\d{1,3})\b|\bATT error: (0x[0-9a-fA-F]{2})\b")
 
 
 class DataId(IntEnum):
@@ -101,6 +107,14 @@ class BeaconProtocolError(ValueError):
 
 class _ResponseAuthError(BeaconProtocolError):
     """The response authentication segment does not match."""
+
+
+class _NonceReadError(Exception):
+    """Reading the nonce failed; ``cause`` holds the backend error."""
+
+    def __init__(self, cause: Exception) -> None:
+        super().__init__(type(cause).__name__)
+        self.cause = cause
 
 
 class UnsupportedDataIdError(ValueError):
@@ -158,11 +172,7 @@ def build_request(data_id: int, key: bytes, version: int, nonce: bytes) -> bytes
     The data length counts the authentication segment (FMDN table 3 gives 0x08 for
     a request that holds nothing else).
     """
-    try:
-        checked = DataId(data_id)
-    except ValueError as err:
-        raise UnsupportedDataIdError("data ID is not in the read-only set") from err
-    head = bytes((checked, AUTH_LENGTH))
+    head = bytes((_checked_data_id(data_id), AUTH_LENGTH))
     return head + _auth(key, bytes((version,)), nonce, head)
 
 
@@ -301,8 +311,12 @@ def filter_matches(frame: FastPairFrame, account_key: bytes) -> bool:
     """Tell whether the frame's filter contains this account key.
 
     A filter may hold several keys of one Provider, so all bits of this key must be
-    set, not the whole filter be equal.
+    set, not the whole filter be equal. It stays probabilistic: an unrelated frame
+    can match by chance, which is why the report says ``filter_checked`` and not
+    more. A saturated filter matches every key and says nothing, so it never matches.
     """
+    if set(frame.account_filter) == {FULL_BYTE}:
+        return False
     for _name, key in account_key_forms(account_key):
         bits = _filter_bits(key, frame)
         if all(a & b == b for a, b in zip(frame.account_filter, bits, strict=True)):
@@ -321,7 +335,7 @@ class CandidateSelection:
 
 
 def select_candidates(infos: Iterable[Any], account_key: bytes) -> CandidateSelection:
-    """Return matching advertisers, strongest first. Others are never connected to."""
+    """Return advertisers whose filter holds the key, strongest first."""
     matched: list[tuple[int, str]] = []
     seen = unparsed = 0
     for info in infos:
@@ -392,24 +406,34 @@ def att_error_code(err: BaseException | None) -> int | None:
     """Return the ATT error code an exception carries, or ``None``.
 
     Over an ESPHome proxy the code sits in ``BluetoothGATTAPIError.error.error``,
-    wrapped by ``BleakError(str(ex)) from ex``; the text is the fallback. The text
-    itself stays here, it holds the hardware address.
+    wrapped by ``BleakError(str(ex)) from ex``; the text is the fallback. Only the
+    explicit cause chain counts, an unrelated ``__context__`` does not. The text
+    stays here, it holds the hardware address. This runs in an error path and must
+    not raise itself.
     """
     seen: set[int] = set()
     current = err
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        for candidate in (
-            getattr(getattr(current, "error", None), "error", None),
-            getattr(current, "error", None),
-        ):
-            if isinstance(candidate, int) and not isinstance(candidate, bool):
-                return candidate
-        match = _ATT_CODE_PATTERN.search(str(current))
-        if match:
-            return int(match.group(1), 0)
-        current = current.__cause__ or current.__context__
+    try:
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            nested = getattr(getattr(current, "error", None), "error", None)
+            if isinstance(nested, int) and not isinstance(nested, bool):
+                return nested
+            match = _ATT_CODE_PATTERN.search(str(current))
+            if match:
+                return int(match.group(1) or match.group(2), 0)
+            current = current.__cause__
+    except Exception:  # noqa: BLE001 - a hostile __str__ or property must not escape
+        return None
     return None
+
+
+def _checked_data_id(data_id: int) -> DataId:
+    """Return the data ID if it is in the closed read-only set."""
+    try:
+        return DataId(data_id)
+    except ValueError as err:
+        raise UnsupportedDataIdError("data ID is not in the read-only set") from err
 
 
 def _status_from_att(code: int | None) -> OperationStatus:
@@ -442,12 +466,29 @@ class _Runs:
     key_form: str | None
 
 
+def _failed_operation(
+    data_id: DataId, err: Exception, status: OperationStatus | None = None
+) -> _Operation:
+    """Return the outcome of a failed GATT call without its error text."""
+    code = att_error_code(err)
+    _LOGGER.debug(
+        "Beacon operation 0x%02x failed: %s, ATT error %s",
+        data_id,
+        type(err).__name__,
+        code,
+    )
+    return _Operation(status or _status_from_att(code), b"", type(err).__name__, code)
+
+
 class _BeaconSession:
     """One subscribed connection; routes notifications to the waiting operation."""
 
-    def __init__(self, client: BeaconGattClient, timeout: float) -> None:
+    def __init__(
+        self, client: BeaconGattClient, timeout: float, deadline: float | None = None
+    ) -> None:
         self._client = client
         self._timeout = timeout
+        self._deadline = deadline
         self._waiting: tuple[int, asyncio.Future[bytes]] | None = None
 
     def on_notify(self, _sender: Any, data: bytearray) -> None:
@@ -457,49 +498,68 @@ class _BeaconSession:
         if not self._waiting[1].done():
             self._waiting[1].set_result(bytes(data))
 
-    async def run(self, data_id: DataId, key: bytes) -> _Operation:
-        """Read a fresh nonce, send one request and verify its notification."""
+    def budget(self, loop: asyncio.AbstractEventLoop) -> float:
+        """Return the time this operation may take within the overall limit."""
+        if self._deadline is None:
+            return self._timeout
+        return min(self._timeout, self._deadline - loop.time())
+
+    async def run(self, data_id: int, key: bytes) -> _Operation:
+        """Read a fresh nonce, send one request and verify its notification.
+
+        A rejection only counts on the write: the specification defines the
+        unauthenticated error for write requests, and a failed read says nothing
+        about a key.
+        """
+        checked = _checked_data_id(data_id)
         loop = asyncio.get_running_loop()
+        budget = self.budget(loop)
+        if budget <= 0:
+            return _Operation(OperationStatus.NOT_ATTEMPTED)
         future: asyncio.Future[bytes] = loop.create_future()
-        self._waiting = (data_id, future)
+        self._waiting = (checked, future)
         try:
-            async with asyncio.timeout(self._timeout):
-                version, nonce = parse_nonce(
-                    await self._client.read_gatt_char(BEACON_ACTIONS_UUID)
-                )
+            async with asyncio.timeout(budget):
+                version, nonce = await self._read_nonce()
                 # The Provider notifies before the write completes, so the future
                 # exists before the write goes out.
                 await self._client.write_gatt_char(
                     BEACON_ACTIONS_UUID,
-                    build_request(data_id, key, version, nonce),
+                    build_request(checked, key, version, nonce),
                     response=True,
                 )
                 frame = await future
-            return _Operation(
+            operation = _Operation(
                 OperationStatus.OK,
-                verify_response(frame, data_id, key, version, nonce),
+                verify_response(frame, checked, key, version, nonce),
             )
         except TimeoutError:
-            return _Operation(OperationStatus.TIMEOUT)
+            operation = _Operation(OperationStatus.TIMEOUT)
         except _ResponseAuthError:
-            return _Operation(OperationStatus.RESPONSE_AUTH_INVALID)
+            operation = _Operation(OperationStatus.RESPONSE_AUTH_INVALID)
         except BeaconProtocolError:
-            return _Operation(OperationStatus.INVALID_RESPONSE)
-        except UnsupportedDataIdError:
-            raise
-        except Exception as err:  # noqa: BLE001 - the backend's error types vary
-            code = att_error_code(err)
-            _LOGGER.debug(
-                "Beacon operation 0x%02x failed: %s, ATT error %s",
-                data_id,
-                type(err).__name__,
-                code,
+            operation = _Operation(OperationStatus.INVALID_RESPONSE)
+        except _NonceReadError as err:
+            operation = _failed_operation(
+                checked, err.cause, OperationStatus.GATT_ERROR
             )
-            return _Operation(_status_from_att(code), b"", type(err).__name__, code)
+        except Exception as err:  # noqa: BLE001 - the backend's error types vary
+            operation = _failed_operation(checked, err)
         finally:
             self._waiting = None
             if not future.done():
                 future.cancel()
+        return operation
+
+    async def _read_nonce(self) -> tuple[int, bytes]:
+        """Read version and nonce; a backend failure stays apart from a write failure."""
+        try:
+            value = await self._client.read_gatt_char(BEACON_ACTIONS_UUID)
+        except TimeoutError:
+            raise
+        except Exception as err:  # noqa: BLE001 - the backend's error types vary
+            raise _NonceReadError(err) from err
+        return parse_nonce(value)
 
 
 def _operation_report(operation: _Operation) -> dict[str, Any]:
@@ -531,17 +591,28 @@ async def _read_with_account_key(
 
 
 async def read_beacon_state(
-    client: BeaconGattClient, keys: BeaconKeys, *, operation_timeout: float = 10.0
+    client: BeaconGattClient,
+    keys: BeaconKeys,
+    *,
+    operation_timeout: float = 10.0,
+    deadline: float | None = None,
 ) -> dict[str, Any]:
     """Run ``0x00``, ``0x01``, ``0x06`` on one connection and report the results.
 
     ``eik_matches`` is ``True`` only after a verified ``0x06`` response and ``False``
-    only after an explicit unauthenticated error. That error also means "not
-    provisioned", so ``eik_set`` belongs next to it. Everything else is ``None``:
-    a timeout says nothing about the key.
+    only after a rejected ``0x06`` write on a link where ``0x01`` verified. The code
+    0x80 alone is not enough: over an ESP32 proxy it can also be the local
+    ``ESP_GATT_NO_RESOURCES``, and the Provider returns it when not provisioned, so
+    ``eik_set`` belongs next to it. Everything else is ``None``.
+
+    ``deadline`` (event loop time) ends the run: operations that no longer fit are
+    ``not_attempted``, and what was verified before stays in the report.
     """
-    session = _BeaconSession(client, operation_timeout)
-    await client.start_notify(BEACON_ACTIONS_UUID, session.on_notify)
+    session = _BeaconSession(client, operation_timeout, deadline)
+    # A hanging subscription must not outlive the limit and hold the caller's lock.
+    loop = asyncio.get_running_loop()
+    async with asyncio.timeout(session.budget(loop)):
+        await client.start_notify(BEACON_ACTIONS_UUID, session.on_notify)
     try:
         forms = account_key_forms(keys.account_key) if keys.account_key else []
         parameters, form_name, key = await _read_with_account_key(
@@ -564,7 +635,8 @@ async def read_beacon_state(
         )
     finally:
         try:
-            await client.stop_notify(BEACON_ACTIONS_UUID)
+            async with asyncio.timeout(CLEANUP_TIMEOUT):
+                await client.stop_notify(BEACON_ACTIONS_UUID)
         except Exception as err:  # noqa: BLE001 - the link may already be gone
             _LOGGER.debug("stop_notify failed: %s", type(err).__name__)
 
@@ -619,7 +691,7 @@ def _build_report(keys: BeaconKeys, runs: _Runs) -> dict[str, Any]:
             eik_matches = True
         except BeaconProtocolError:
             report_ringing["status"] = OperationStatus.INVALID_RESPONSE.value
-    elif ringing.status is OperationStatus.UNAUTHENTICATED:
+    elif ringing.status is OperationStatus.UNAUTHENTICATED and eik_set is not None:
         eik_matches = False
 
     eid_check: dict[str, Any] = {"result": "not_checked"}
@@ -692,7 +764,7 @@ async def async_probe_tracker(
         if keys.account_key is None:
             report["connection"] = "no_account_key_for_search"
             return report
-        selection = await asyncio.to_thread(
+        selection = await hass.async_add_executor_job(
             select_candidates,
             list(bluetooth.async_discovered_service_info(hass, connectable=True)),
             keys.account_key,
@@ -713,6 +785,8 @@ async def async_probe_tracker(
     last_info = bluetooth.async_last_service_info(hass, target, connectable=True)
     report["rssi"] = getattr(last_info, "rssi", None)
 
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
     client: Any = None
     try:
         async with asyncio.timeout(timeout):
@@ -722,22 +796,26 @@ async def async_probe_tracker(
                 mask_address(target),
                 max_attempts=2,
             )
-            report["connection"] = "connected"
-            report.update(await read_beacon_state(client, keys))
     except TimeoutError:
-        report["connection"] = (
-            "timeout"
-            if report["connection"] == "not_attempted"
-            else "operation_timeout"
-        )
+        report["connection"] = "timeout"
+        return report
     except Exception as err:  # noqa: BLE001 - the backend's error types vary
         report["connection"] = "connection_failed"
         report["error_class"] = type(err).__name__
         _LOGGER.debug("Beacon connection failed: %s", type(err).__name__)
+        return report
+
+    report["connection"] = "connected"
+    try:
+        report.update(await read_beacon_state(client, keys, deadline=deadline))
+    except Exception as err:  # noqa: BLE001 - e.g. the characteristic is missing
+        report["connection"] = "gatt_setup_failed"
+        report["error_class"] = type(err).__name__
+        _LOGGER.debug("Beacon GATT setup failed: %s", type(err).__name__)
     finally:
-        if client is not None:
-            try:
+        try:
+            async with asyncio.timeout(CLEANUP_TIMEOUT):
                 await client.disconnect()
-            except Exception as err:  # noqa: BLE001 - nothing left to do
-                _LOGGER.debug("Beacon disconnect failed: %s", type(err).__name__)
+        except Exception as err:  # noqa: BLE001 - nothing left to do
+            _LOGGER.debug("Beacon disconnect failed: %s", type(err).__name__)
     return report

@@ -151,13 +151,13 @@ def test_build_request_rejects_everything_outside_the_read_only_set(
 
 
 @pytest.mark.asyncio
-async def test_session_rejects_a_foreign_data_id_before_it_writes() -> None:
+async def test_session_rejects_a_foreign_data_id_before_any_gatt_access() -> None:
     provider = FakeProvider()
 
     session = ba._BeaconSession(provider, 1.0)
     with pytest.raises(ba.UnsupportedDataIdError):
-        await session.run(0x05, ACCOUNT_KEY)  # type: ignore[arg-type]
-    assert [c for c in provider.calls if c[0] == "write"] == []
+        await session.run(0x05, ACCOUNT_KEY)
+    assert provider.calls == []
 
 
 def test_data_id_enum_holds_exactly_the_three_read_operations() -> None:
@@ -348,8 +348,11 @@ def test_att_code_comes_from_the_wrapped_proxy_error() -> None:
     ("text", "code"),
     [
         ("handle=3 error=128 description=x", 128),
-        ("error: 0x80", 0x80),
+        ("ATT error: 0x80", 0x80),
         ("nothing", None),
+        ("ble error: 128 bytes short", None),
+        ("error 007", None),
+        ("error=09x", None),
     ],
 )
 def test_att_code_falls_back_to_the_text(text: str, code: int | None) -> None:
@@ -554,6 +557,9 @@ class _Hass:
     async def async_add_import_executor_job(self, target: Any) -> Any:
         return target()
 
+    async def async_add_executor_job(self, target: Any, *args: Any) -> Any:
+        return target(*args)
+
 
 def _install(
     monkeypatch: pytest.MonkeyPatch, bluetooth: _Bluetooth, connect: Any
@@ -699,32 +705,18 @@ async def test_probe_reports_connection_errors_without_their_text(
     assert "AA:BB:CC" not in repr(report)
 
 
-@pytest.mark.parametrize(
-    ("connected", "expected"), [(False, "timeout"), (True, "operation_timeout")]
-)
 @pytest.mark.asyncio
-async def test_probe_reports_the_phase_of_a_timeout(
-    monkeypatch: pytest.MonkeyPatch, connected: bool, expected: str
+async def test_probe_reports_a_connection_timeout(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    provider = _ConnectedProvider()
-
-    async def connect(*_args: Any, **_kw: Any) -> FakeProvider:
-        if not connected:
-            raise TimeoutError
-        return provider
-
-    async def timing_out(*_args: Any, **_kw: Any) -> dict[str, Any]:
+    async def connect(*_args: Any, **_kw: Any) -> None:
         raise TimeoutError
 
-    monkeypatch.setattr(ba, "read_beacon_state", timing_out)
     _install(monkeypatch, _Bluetooth([]), connect)
     report = await ba.async_probe_tracker(
-        _Hass(),
-        ba.BeaconKeys(ACCOUNT_KEY, EIK),
-        address="AA:BB:CC:DD:EE:FF",
-        timeout=5,
+        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address="AA:BB:CC:DD:EE:FF", timeout=5
     )
-    assert report["connection"] == expected
+    assert report["connection"] == "timeout"
 
 
 # --- malformed responses ----------------------------------------------------------------
@@ -818,3 +810,162 @@ async def test_second_notification_for_an_answered_operation_is_ignored() -> Non
     session.on_notify(None, bytearray(b"\x01first"))
     session.on_notify(None, bytearray(b"\x01second"))
     assert future.result() == b"\x01first"
+
+
+# --- review findings -------------------------------------------------------------------
+
+
+def test_att_code_ignores_a_flat_error_attribute_and_foreign_context() -> None:
+    flat = Exception("x")
+    flat.error = 128  # type: ignore[attr-defined]
+    assert ba.att_error_code(flat) is None
+    outer = Exception("y")
+    outer.__context__ = Exception("handle=1 error=128")
+    assert ba.att_error_code(outer) is None
+
+
+def test_att_code_survives_a_hostile_exception() -> None:
+    class Hostile(Exception):
+        def __str__(self) -> str:
+            raise RuntimeError("boom")
+
+    assert ba.att_error_code(Hostile()) is None
+
+
+@pytest.mark.asyncio
+async def test_rejection_on_the_nonce_read_is_not_a_key_verdict() -> None:
+    provider = FakeProvider()
+
+    async def failing(_uuid: str) -> bytes:
+        raise ProviderError(0x80)
+
+    provider.read_gatt_char = failing  # type: ignore[method-assign]
+    report = await _run(provider, ba.BeaconKeys(ACCOUNT_KEY, EIK))
+    assert report["eik_matches"] is None
+    for operation in report["operations"].values():
+        assert operation["status"] == "gatt_error"
+        assert operation["att_error"] == 0x80
+
+
+@pytest.mark.asyncio
+async def test_timeout_on_the_nonce_read_is_a_timeout() -> None:
+    provider = FakeProvider()
+
+    async def failing(_uuid: str) -> bytes:
+        raise TimeoutError
+
+    provider.read_gatt_char = failing  # type: ignore[method-assign]
+    report = await _run(provider, ba.BeaconKeys(ACCOUNT_KEY, EIK))
+    assert report["operations"]["read_ringing_state"]["status"] == "timeout"
+
+
+@pytest.mark.asyncio
+async def test_all_writes_rejected_is_no_verdict_on_the_eik() -> None:
+    """0x80 can be ESP_GATT_NO_RESOURCES over a proxy: without a verified 0x01 it decides nothing."""
+    provider = FakeProvider()
+
+    async def failing(_uuid: str, _data: bytes, response: bool = True) -> None:
+        raise ProviderError(0x80)
+
+    provider.write_gatt_char = failing  # type: ignore[method-assign]
+    report = await _run(provider, ba.BeaconKeys(ACCOUNT_KEY, EIK))
+    assert report["eik_set"] is None
+    assert report["eik_matches"] is None
+    assert report["operations"]["read_ringing_state"]["status"] == "unauthenticated"
+
+
+def test_saturated_filter_matches_nothing() -> None:
+    frame = ba.FastPairFrame(b"\xff\xff\xff\xff", b"\xbc\xac", b"")
+    assert not ba.filter_matches(frame, ACCOUNT_KEY)
+
+
+@pytest.mark.asyncio
+async def test_deadline_keeps_what_was_verified_before() -> None:
+    provider = FakeProvider()
+    provider.silent_ids = {0x01}
+    loop = asyncio.get_running_loop()
+    report = await ba.read_beacon_state(
+        provider,
+        ba.BeaconKeys(ACCOUNT_KEY, EIK),
+        operation_timeout=10.0,
+        deadline=loop.time() + 0.05,
+    )
+    assert report["operations"]["read_beacon_parameters"]["clock"] == CLOCK
+    assert report["operations"]["read_provisioning_state"]["status"] == "timeout"
+    assert report["operations"]["read_ringing_state"]["status"] == "not_attempted"
+    assert report["eik_matches"] is None
+
+
+@pytest.mark.asyncio
+async def test_hanging_cleanup_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ba, "CLEANUP_TIMEOUT", 0.01)
+    provider = _ConnectedProvider()
+
+    async def hanging(*_args: Any) -> None:
+        await asyncio.Event().wait()
+
+    provider.stop_notify = hanging  # type: ignore[method-assign]
+    provider.disconnect = hanging  # type: ignore[method-assign]
+
+    async def connect(*_args: Any, **_kw: Any) -> FakeProvider:
+        return provider
+
+    _install(monkeypatch, _Bluetooth([]), connect)
+    async with asyncio.timeout(5):
+        report = await ba.async_probe_tracker(
+            _Hass(),
+            ba.BeaconKeys(ACCOUNT_KEY, EIK),
+            address="AA:BB:CC:DD:EE:FF",
+            timeout=5,
+        )
+    assert report["eik_matches"] is True
+
+
+@pytest.mark.asyncio
+async def test_gatt_setup_failure_keeps_the_connection_phase_apart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _ConnectedProvider()
+
+    async def failing(*_args: Any) -> None:
+        raise ProviderError(0x85)
+
+    provider.start_notify = failing  # type: ignore[method-assign]
+
+    async def connect(*_args: Any, **_kw: Any) -> FakeProvider:
+        return provider
+
+    _install(monkeypatch, _Bluetooth([]), connect)
+    report = await ba.async_probe_tracker(
+        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address="AA:BB:CC:DD:EE:FF", timeout=5
+    )
+    assert report["connection"] == "gatt_setup_failed"
+    assert report["error_class"] == "ProviderError"
+    assert provider.disconnects == 1
+
+
+@pytest.mark.asyncio
+async def test_hanging_subscription_is_bounded_by_the_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _ConnectedProvider()
+
+    async def hanging(*_args: Any) -> None:
+        await asyncio.Event().wait()
+
+    provider.start_notify = hanging  # type: ignore[method-assign]
+
+    async def connect(*_args: Any, **_kw: Any) -> FakeProvider:
+        return provider
+
+    _install(monkeypatch, _Bluetooth([]), connect)
+    async with asyncio.timeout(5):
+        report = await ba.async_probe_tracker(
+            _Hass(),
+            ba.BeaconKeys(ACCOUNT_KEY, EIK),
+            address="AA:BB:CC:DD:EE:FF",
+            timeout=0.01,
+        )
+    assert report["connection"] == "gatt_setup_failed"
+    assert report["error_class"] == "TimeoutError"
+    assert provider.disconnects == 1

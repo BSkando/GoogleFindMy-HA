@@ -163,8 +163,8 @@ read_beacon_state:
   name: Read Beacon State
   description: >-
     Diagnostic: connects to a tracker over Bluetooth and reads its FMDN state, then
-    returns it as the response. Read-only: it never rings, provisions or changes the
-    tracker, and it runs only when you call it. Administrators only. The first access
+    returns it as the response. It sends read requests only, never a ring or provisioning
+    command, and it runs only when you call it. Administrators only. The first access
     of any client to a Provider that was never accessed before makes it choose an
     owner account key until factory reset, so use it on trackers that are already
     set up. Needs a Bluetooth adapter or connectable proxy in range.
@@ -186,7 +186,7 @@ read_beacon_state:
         text:
     timeout:
       name: Timeout (optional)
-      description: "Time limit for the whole diagnostic in seconds, 5 to 120."
+      description: "Time limit in seconds, 5 to 120, for the key lookup and again for connection and reads. Cleanup may add a few seconds."
       required: false
       default: 45
       selector:

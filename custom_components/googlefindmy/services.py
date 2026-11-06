@@ -888,7 +888,7 @@ def _decrypt_account_key(owner_key: bytes, blob: bytes) -> bytes:
 
 
 async def _async_beacon_keys(
-    hass: HomeAssistant, runtime: Any, canonical_id: str
+    hass: HomeAssistant, runtime: Any, canonical_id: str, timeout: float = 45.0
 ) -> BeaconKeys:
     """Return the tracker's account key and EIK, or raise a translated error.
 
@@ -916,20 +916,29 @@ async def _async_beacon_keys(
         raise unavailable
 
     cache = getattr(coordinator, "cache", None)
-    normalized = await resolver._normalize_identities([identity], cache=cache)
-    eik = _normalize_encrypted_blob(normalized[0].identity_key) if normalized else None
-
+    eik: bytes | None = None
     account_key: bytes | None = None
+    # A wrong owner key is the very case this diagnostic exists to expose, so a key
+    # that cannot be obtained leaves the other one usable. Whatever the crypto or
+    # network layer raises stays out of the response; only its class is logged.
+    try:
+        async with asyncio.timeout(timeout):
+            normalized = await resolver._normalize_identities([identity], cache=cache)
+        if normalized:
+            eik = _normalize_encrypted_blob(normalized[0].identity_key)
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.debug("EIK not usable: %s", type(err).__name__)
     blob = _normalize_encrypted_blob(identity.encrypted_account_key)
     if blob is not None:
-        owner = await resolver._resolve_owner_key(identity, cache=cache)
-        if owner is not None:
-            try:
-                account_key = await asyncio.to_thread(
+        try:
+            async with asyncio.timeout(timeout):
+                owner = await resolver._resolve_owner_key(identity, cache=cache)
+            if owner is not None:
+                account_key = await hass.async_add_executor_job(
                     _decrypt_account_key, owner.key, blob
                 )
-            except ValueError as err:
-                _LOGGER.debug("Account key not usable: %s", type(err).__name__)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("Account key not usable: %s", type(err).__name__)
 
     keys = BeaconKeys(
         account_key=account_key if account_key and len(account_key) == 16 else None,
@@ -1853,14 +1862,16 @@ async def async_register_services(hass: HomeAssistant, ctx: dict[str, Any]) -> N
             )
         if beacon_lock.locked():
             raise _service_validation_error(
-                "Another beacon diagnostic is running.",
+                "Another beacon diagnostic is running. Try again when it has finished.",
                 translation_key="beacon_diagnostic_busy",
             )
         async with beacon_lock:
             runtime, canonical_id = await _resolve_runtime_for_device_id(
                 str(call.data["device_id"])
             )
-            keys = await _async_beacon_keys(hass, runtime, canonical_id)
+            keys = await _async_beacon_keys(
+                hass, runtime, canonical_id, call.data["timeout"]
+            )
             return await async_probe_tracker(
                 hass, keys, address=address, timeout=call.data["timeout"]
             )

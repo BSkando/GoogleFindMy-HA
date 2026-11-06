@@ -433,7 +433,7 @@
     },
     "read_beacon_state": {
       "name": "Read Beacon State",
-      "description": "Diagnostic: connects to a tracker over Bluetooth, reads its FMDN state and returns it as the response. Read-only and only when called; administrators only. The first access to a Provider that was never accessed before makes it choose an owner account key until factory reset, so use it on trackers that are already set up.",
+      "description": "Diagnostic: connects to a tracker over Bluetooth, reads its FMDN state and returns it as the response. It sends read requests only and runs only when called; administrators only. The first access to a Provider that was never accessed before makes it choose an owner account key until factory reset, so use it on trackers that are already set up.",
       "fields": {
         "device_id": {
           "name": "Device",
@@ -445,7 +445,7 @@
         },
         "timeout": {
           "name": "Timeout (optional)",
-          "description": "Time limit for the whole diagnostic in seconds, 5 to 120."
+          "description": "Time limit in seconds, 5 to 120, for the key lookup and again for connection and reads. Cleanup may add a few seconds."
         }
       }
     }

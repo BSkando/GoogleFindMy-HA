@@ -433,7 +433,7 @@
     },
     "read_beacon_state": {
       "name": "Beacon-Status lesen",
-      "description": "Diagnose: verbindet sich per Bluetooth mit einem Tracker, liest seinen FMDN-Status und gibt ihn als Antwort zurück. Nur lesend und nur bei Aufruf; nur für Administratoren. Der erste Zugriff auf ein Gerät, das noch nie angesprochen wurde, lässt es bis zum Zurücksetzen auf Werkseinstellungen einen Owner-Kontoschlüssel festlegen, deshalb nur bei bereits eingerichteten Trackern verwenden.",
+      "description": "Diagnose: verbindet sich per Bluetooth mit einem Tracker, liest seinen FMDN-Status und gibt ihn als Antwort zurück. Sendet nur Leseanfragen und läuft nur bei Aufruf; nur für Administratoren. Der erste Zugriff auf ein Gerät, das noch nie angesprochen wurde, lässt es bis zum Zurücksetzen auf Werkseinstellungen einen Owner-Kontoschlüssel festlegen, deshalb nur bei bereits eingerichteten Trackern verwenden.",
       "fields": {
         "device_id": {
           "name": "Gerät",
@@ -445,7 +445,7 @@
         },
         "timeout": {
           "name": "Zeitlimit (optional)",
-          "description": "Zeitlimit für die gesamte Diagnose in Sekunden, 5 bis 120."
+          "description": "Zeitlimit in Sekunden, 5 bis 120, für die Schlüsselsuche und erneut für Verbindung und Lesen. Das Aufräumen kann einige Sekunden hinzufügen."
         }
       }
     }

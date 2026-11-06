@@ -43,7 +43,9 @@ class _Harness:
         ) -> None:
             self.registered[service] = (func, schema, supports_response)
 
-        async def _keys(_hass: Any, _runtime: Any, _canonical: str) -> BeaconKeys:
+        async def _keys(
+            _hass: Any, _runtime: Any, _canonical: str, _timeout: float
+        ) -> BeaconKeys:
             return self.keys
 
         async def _probe(_hass: Any, keys: BeaconKeys, **kwargs: Any) -> dict[str, Any]:
@@ -187,9 +189,14 @@ class _Resolver:
         return SimpleNamespace(key=bytes(32), version=1)
 
 
+async def _executor_job(target: Any, *args: Any) -> Any:
+    return target(*args)
+
+
 def _key_hass(identity: Any) -> tuple[SimpleNamespace, SimpleNamespace]:
     hass = SimpleNamespace(
-        data={const.DOMAIN: {const.DATA_EID_RESOLVER: _Resolver(identity)}}
+        data={const.DOMAIN: {const.DATA_EID_RESOLVER: _Resolver(identity)}},
+        async_add_executor_job=_executor_job,
     )
     runtime = SimpleNamespace(
         coordinator=SimpleNamespace(
@@ -291,8 +298,91 @@ async def test_no_owner_key_leaves_only_the_eik() -> None:
     assert keys.eik == EIK
 
 
+def test_private_resolver_methods_keep_their_shape() -> None:
+    """The key path uses two private methods; a rename must not stay green on doubles."""
+    from custom_components.googlefindmy.eid_resolver import GoogleFindMyEIDResolver
+
+    for name in ("_normalize_identities", "_resolve_owner_key"):
+        assert (
+            "cache"
+            in inspect.signature(getattr(GoogleFindMyEIDResolver, name)).parameters
+        )
+
+
 @pytest.mark.asyncio
-async def test_real_registration_uses_the_admin_helper_with_response() -> None:
-    source = inspect.getsource(services.async_register_services)
-    assert "SERVICE_READ_BEACON_STATE" in source
-    assert "supports_response=SupportsResponse.ONLY" in source
+async def test_wrong_owner_key_leaves_the_eik_usable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A wrong owner key raises ``InvalidTag``, which is not a ``ValueError``."""
+    from cryptography.exceptions import InvalidTag
+
+    def _raise(_owner: bytes, _blob: bytes) -> bytes:
+        raise InvalidTag
+
+    monkeypatch.setattr(services, "_decrypt_account_key", _raise)
+    hass, runtime = _key_hass(_identity(encrypted_account_key=bytes(44)))
+    keys = await services._async_beacon_keys(hass, runtime, "abc")
+    assert keys.account_key is None
+    assert keys.eik == EIK
+
+
+@pytest.mark.asyncio
+async def test_failing_identity_normalization_leaves_the_account_key_usable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        services, "_decrypt_account_key", lambda _owner, _blob: ACCOUNT_KEY
+    )
+    hass, runtime = _key_hass(_identity(encrypted_account_key=bytes(32)))
+
+    async def failing(_items: list[Any], *, cache: Any) -> list[Any]:
+        raise RuntimeError("secret")
+
+    hass.data[const.DOMAIN][const.DATA_EID_RESOLVER]._normalize_identities = failing
+    keys = await services._async_beacon_keys(hass, runtime, "abc")
+    assert keys.account_key == ACCOUNT_KEY
+    assert keys.eik is None
+
+
+@pytest.mark.asyncio
+async def test_identity_dropped_by_normalization_has_no_eik() -> None:
+    hass, runtime = _key_hass(_identity())
+
+    async def dropped(_items: list[Any], *, cache: Any) -> list[Any]:
+        return []
+
+    hass.data[const.DOMAIN][const.DATA_EID_RESOLVER]._normalize_identities = dropped
+    with pytest.raises(ServiceValidationError) as info:
+        await services._async_beacon_keys(hass, runtime, "abc")
+    assert info.value.translation_key == "beacon_keys_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_hanging_owner_key_lookup_leaves_the_eik_usable() -> None:
+    hass, runtime = _key_hass(_identity(encrypted_account_key=bytes(32)))
+
+    async def hanging(_identity: Any, *, cache: Any) -> None:
+        await asyncio.Event().wait()
+
+    hass.data[const.DOMAIN][const.DATA_EID_RESOLVER]._resolve_owner_key = hanging
+    keys = await services._async_beacon_keys(hass, runtime, "abc", 0.01)
+    assert keys.account_key is None
+    assert keys.eik == EIK
+
+
+@pytest.mark.asyncio
+async def test_handler_passes_its_timeout_to_the_key_lookup(
+    monkeypatch: pytest.MonkeyPatch, harness: _Harness
+) -> None:
+    await harness.register()
+    seen: list[float] = []
+
+    async def lookup(
+        _hass: Any, _runtime: Any, _canonical: str, timeout: float
+    ) -> BeaconKeys:
+        seen.append(timeout)
+        return harness.keys
+
+    monkeypatch.setattr(services, "_async_beacon_keys", lookup)
+    await harness.handler(harness.call(timeout=7))
+    assert seen == [7]
