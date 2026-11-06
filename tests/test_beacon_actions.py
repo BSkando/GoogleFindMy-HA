@@ -1108,7 +1108,7 @@ async def test_a_hanging_address_gets_only_its_share_of_the_limit(
         connect,
     )
     report = await ba.async_probe_tracker(
-        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address=None, timeout=0.6
+        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address=None, timeout=1.5
     )
     assert report["connection"] == "connected"
     assert report["connection_attempts"][0]["result"] == "timeout"
@@ -1433,25 +1433,6 @@ async def test_search_says_why_it_cannot_run(
 
 
 @pytest.mark.asyncio
-async def test_tries_leave_time_for_the_reads(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def connect(*_args: Any, **_kw: Any) -> None:
-        await asyncio.sleep(60)
-
-    _install(
-        monkeypatch,
-        _Bluetooth([_timed_info("AA:AA:AA:AA:AA:01", -40, 100.0)]),
-        connect,
-    )
-    loop = asyncio.get_running_loop()
-    started = loop.time()
-    report = await ba.async_probe_tracker(
-        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address=None, timeout=1.5
-    )
-    assert report["connection"] == "timeout"
-    assert loop.time() - started < 1.4
-
-
-@pytest.mark.asyncio
 async def test_limit_already_used_up_stops_before_any_connection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1522,28 +1503,73 @@ def test_attempt_budget_shares_time_among_untried_addresses(
     assert ba._attempt_budget(remaining, untried, attempts_left) == budget
 
 
+def _record_budgets(
+    monkeypatch: pytest.MonkeyPatch, result: Any, budgets: list[float]
+) -> None:
+    async def _once(*_args: Any, budget: float, **_kw: Any) -> Any:
+        budgets.append(budget)
+        return result
+
+    monkeypatch.setattr(ba, "_async_connect_once", _once)
+
+
 @pytest.mark.asyncio
-async def test_slow_connection_to_a_lone_address_succeeds_on_the_first_try(
+async def test_lone_address_gets_more_than_a_third_of_the_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    provider = _ConnectedProvider()
-    calls: list[str] = []
-
-    async def connect(_cls: Any, _device: object, name: str, **_kw: Any) -> Any:
-        calls.append(name)
-        await asyncio.sleep(0.5)
-        return provider
-
+    budgets: list[float] = []
+    _record_budgets(monkeypatch, _ConnectedProvider(), budgets)
     _install(
         monkeypatch,
         _Bluetooth([_timed_info("AA:AA:AA:AA:AA:01", -40, 100.0)]),
-        connect,
+        print,
     )
-    report = await ba.async_probe_tracker(
-        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address=None, timeout=1.2
+    await ba.async_probe_tracker(
+        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address=None, timeout=45
     )
-    assert report["connection"] == "connected"
-    assert len(calls) == 1
+    assert budgets == [ba.CONNECT_ATTEMPT_LIMIT]
+
+
+@pytest.mark.asyncio
+async def test_two_addresses_share_the_time_left_after_the_read_reserve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    budgets: list[float] = []
+    _record_budgets(monkeypatch, None, budgets)
+    _install(
+        monkeypatch,
+        _Bluetooth(
+            [
+                _timed_info("AA:AA:AA:AA:AA:01", -40, 100.0),
+                _timed_info("AA:AA:AA:AA:AA:02", -80, 200.0),
+            ]
+        ),
+        print,
+    )
+    await ba.async_probe_tracker(
+        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address=None, timeout=45
+    )
+    assert budgets[0] == pytest.approx(17.5, abs=0.5)
+
+
+@pytest.mark.parametrize(("timeout", "reserve"), [(45.0, 10.0), (12.0, 4.0)])
+@pytest.mark.asyncio
+async def test_read_reserve_is_ten_seconds_at_most_and_a_third_at_most(
+    monkeypatch: pytest.MonkeyPatch, timeout: float, reserve: float
+) -> None:
+    seen: list[float] = []
+
+    async def _search(*args: Any) -> None:
+        seen.append(args[-1])
+
+    monkeypatch.setattr(ba, "_async_connect_search", _search)
+    _install(monkeypatch, _Bluetooth([]), print)
+    loop = asyncio.get_running_loop()
+    before = loop.time()
+    await ba.async_probe_tracker(
+        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address=None, timeout=timeout
+    )
+    assert seen[0] - before == pytest.approx(timeout - reserve, abs=0.5)
 
 
 @pytest.mark.asyncio
