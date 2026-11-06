@@ -78,6 +78,9 @@ EID_LENGTHS = (20, 32)
 # of the same form is treated alike, inferred, not measured.
 _EID_PLACEHOLDER_PREFIX = b"\x00\xff"
 _FMDN_FRAME_TYPES = (0x40, 0x41)
+# The two service data layouts the resolver knows: seven header bytes before the frame
+# type, or none. Their whole lengths never overlap, so the length tells them apart.
+_FMDN_HEADER_LENGTH = 7
 LEGACY_EID_BYTES = 20
 MIN_FAST_PAIR_FRAME_LENGTH = 2
 # A tracker can change its address while the old one is still cached, so one call
@@ -380,10 +383,21 @@ def filter_matches(frame: FastPairFrame, account_key: bytes) -> bool:
     return False
 
 
+def _fmdn_frame_offset(raw: bytes | None) -> int | None:
+    """Return where the frame type sits in FMDN service data, or ``None``."""
+    if not raw:
+        return None
+    body_length = len(raw) - _FMDN_HEADER_LENGTH - 1
+    if body_length in (*EID_LENGTHS, *(length + 1 for length in EID_LENGTHS)) and (
+        raw[_FMDN_HEADER_LENGTH] in _FMDN_FRAME_TYPES
+    ):
+        return _FMDN_HEADER_LENGTH
+    return 0 if raw[0] in _FMDN_FRAME_TYPES else None
+
+
 def identity_form(service_data: Mapping[str, bytes]) -> IdentityForm:
     """Return the identity an advertisement belongs to."""
-    raw = service_data.get(FMDN_SERVICE_DATA_UUID)
-    if raw and raw[0] in _FMDN_FRAME_TYPES:
+    if _fmdn_frame_offset(service_data.get(FMDN_SERVICE_DATA_UUID)) is not None:
         return IdentityForm.LOCATOR
     if COMMON_AUDIO_SERVICE_DATA_UUID in service_data:
         return IdentityForm.AUDIO
@@ -393,13 +407,16 @@ def identity_form(service_data: Mapping[str, bytes]) -> IdentityForm:
 def advertised_eid(service_data: Mapping[str, bytes]) -> bytes | None:
     """Return the EID of an FMDN frame: frame type, EID, optional hashed flags.
 
+    The frame type comes first or behind the seven header bytes of service data.
+
     Only these exact lengths count, unlike the resolver, which also reads an EID out
     of longer payloads: a diagnostic should not name a value as advertised on a guess.
     """
     raw = service_data.get(FMDN_SERVICE_DATA_UUID)
-    if not raw or raw[0] not in _FMDN_FRAME_TYPES:
+    offset = _fmdn_frame_offset(raw)
+    if raw is None or offset is None:
         return None
-    body = bytes(raw[1:])
+    body = bytes(raw[offset + 1 :])
     for length in EID_LENGTHS:
         if len(body) in (length, length + 1):
             eid = body[:length]

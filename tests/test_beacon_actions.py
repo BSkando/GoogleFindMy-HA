@@ -1978,6 +1978,14 @@ def test_placeholder_needs_its_exact_form(eid: bytes, expected: bool) -> None:
     [
         ({ba.FMDN_SERVICE_DATA_UUID: b"\x40"}, ba.IdentityForm.LOCATOR),
         ({ba.FMDN_SERVICE_DATA_UUID: b"\x41"}, ba.IdentityForm.LOCATOR),
+        (
+            {ba.FMDN_SERVICE_DATA_UUID: bytes(7) + b"\x40" + bytes(21)},
+            ba.IdentityForm.LOCATOR,
+        ),
+        (
+            {ba.FMDN_SERVICE_DATA_UUID: bytes(7) + b"\x40" + bytes(19)},
+            ba.IdentityForm.OTHER,
+        ),
         ({ba.FMDN_SERVICE_DATA_UUID: b"\x00" + bytes(16)}, ba.IdentityForm.OTHER),
         ({ba.FMDN_SERVICE_DATA_UUID: b""}, ba.IdentityForm.OTHER),
         (
@@ -2012,6 +2020,10 @@ def test_identity_form_follows_the_service_data(
         (b"\x40" + LOCATOR_EID + b"\x63", LOCATOR_EID),
         (b"\x41" + LOCATOR_EID + b"\x63", LOCATOR_EID),
         (b"\x41" + bytes(range(32)) + b"\x63", bytes(range(32))),
+        (bytes(7) + b"\x40" + LOCATOR_EID, LOCATOR_EID),
+        (bytes(7) + b"\x40" + LOCATOR_EID + b"\x63", LOCATOR_EID),
+        (bytes(7) + b"\x41" + bytes(range(32)) + b"\x63", bytes(range(32))),
+        (bytes(7) + b"\x10" + LOCATOR_EID, None),
         (b"\x10" + LOCATOR_EID, None),
         (b"\x40" + LOCATOR_EID[:19], None),
         (b"\x40" + bytes(25), None),
@@ -2299,8 +2311,7 @@ def _derived_target(key: bytes, block: bytes, order: str, plus_one: bool) -> byt
     """Compute a target EID with the curve library, apart from the search."""
     import ecdsa  # noqa: PLC0415
 
-    encryptor = Cipher(algorithms.AES(key), modes.ECB()).encryptor()  # noqa: S305
-    value = int.from_bytes(encryptor.update(block) + encryptor.finalize(), order)
+    value = int.from_bytes(ba._prf_any_key(key, block), order)
     curve = ecdsa.SECP160r1
     scalar = (value % (curve.order - 1)) + 1 if plus_one else value % curve.order
     return int((curve.generator * scalar).x()).to_bytes(20, "big")
@@ -2833,3 +2844,20 @@ def test_derivation_search_stays_below_the_top_of_the_counter_range(
     )
     assert report["result"] == "no_match"
     assert report["combinations_checked"] == 8
+
+
+def test_prf_with_a_short_key_gives_the_published_vector() -> None:
+    # FIPS 197, appendix C.1 (AES-128).
+    output = ba._prf_any_key(
+        bytes.fromhex("000102030405060708090a0b0c0d0e0f"),
+        bytes.fromhex("00112233445566778899aabbccddeeff"),
+    )
+    assert output.hex() == "69c4e0d86a7b0430d8cdb78070b4c55a"
+
+
+def test_prf_with_a_long_key_gives_the_published_vector() -> None:
+    # FIPS 197, appendix C.3 (AES-256).
+    output = ba._prf_any_key(
+        bytes(range(32)), bytes.fromhex("00112233445566778899aabbccddeeff")
+    )
+    assert output.hex() == "8ea2b7ca516745bfeafc49904b496089"
