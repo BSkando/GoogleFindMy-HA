@@ -2311,7 +2311,7 @@ def _all_callee_parameters(
 
 
 def _exception_names_by_call(
-    tree: ast.AST, carrying: set[int] | None = None
+    tree: ast.AST, carrying: set[int]
 ) -> dict[int, tuple[str, ...]]:
     """Map each call to every foreign exception name in scope, `()` if none.
 
@@ -2331,7 +2331,7 @@ def _exception_names_by_call(
     handler (`logger.exception`, `exc_info=True`) is reported positionally,
     not through this map. Past `_FORWARD_ROUND_LIMIT` rounds every parameter
     of every module-local callee is bound (fail-closed).
-    `carrying`, when given, receives the calls of module-local helpers whose
+    `carrying` receives the calls of module-local helpers whose
     `return` carries at the fixpoint (fail-closed: every such call that returns
     a value); `_returned_exception_leaves` reads them where no name binds them.
     """
@@ -2361,19 +2361,19 @@ def _exception_names_by_call(
             forwarded, returning = seeds, calls
             continue
         if seeds == forwarded and calls == returning:
-            if carrying is not None:
-                carrying.update(returning)
+            carrying.update(returning)
             return names
         forwarded, returning = seeds, calls
     every_returning = _all_returning_calls(tree, callees)
-    if carrying is not None:
-        carrying.update(every_returning)
+    carrying.update(every_returning)
+    # The fallback round is the last one: nothing reads its scope names.
     return _names_for_seeds(
         tree,
         _all_callee_parameters(tree, callees),
         context,
         every_returning,
-        yielding=_all_yielding_calls(tree, callees),
+        {},
+        _all_yielding_calls(tree, callees),
     )
 
 
@@ -2551,15 +2551,15 @@ def _names_for_seeds(
     tree: ast.AST,
     forwarded: dict[int, tuple[str, ...]],
     context: tuple,
-    returning: frozenset[int] = frozenset(),
-    by_scope: dict[int, tuple[str, ...]] | None = None,
+    returning: frozenset[int],
+    by_scope: dict[int, tuple[str, ...]],
     yielding: frozenset[int] = frozenset(),
 ) -> dict[int, tuple[str, ...]]:
     """One round of `_exception_names_by_call` for the given forwarded parameters.
 
     `returning` are the calls whose result binds (`_returning_calls`),
     `yielding` the managers whose `with … as` target binds (`_yielding_calls`);
-    `by_scope`, when given, receives the names bound in each function and
+    `by_scope` receives the names bound in each function and
     each foreign handler, keyed by the node's `id`.
     """
     own, aliases, local, scopes, imported, modules = context
@@ -2590,8 +2590,7 @@ def _names_for_seeds(
         bound += _flow_bound_names(
             function, bound, own, aliases, imported, modules, local, returning, yielding
         )
-        if by_scope is not None:
-            by_scope[id(function)] = bound
+        by_scope[id(function)] = bound
         if not bound:
             continue
         for inner in ast.walk(function):
@@ -2620,8 +2619,7 @@ def _names_for_seeds(
                 returning,
                 yielding,
             )
-        if by_scope is not None:
-            by_scope[id(handler)] = bound
+        by_scope[id(handler)] = bound
         for inner in ast.walk(handler):
             if isinstance(inner, ast.Call):
                 names[id(inner)] = names.get(id(inner), ()) + bound
@@ -5424,6 +5422,52 @@ def test_shape_i_forwarding_stops_fail_closed_at_the_round_limit(
     tree = ast.parse(_SHAPE_I_FORWARD_LIMIT_FIXTURE)
     offenders, _ = _scan_tree(tree, "Auth/fixture.py")
     assert sorted((line, leaf) for _, line, leaf, _ in offenders) == [(18, "c")]
+
+
+_SHAPE_I_UNMATCHED_KEYWORD_FIXTURE = """
+import logging
+from aiohttp import ClientError
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def keyword_sink(value) -> None:
+    _LOGGER.error("x %s", value)
+
+
+def unmatched(err: ClientError) -> None:
+    keyword_sink(1, extra=err)
+
+
+def matched(err: ClientError) -> None:
+    keyword_sink(value=err)
+"""
+
+
+def test_shape_i_unmatched_keyword_without_var_keyword_binds_nothing() -> None:
+    """A keyword no parameter takes binds nothing in a helper without `**kwargs`.
+
+    `keyword_sink(1, extra=err)` passes the exception under a name that
+    `keyword_sink(value)` does not declare, and the helper has no `**kwargs`
+    to collect it; the call cannot bind `value` to the exception, so line 9
+    is not reported for it. The same helper given the exception as
+    `value=err` is reported at line 9, which shows that the fixture reaches
+    the sink.
+    """
+    tree = ast.parse(_SHAPE_I_UNMATCHED_KEYWORD_FIXTURE)
+    seeds = _forwarded_parameter_seeds(
+        tree,
+        _exception_names_by_call(tree, set()),
+        _module_local_callees(tree),
+    )
+    assert sorted(seeds.values()) == [("value",)]
+    offenders, _ = _scan_tree(tree, "Auth/fixture.py")
+    assert sorted((line, leaf) for _, line, leaf, _ in offenders) == [(9, "value")]
+    without_match = ast.parse(
+        _SHAPE_I_UNMATCHED_KEYWORD_FIXTURE.partition("\n\n\ndef matched")[0]
+    )
+    offenders, _ = _scan_tree(without_match, "Auth/fixture.py")
+    assert offenders == []
 
 
 _SHAPE_I_RESULT_FIXTURE = """
