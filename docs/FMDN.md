@@ -159,7 +159,7 @@ The specification defines the labels `0x01` to `0x03` for the short keys of S1.2
 | Plain Table 10 with the EIK on this pair | 0 of 440 |
 | Control: two `moto tag`, plain Table 10 | 88 of 88 each |
 
-**Series:** the measured set is `MEASURED_COMPONENT_ROWS` = 0, 1, 2, 254, 255. Which part each series stands for is not measured, and it does not fit Spot's enum (right 1, left 2, case 3). Etui and earbuds send different series depending on where they are: earbuds in the closed case showed 255, earbuds outside showed 2 and 254.
+**Series:** the measured set is `MEASURED_COMPONENT_ROWS` = 0, 1, 2, 254, 255. Which part each series stands for is not measured, and it does not fit Spot's enum (right 1, left 2, case 3). The case and the earbuds send different series depending on where they are: earbuds in the closed case showed 255, earbuds outside showed 2 and 254.
 
 **How the integration uses it:**
 
