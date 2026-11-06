@@ -449,11 +449,11 @@
         },
         "include_raw_response": {
           "name": "Rohantwort einschließen (optional)",
-          "description": "Gibt zusätzlich die rohe Antwort zum Bereitstellungsstatus als Hexadezimalwert aus. Sie enthält die vollständige aktuelle EID des Trackers, behandle die Ausgabe entsprechend."
+          "description": "Gibt zusätzlich die rohe Antwort zum Bereitstellungsstatus als Hexadezimalwert aus. Die Antwort enthält die vollständige aktuelle EID des Trackers, behandle die Ausgabe entsprechend."
         },
         "search_seconds": {
           "name": "EID-Suchfenster (optional)",
-          "description": "Sekunden je Seite der Tracker-Uhr, in denen sekundengenau nach dem Zähler einer EID gesucht wird. 0 schaltet die Suche ab. Sie läuft nach dem Ende der Verbindung, dauert bis zu 5 Minuten länger und belastet in dieser Zeit die CPU."
+          "description": "Sekunden je Seite der Tracker-Uhr, in denen sekundengenau nach dem Zähler einer EID gesucht wird. 0 schaltet die Suche ab. Die Suche läuft nach dem Ende der Verbindung, dauert bis zu 5 Minuten länger und belastet in dieser Zeit die CPU."
         },
         "search_eid": {
           "name": "Gesuchte EID (optional)",

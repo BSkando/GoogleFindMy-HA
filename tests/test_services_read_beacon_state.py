@@ -438,9 +438,10 @@ async def test_invalid_search_eid_is_rejected_without_echo(
     harness: _Harness, value: str
 ) -> None:
     await harness.register()
-    with pytest.raises(Exception, match="20 or 32 bytes") as caught:
+    with pytest.raises(ServiceValidationError) as info:
         await harness.handler(harness.call(search_eid=value))
-    assert value not in str(caught.value)
+    assert info.value.translation_key == "beacon_invalid_eid"
+    assert value not in str(info.value)
     assert harness.probe_calls == []
 
 
