@@ -1402,6 +1402,12 @@ class GoogleFindMyEIDResolver:
     # accounts keeps one history per account, and no entry sees another's.
     # (canonical_id, component) already logged as FMDN_COMPONENT_HIT.
     _component_hits: set[tuple[str, int]] = field(init=False, default_factory=set)
+    # Last hashed flags per component series, in memory, for the diagnostics:
+    # (config entry, canonical id) -> component -> reading. What a series stands
+    # for is unknown, so its flags must not reach the per-device sensors.
+    _component_flags: dict[tuple[str, str], dict[int, dict[str, Any]]] = field(
+        init=False, default_factory=dict
+    )
     _uwt_track: dict[tuple[str, str], _UwtTrack] = field(
         init=False, default_factory=dict
     )
@@ -1504,6 +1510,8 @@ class GoogleFindMyEIDResolver:
             self._confirmed_sightings = {}
         if not hasattr(self, "_component_hits"):
             self._component_hits = set()
+        if not hasattr(self, "_component_flags"):
+            self._component_flags = {}
         if not hasattr(self, "_uwt_track"):
             self._uwt_track = {}
         if not hasattr(self, "_uwt_events"):
@@ -1780,6 +1788,8 @@ class GoogleFindMyEIDResolver:
             del self._uwt_track[key]
         for entry_id in [e for e in self._uwt_events if e not in loaded]:
             del self._uwt_events[entry_id]
+        for key in [key for key in self._component_flags if key not in known_pairs]:
+            del self._component_flags[key]
 
     def reset_device_offset(self, registry_id: str) -> None:
         """Forget cached offsets/locks for a given device registry ID."""
@@ -3841,15 +3851,17 @@ class GoogleFindMyEIDResolver:
             reading.uwt_bit, reading.origin, candidate.frame_type
         )
         try:
-            self._note_uwt_observation(
-                matches,
-                mode=mode,
-                source=source,
-                reading=reading,
-                frame_type=candidate.frame_type,
-                payload_len=len(raw),
-                clock=clock,
-            )
+            # The history is per device; a component series is only part of it.
+            if "component" not in metadata:
+                self._note_uwt_observation(
+                    matches,
+                    mode=mode,
+                    source=source,
+                    reading=reading,
+                    frame_type=candidate.frame_type,
+                    payload_len=len(raw),
+                    clock=clock,
+                )
         except Exception as err:  # noqa: BLE001 - the match path must not fail
             _LOGGER.debug("uwt_transition_failed error_type=%s", type(err).__name__)
         return mode, source
@@ -4253,6 +4265,18 @@ class GoogleFindMyEIDResolver:
                     payload_len=length,
                 )
 
+            if "component" in metadata:
+                # Measured series with an unknown meaning: a case value must not
+                # appear as the battery of the device. Diagnostics only.
+                self._record_component_flags(
+                    matches,
+                    metadata["component"],
+                    decoded=decoded,
+                    frame=observed_frame,
+                    observation=observation,
+                )
+                return _FlagsReading(uwt_bit, flags_origin, decoded_flags)
+
             state = BLEBatteryState(
                 battery_level=battery_raw,
                 battery_pct=battery_pct,
@@ -4354,6 +4378,52 @@ class GoogleFindMyEIDResolver:
     # ------------------------------------------------------------------
     # Public BLE battery API
     # ------------------------------------------------------------------
+    def _record_component_flags(
+        self,
+        matches: list[EIDMatch],
+        component: object,
+        *,
+        decoded: int,
+        frame: int | None,
+        observation: ObservationClock,
+    ) -> None:
+        """Keep the newest hashed flags of a component series for the diagnostics."""
+        if type(component) is not int:
+            return
+        for match in matches:
+            readings = self._component_flags.setdefault(
+                (match.config_entry_id, match.canonical_id), {}
+            )
+            previous = readings.get(component)
+            count = 1 if previous is None else previous["observations"] + 1
+            if previous is not None and (
+                observation.monotonic < previous["observed_at_monotonic"]
+            ):
+                previous["observations"] = count
+                continue
+            readings[component] = {
+                "decoded": decoded,
+                "frame": frame,
+                "observed_at_wall": observation.wall,
+                "observed_at_monotonic": observation.monotonic,
+                "observations": count,
+            }
+
+    def component_flags_snapshot(
+        self, entry_id: str
+    ) -> dict[str, dict[int, dict[str, Any]]]:
+        """Return a copy of the component readings of one config entry by device."""
+        readings: dict[tuple[str, str], dict[int, dict[str, Any]]] = getattr(
+            self, "_component_flags", {}
+        )
+        return {
+            canonical_id: {
+                component: dict(reading) for component, reading in per_series.items()
+            }
+            for (owner, canonical_id), per_series in readings.items()
+            if owner == entry_id
+        }
+
     def get_ble_battery_state(self, device_id: str) -> BLEBatteryState | None:
         """Return the last observed BLE battery state for a device, or None.
 
@@ -4826,6 +4896,9 @@ class GoogleFindMyEIDResolver:
         component_hits = getattr(self, "_component_hits", None)
         if isinstance(component_hits, set):
             component_hits.clear()
+        component_flags = getattr(self, "_component_flags", None)
+        if isinstance(component_flags, dict):
+            component_flags.clear()
         for attr in ("_uwt_track", "_uwt_events"):
             mapping = getattr(self, attr, None)
             if isinstance(mapping, dict):

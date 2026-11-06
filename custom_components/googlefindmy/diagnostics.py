@@ -550,6 +550,39 @@ _UWT_EVENT_FIELDS = (
 )
 
 
+def _component_flags_block(hass: HomeAssistant, entry_id: str) -> list[dict[str, Any]]:
+    """Return the last hashed flags per FMDN component series of an entry.
+
+    Raw values without interpretation: what a series stands for and what its
+    flags mean is not known (``docs/FMDN.md`` S3.4.1 and S11). Devices appear by
+    position in the sorted set of this entry, without any id. Without a resolver,
+    or if reading it fails, the block is empty.
+    """
+    try:
+        bucket = hass.data.get(DOMAIN) or {}
+        resolver = bucket.get(DATA_EID_RESOLVER) if isinstance(bucket, dict) else None
+        reader = getattr(resolver, "component_flags_snapshot", None)
+        if not callable(reader):
+            return []
+        snapshot = reader(entry_id)
+        return [
+            {
+                "device_index": index,
+                "component": component,
+                "decoded": reading["decoded"],
+                "frame": reading["frame"],
+                "observed_at": reading["observed_at_wall"],
+                "observations": reading["observations"],
+            }
+            for index, canonical_id in enumerate(sorted(snapshot))
+            for component, reading in sorted(snapshot[canonical_id].items())
+        ]
+    except Exception as err:  # noqa: BLE001 - diagnostics must not fail on this block
+        # Only the type, as in _uwt_transitions_block.
+        _LOGGER.debug("component_flags_block_failed error=%s", type(err).__name__)
+        return []
+
+
 def _uwt_transitions_block(hass: HomeAssistant, entry_id: str) -> dict[str, Any]:
     """Return the protection-mode changes the EID resolver recorded for an entry.
 
@@ -918,6 +951,7 @@ async def async_get_config_entry_diagnostics(
         "eik_cache": eik_cache_stats,
         "foreign_report_readings": foreign_report_readings,
         "uwt_transitions": uwt_transitions,
+        "fmdn_component_flags": _component_flags_block(hass, entry.entry_id),
     }
     if crypto_info:
         payload["crypto"] = _crypto_block(crypto_info)
