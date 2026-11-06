@@ -71,6 +71,8 @@ MIN_FAST_PAIR_FRAME_LENGTH = 2
 # dead address would otherwise use all of it (measured: 40 to 57 s per failed call).
 MAX_CONNECT_ATTEMPTS = 3
 CONNECT_ATTEMPT_LIMIT = 20.0
+# Share of the limit kept for the reads after a late connection.
+READ_RESERVE_FRACTION = 3
 # Upper bound of one EID search, however wide the requested window is.
 EID_SEARCH_TIME_BUDGET = 300.0
 EID_SEARCH_MAX_SECONDS = 172800
@@ -1041,7 +1043,7 @@ async def _async_connect_search(
     stack: _BleStack,
     account_key: bytes,
     report: dict[str, Any],
-    deadline: float,
+    connect_until: float,
 ) -> Any:
     """Connect to the newest matching advertiser, moving on when one fails.
 
@@ -1065,7 +1067,7 @@ async def _async_connect_search(
             if not attempts:
                 report["connection"] = "no_matching_frame"
             break
-        remaining = deadline - loop.time()
+        remaining = connect_until - loop.time()
         if remaining <= 0:
             report["connection"] = "timeout"
             break
@@ -1150,7 +1152,11 @@ async def async_probe_tracker(  # noqa: PLR0913
         return report
     else:
         client = await _async_connect_search(
-            hass, stack, keys.account_key, report, deadline
+            hass,
+            stack,
+            keys.account_key,
+            report,
+            deadline - timeout / READ_RESERVE_FRACTION,
         )
     if client is None:
         return report

@@ -1428,3 +1428,76 @@ async def test_search_says_why_it_cannot_run(
 ) -> None:
     report = await ba._async_search(_Hass(), keys, reading, 5, search_eid)
     assert report == {"result": result}
+
+
+@pytest.mark.asyncio
+async def test_tries_leave_time_for_the_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def connect(*_args: Any, **_kw: Any) -> None:
+        await asyncio.sleep(60)
+
+    _install(
+        monkeypatch,
+        _Bluetooth([_timed_info("AA:AA:AA:AA:AA:01", -40, 100.0)]),
+        connect,
+    )
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    report = await ba.async_probe_tracker(
+        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address=None, timeout=0.6
+    )
+    assert report["connection"] == "timeout"
+    assert loop.time() - started < 0.55
+
+
+@pytest.mark.asyncio
+async def test_limit_already_used_up_stops_before_any_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def connect(*_args: Any, **_kw: Any) -> None:
+        raise AssertionError("no time, no connection")
+
+    _install(
+        monkeypatch,
+        _Bluetooth([_timed_info("AA:AA:AA:AA:AA:01", -40, 100.0)]),
+        connect,
+    )
+    report = await ba.async_probe_tracker(
+        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address=None, timeout=0
+    )
+    assert report["connection"] == "timeout"
+    assert "connection_attempts" not in report
+
+
+@pytest.mark.asyncio
+async def test_frames_gone_after_a_failure_keep_the_last_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bluetooth = _Bluetooth([_timed_info("AA:AA:AA:AA:AA:01", -40, 100.0)])
+
+    async def connect(*_args: Any, **_kw: Any) -> None:
+        bluetooth.infos.clear()
+        raise ProviderError(0x85)
+
+    _install(monkeypatch, bluetooth, connect)
+    report = await ba.async_probe_tracker(
+        _Hass(), ba.BeaconKeys(ACCOUNT_KEY, EIK), address=None, timeout=5
+    )
+    assert report["connection"] == "connection_failed"
+    assert len(report["connection_attempts"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_too_short_frame_counts_as_not_authenticated() -> None:
+    provider = _LongEidProvider()
+    provider._provisioning_frame = (  # type: ignore[method-assign]
+        lambda _version_nonce, _eid: b"\x01\x08\x00"
+    )
+    report = await _run(provider, ba.BeaconKeys(ACCOUNT_KEY, EIK))
+    response = report["operations"]["read_provisioning_state"]["response"]
+    assert response == {
+        "stage": "frame",
+        "frame_length": 3,
+        "data_length_field": 8,
+        "additional_length": 0,
+        "auth_valid": False,
+    }
