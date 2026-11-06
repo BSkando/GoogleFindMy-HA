@@ -68,12 +68,14 @@ CLEANUP_TIMEOUT = 5.0
 PARAMETERS_LENGTH = 16
 RINGING_LENGTH = 3
 PROVISIONING_LENGTHS = (1, 21, 33)
-# Measured on Pixel Buds Pro 2 (firmware 6.144): the specified form plus one byte,
-# covered by the response authentication. Its meaning is not documented.
+# Measured on Pixel Buds Pro 2 (firmware 6.144) as 22 bytes: the specified form plus
+# one byte, covered by the response authentication. Its meaning is not documented.
+# 34 bytes is the same form for a 32-byte EID, inferred, not measured.
 PROVISIONING_TRAILING_LENGTHS = (22, 34)
 EID_LENGTHS = (20, 32)
-# Measured on the same earbuds at addresses that advertise an EID: the EID field holds
-# this prefix and zeros otherwise. It is no curve point, so it is no EID.
+# Measured on the same earbuds at addresses that advertise an EID: the 20-byte EID field
+# holds this prefix and zeros otherwise, which is no point on secp160r1. A 32-byte field
+# of the same form is treated alike, inferred, not measured.
 _EID_PLACEHOLDER_PREFIX = b"\x00\xff"
 _FMDN_FRAME_TYPES = (0x40, 0x41)
 LEGACY_EID_BYTES = 20
@@ -380,7 +382,8 @@ def filter_matches(frame: FastPairFrame, account_key: bytes) -> bool:
 
 def identity_form(service_data: Mapping[str, bytes]) -> IdentityForm:
     """Return the identity an advertisement belongs to."""
-    if FMDN_SERVICE_DATA_UUID in service_data:
+    raw = service_data.get(FMDN_SERVICE_DATA_UUID)
+    if raw and raw[0] in _FMDN_FRAME_TYPES:
         return IdentityForm.LOCATOR
     if COMMON_AUDIO_SERVICE_DATA_UUID in service_data:
         return IdentityForm.AUDIO
@@ -395,7 +398,8 @@ def advertised_eid(service_data: Mapping[str, bytes]) -> bytes | None:
     body = bytes(raw[1:])
     for length in EID_LENGTHS:
         if len(body) in (length, length + 1):
-            return body[:length]
+            eid = body[:length]
+            return None if is_placeholder_eid(eid) else eid
     return None
 
 
@@ -1042,7 +1046,7 @@ def _eid_candidates(additional: bytes) -> tuple[bytes, ...]:
             candidates.append(additional[1 : 1 + length])
         if len(additional) == length:
             candidates.append(additional)
-    return tuple(candidates)
+    return tuple(eid for eid in candidates if not is_placeholder_eid(eid))
 
 
 def _operation_report(operation: _Operation) -> dict[str, Any]:
@@ -1303,7 +1307,10 @@ def _note_advertisement(info: Any, report: dict[str, Any], target: _Target) -> N
     report["rssi"] = getattr(info, "rssi", None)
     service_data: Mapping[str, bytes] = getattr(info, "service_data", None) or {}
     target.eid = advertised_eid(service_data)
-    report["identity_form"] = identity_form(service_data).value
+    # No sighting says nothing about the identity, unlike a sighting of another form.
+    report["identity_form"] = (
+        None if info is None else identity_form(service_data).value
+    )
     report["advertised_tx_power"] = getattr(info, "tx_power", None)
     if target.eid is None:
         report.pop("advertised_eid_prefix", None)
@@ -1560,7 +1567,7 @@ def _search_targets(
     targets = dict.fromkeys(reading.eids, "reported")
     if seen.eid is not None:
         targets[seen.eid] = "advertised"
-    if searches.eid is not None:
+    if searches.eid is not None and not is_placeholder_eid(searches.eid):
         targets[searches.eid] = "supplied"
     return targets
 

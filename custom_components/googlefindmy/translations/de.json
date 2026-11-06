@@ -461,7 +461,7 @@
         },
         "identity_form": {
           "name": "Identität für die Verbindung (optional)",
-          "description": "Mit welcher Identität des Trackers verbunden wird: beliebig, dem Locator, der den FMDN-Rahmen sendet, oder dem Audiogerät, das Common Audio ankündigt. Wird ignoriert, wenn eine Adresse angegeben ist."
+          "description": "Mit welcher Identität des Trackers verbunden wird: einer beliebigen, dem Locator, der den FMDN-Rahmen sendet, oder dem Audiogerät, das Common Audio ankündigt. Wird ignoriert, wenn eine Adresse angegeben ist."
         },
         "derivation_windows": {
           "name": "Fenster der Ableitungssuche (optional)",

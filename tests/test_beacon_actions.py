@@ -1963,6 +1963,7 @@ async def test_placeholder_is_reported_and_is_no_eid() -> None:
     ("eid", "expected"),
     [
         (b"\x00\xff" + bytes(18), True),
+        (b"\x00\xff" + bytes(30), True),
         (b"\x00\xff" + bytes(17) + b"\x01", False),
         (b"\x00\xfe" + bytes(18), False),
         (bytes(20), False),
@@ -1976,6 +1977,9 @@ def test_placeholder_needs_its_exact_form(eid: bytes, expected: bool) -> None:
     ("service_data", "form"),
     [
         ({ba.FMDN_SERVICE_DATA_UUID: b"\x40"}, ba.IdentityForm.LOCATOR),
+        ({ba.FMDN_SERVICE_DATA_UUID: b"\x41"}, ba.IdentityForm.LOCATOR),
+        ({ba.FMDN_SERVICE_DATA_UUID: b"\x00" + bytes(16)}, ba.IdentityForm.OTHER),
+        ({ba.FMDN_SERVICE_DATA_UUID: b""}, ba.IdentityForm.OTHER),
         ({ba.COMMON_AUDIO_SERVICE_DATA_UUID: b""}, ba.IdentityForm.AUDIO),
         (
             {
@@ -2601,3 +2605,165 @@ async def test_cancelled_caller_stops_the_derivation_search() -> None:
 def test_new_limits_hold_their_values() -> None:
     assert ba.DERIVATION_WINDOWS_MAX == 256
     assert ba.PROVISIONING_TRAILING_LENGTHS == (22, 34)
+
+
+class _ForeignRingProvider(_LongEidProvider):
+    """Holds another EIK, so a verified ``0x01`` meets a rejected ``0x06``."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(eik=bytes(32), **kwargs)
+
+
+class _ForeignRingPlaceholder(_ForeignRingProvider, _PlaceholderProvider):
+    """The same at the identity that answers with the placeholder."""
+
+
+@pytest.mark.parametrize(
+    "provider_class", [_ForeignRingProvider, _ForeignRingPlaceholder]
+)
+@pytest.mark.asyncio
+async def test_form_with_one_more_byte_allows_the_verdict_on_the_eik(
+    provider_class: type[_LongEidProvider],
+) -> None:
+    report = await _run(
+        provider_class(trailer=b"\x00"), ba.BeaconKeys(ACCOUNT_KEY, EIK)
+    )
+    assert report["eik_set"] is True
+    assert report["eik_matches"] is False
+    state = report["operations"]["read_ringing_state"]
+    assert state["status"] == "unauthenticated"
+
+
+@pytest.mark.asyncio
+async def test_a_second_try_does_not_keep_what_the_first_address_advertised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _ConnectedProvider()
+    tried: list[str] = []
+    seen: list[list[str]] = []
+
+    async def connect(
+        _cls: Any, _device: object, name: str, **_kw: Any
+    ) -> FakeProvider:
+        tried.append(name)
+        if name == "...A:02":
+            raise ProviderError(0x85)
+        return provider
+
+    def _search(
+        _keys: ba.BeaconKeys,
+        _clock: int,
+        targets: dict[bytes, str],
+        _windows: int,
+        _stop: Any,
+    ) -> dict[str, Any]:
+        seen.append(sorted(targets.values()))
+        return {"result": "no_match"}
+
+    newest_locator = _identity_info(
+        "AA:AA:AA:AA:AA:02", seen=5.0, fmdn=b"\x40" + LOCATOR_EID, tx_power=-9
+    )
+    older_audio = _identity_info(
+        "AA:AA:AA:AA:AA:03", seen=4.0, audio=True, tx_power=-10
+    )
+    monkeypatch.setattr(ba, "search_eid_derivations", _search)
+    _install(monkeypatch, _IdentityBluetooth([newest_locator, older_audio]), connect)
+    report = await ba.async_probe_tracker(
+        _Hass(),
+        ba.BeaconKeys(ACCOUNT_KEY, EIK),
+        address=None,
+        timeout=30,
+        derivation_windows=1,
+    )
+    assert tried == ["...A:02", "...A:03"]
+    assert report["connection"] == "connected"
+    assert report["identity_form"] == "audio"
+    assert report["advertised_tx_power"] == -10
+    assert "advertised_eid_prefix" not in report
+    assert "advertised_eid_check" not in report
+    assert seen == [["reported"]]
+
+
+def test_no_sighting_reports_no_identity() -> None:
+    report: dict[str, Any] = {"identity_form": "locator", "advertised_eid_prefix": "x"}
+    target = ba._Target(eid=LOCATOR_EID)
+    ba._note_advertisement(None, report, target)
+    assert report["identity_form"] is None
+    assert report["advertised_tx_power"] is None
+    assert "advertised_eid_prefix" not in report
+    assert target.eid is None
+
+
+def test_a_sighting_without_service_data_is_the_other_form() -> None:
+    report: dict[str, Any] = {}
+    ba._note_advertisement(SimpleNamespace(rssi=-70), report, ba._Target())
+    assert report["identity_form"] == "other"
+    assert report["rssi"] == -70
+
+
+PLACEHOLDER = b"\x00\xff" + bytes(18)
+
+
+def test_placeholder_is_never_an_eid_candidate() -> None:
+    assert ba._eid_candidates(b"\x03" + PLACEHOLDER + bytes(2)) == ()
+    assert ba.advertised_eid({ba.FMDN_SERVICE_DATA_UUID: b"\x40" + PLACEHOLDER}) is None
+
+
+def test_placeholder_is_never_a_search_target() -> None:
+    reading = ba._Reading({}, CLOCK, ())
+    assert not ba._search_targets(reading, ba._Target(), ba._Searches(1, PLACEHOLDER))
+
+
+@pytest.mark.asyncio
+async def test_placeholder_locator_searches_its_advertised_eid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _PlaceholderProvider(trailer=b"\x00")
+    seen: list[tuple[list[str], list[bytes]]] = []
+
+    def _record(*args: Any) -> dict[str, Any]:
+        seen.append((sorted(args[2].values()), list(args[2])))
+        return {"result": "no_match"}
+
+    async def connect(*_args: Any, **_kw: Any) -> FakeProvider:
+        return provider
+
+    monkeypatch.setattr(ba, "search_eid_counter", _record)
+    monkeypatch.setattr(ba, "search_eid_derivations", _record)
+    _install(monkeypatch, _IdentityBluetooth([LOCATOR_INFO]), connect)
+    report = await ba.async_probe_tracker(
+        _Hass(),
+        ba.BeaconKeys(ACCOUNT_KEY, EIK),
+        address=None,
+        timeout=5,
+        search_seconds=1,
+        derivation_windows=1,
+    )
+    state = report["operations"]["read_provisioning_state"]
+    assert state["eid_placeholder"] is True
+    assert report["identity_form"] == "locator"
+    assert report["eid_check"] == {"result": "not_checked"}
+    assert report["advertised_eid_check"]["result"] == "no_match"
+    assert seen == [(["advertised"], [LOCATOR_EID])] * 2
+    assert report["eid_search"] == report["derivation_search"] == {"result": "no_match"}
+
+
+def test_a_zero_scalar_is_a_failed_attempt_not_a_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from custom_components.googlefindmy.FMDNCrypto import (  # noqa: PLC0415
+        curve_profile,
+        eid_generator,
+    )
+
+    def _no_point(_scalar: int) -> bytes:
+        raise AssertionError("a zero scalar has no point")
+
+    monkeypatch.setattr(curve_profile, "reduce_scalar", lambda *_args: 0)
+    monkeypatch.setattr(eid_generator, "_serialize_legacy_x", _no_point)
+    _narrow(monkeypatch, ["eik"], ["table10"])
+    report = ba.search_eid_derivations(
+        ba.BeaconKeys(None, EIK), CLOCK, {bytes(20): "supplied"}, 0
+    )
+    assert report["result"] == "no_match"
+    assert report["combinations_checked"] == 4

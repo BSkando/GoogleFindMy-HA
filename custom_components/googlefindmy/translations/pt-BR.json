@@ -465,7 +465,7 @@
         },
         "derivation_windows": {
           "name": "Janela de busca de derivações (opcional)",
-          "description": "Janelas de rotação de 1024 s a buscar em cada lado do relógio do rastreador, testando outras formas de chave e de bloco contra os EIDs procurados. 0 desativa. É executada depois de fechar a conexão, adiciona até 5 minutos e sobrecarrega a CPU nesse tempo."
+          "description": "Janelas de rotação de 1024 s a buscar em cada lado do relógio do rastreador, testando outras formas de chave e de bloco contra os EIDs procurados. 0 desativa. É executada depois de fechar a conexão, adiciona até 5 minutos e usa a CPU nesse tempo."
         }
       }
     }

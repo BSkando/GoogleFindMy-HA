@@ -229,9 +229,12 @@ read_beacon_state:
       selector:
         select:
           options:
-            - any
-            - locator
-            - audio
+            - label: Any
+              value: any
+            - label: Locator
+              value: locator
+            - label: Audio device
+              value: audio
     derivation_windows:
       name: Derivation search window (optional)
       description: >-

@@ -461,7 +461,7 @@
         },
         "identity_form": {
           "name": "Identidade a ligar (opcional)",
-          "description": "A que identidade do localizador ligar: qualquer uma, o localizador que envia a trama FMDN ou o dispositivo de áudio que anuncia Common Audio. Ignorado quando é indicado um endereço."
+          "description": "A que identidade do dispositivo ligar: qualquer uma, o localizador que envia a trama FMDN ou o dispositivo de áudio que anuncia Common Audio. Ignorado quando é indicado um endereço."
         },
         "derivation_windows": {
           "name": "Janela de pesquisa de derivações (opcional)",
