@@ -28,6 +28,7 @@ from types import MappingProxyType
 from typing import Final
 
 __all__ = [
+    "COMPONENT_KEY_LABEL",
     "EidVariant",
     "EIK_LENGTH",
     "FHNA_K",
@@ -35,6 +36,7 @@ __all__ = [
     "HeuristicEidResult",
     "K",
     "LEGACY_EID_LENGTH",
+    "MEASURED_COMPONENT_ROWS",
     "MODERN_EID_LENGTH",
     "P256_ORDER",
     "ROTATION_PERIOD",
@@ -44,6 +46,7 @@ __all__ = [
     "build_heuristic_prf_input",
     "build_table10_prf_input",
     "compute_flags_xor_mask",
+    "derive_component_key",
     "generate_eid",
     "generate_eid_variant",
     "generate_heuristic_eid",
@@ -82,6 +85,9 @@ ROTATION_PERIOD: Final[int] = 1 << FHNA_K  # 1024 seconds (standard FMDN tracker
 ROTATION_PERIOD_900: Final[int] = 900  # 15 minutes (Android phone MAC sync)
 ROTATION_PERIOD_3600: Final[int] = 3600  # 1 hour (alternative phone period)
 EIK_LENGTH: Final[int] = 32
+# Measured, not specified: see derive_component_key().
+COMPONENT_KEY_LABEL: Final[int] = 0x04
+MEASURED_COMPONENT_ROWS: Final[tuple[int, ...]] = (0, 1, 2, 254, 255)
 LEGACY_EID_LENGTH: Final[int] = 20
 MODERN_EID_LENGTH: Final[int] = 32
 FHNA_PRF_INPUT_LENGTH: Final[int] = 32
@@ -295,6 +301,26 @@ def _prf_table10(
         time_counter_u32, k=k, strict=strict, _normalized=_normalized
     )
     return prf_aes_256_ecb(identity_key, prf_input)
+
+
+def derive_component_key(eik: bytes, component: int) -> bytes:
+    """Return ``SHA-256(EIK || 0x04 || component)``, the key of one EID series.
+
+    Devices with several FMDN components compute Table 10 (FHN Accessory
+    Specification v1.3) with this key instead of the EIK; the rest of the EID
+    and Hashed Flags computation stays as specified.
+
+    Evidence: derived from measurements and not published by Google. It matched
+    440 of 440 entries of Google's EID list and every received EID of one
+    Pixel Buds Pro 2 pair (firmware 6.144). The specification defines the labels
+    0x01 to 0x03; the label 0x04 and ``MEASURED_COMPONENT_ROWS`` are measured,
+    and what each series stands for is unknown.
+    """
+    if len(eik) != EIK_LENGTH:
+        raise ValueError(f"Ephemeral Identity Key must be {EIK_LENGTH} bytes")
+    if type(component) is not int or not 0 <= component <= 0xFF:
+        raise ValueError("FMDN component must be an int from 0 to 255")
+    return hashlib.sha256(eik + bytes((COMPONENT_KEY_LABEL, component))).digest()
 
 
 def compute_flags_xor_mask(
