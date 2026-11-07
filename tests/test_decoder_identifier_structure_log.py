@@ -52,7 +52,10 @@ def _device_list(
 
 
 def _structure_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
-    return [r for r in caplog.records if "IDENTIFIER STRUCTURE" in r.getMessage()]
+    # Match the structure line itself: the benign canonicless line names the token too.
+    return [
+        r for r in caplog.records if "IDENTIFIER STRUCTURE: type=" in r.getMessage()
+    ]
 
 
 @pytest.mark.parametrize(

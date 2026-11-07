@@ -1578,8 +1578,9 @@ def get_devices_with_location(
             # probe pass (emit_canonicless_diagnostics=False) skips this whole branch, so
             # it neither logs nor advances the count. Severity tracks actionability: a
             # benign class (an Android phone, or a reduced listing with no 'information'
-            # block such as a Bluetooth accessory) drops as expected for its class and is
-            # located -- if at all -- via the Locate flow, so it only logs at DEBUG. It
+            # block such as a Bluetooth accessory) is not warn-worthy for its class (a
+            # guess from the payload shape, see the else branch below), so it only logs at
+            # DEBUG. It
             # becomes warn-worthy only when it is tracker-shaped (has an 'information'
             # block and is not Android) OR when it was visible in the previous run and is
             # now gone (a real regression). The per-device name stays at DEBUG (AGENTS.md
@@ -1621,15 +1622,21 @@ def get_devices_with_location(
                     device_name or "<unnamed>",
                 )
             else:
-                # Benign class, expected for this device type and not actionable: log at
-                # DEBUG with no remediation hint (no "reload"/"findable again") so the line
-                # is not mistaken for a problem the user can fix.
+                # Benign class (an Android phone, or a listing without an
+                # 'information' block): not warn-worthy, so DEBUG only and no
+                # remediation hint ("reload"/"findable again"). The class is
+                # inferred from the payload shape and can be wrong: a device that
+                # Find My Device locates or rings on its own also lands here
+                # (BSkando/GoogleFindMy-HA#224, a Wear OS watch), so the line asks
+                # for a report with the IDENTIFIER STRUCTURE line logged above.
                 _LOGGER.debug(
-                    "Device '%s' was returned without a canonical ID in this listing and "
-                    "is not shown as its own entity. This is expected for this device "
-                    "class (phones and Bluetooth accessories are located via the owner's "
-                    "Locate flow, not as standalone Find My Device entries); no action is "
-                    "required.",
+                    "Device '%s' was returned without a canonical ID in this listing "
+                    "and is not shown as its own entity. This is common for Android "
+                    "phones (located via the owner's Locate flow) and for accessories "
+                    "listed without an 'information' block. If this device is not a "
+                    "phone or tablet and Find My Device can locate or ring it on its "
+                    "own, please open an issue and include the 'IDENTIFIER STRUCTURE' "
+                    "line for it.",
                     device_name or "<unnamed>",
                 )
 
