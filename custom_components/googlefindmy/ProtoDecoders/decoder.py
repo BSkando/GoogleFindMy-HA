@@ -1580,11 +1580,11 @@ def get_devices_with_location(
             # benign class (an Android phone, or a reduced listing with no 'information'
             # block such as a Bluetooth accessory) is not warn-worthy for its class (a
             # guess from the payload shape, see the else branch below), so it only logs at
-            # DEBUG. It
-            # becomes warn-worthy only when it is tracker-shaped (has an 'information'
-            # block and is not Android) OR when it was visible in the previous run and is
-            # now gone (a real regression). The per-device name stays at DEBUG (AGENTS.md
-            # privacy guidance); the default-visible tier is the count WARNING below.
+            # DEBUG. It becomes warn-worthy only when it is tracker-shaped (has an
+            # 'information' block and is not Android) OR when it was visible in the
+            # previous run and is now gone (a real regression). The per-device name stays
+            # at DEBUG (AGENTS.md privacy guidance); the default-visible tier is the count
+            # WARNING below.
             # has_information_block is recomputed locally because the binding above lives
             # inside the `if not encrypted_identity_key:` block and is not in scope when a
             # key was present.
