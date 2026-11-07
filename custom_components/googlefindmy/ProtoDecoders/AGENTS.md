@@ -49,6 +49,20 @@ Use the checked-in proto sources (`custom_components/googlefindmy/ProtoDecoders/
 
 If the upstream proto schema changes, update the mirrored definitions under `custom_components/googlefindmy/ProtoDecoders/*.proto` first so regenerations remain reproducible from source control.
 
+## Generator version
+
+`_pb2.py` must keep the header `Protobuf Python Version: 6.31.1`, because `pyproject.toml` requires `protobuf >= 6.31.1` and generated code refuses older runtimes. `grpcio-tools==1.76.0` (measured, also 1.74.0 and 1.75.0) emits that header; install it in a separate venv, not in the test venv. It works without a system `protoc`: `python -m grpc_tools.protoc -I custom_components/googlefindmy --python_out=<dir> --pyi_out=<dir> ProtoDecoders/DeviceUpdate.proto`. Keep the header block of the checked-in `_pb2.py` (pool, import from `custom_components.googlefindmy.ProtoDecoders`, `ruff: noqa`) and replace `_descriptor_pool.Default()` as described above. The checked-in `.pyi` files are hand-shaped: classes are `(Message, _MessageProto)`, enums use `metaclass=EnumTypeWrapper`; do not overwrite them with raw `--pyi_out` output.
+
+## Type rule for the device-list parse path
+
+Every length-delimited field that is newly declared on a message reachable from `DevicesList` or `DeviceUpdate` is `bytes`, without exception, even where the source of the schema (for example Spot) declares a message or a string. A declared `string` with invalid UTF-8 or a declared message with foreign content raises `DecodeError`, and `parse_device_list_protobuf` turns that into a failure of the whole device list. A `bytes` field cannot fail, and a wrong wire type lands in the unknown fields. Keep the intended shape as its own message and name it in the field comment, then read the field through a guarded helper only (`trackable_components_of` in `decoder.py` is the pattern). Varint fields are safe. `tests/test_decoder_spot_schema.py` pins the list of length-delimited fields on this path.
+
+Scalar fields holding key material or personal data go into `_SECRET_PROTO_FIELDS` in `decoder.py`; the same test file fails on a new field whose name suggests either and that is not listed or explained. The set matches by field name and only on scalar fields, so a message field of a listed name stays visible and shows its own fields one by one.
+
+## Schema additions from Spot
+
+Messages and fields marked `Spot@55f87f62` come from [leonboe1/Spot](https://github.com/leonboe1/Spot), commit `55f87f62302fae24150188124e8e07d5285568d8` (GPL-3.0). They are reverse-engineered and not confirmed by Google. Messages the integration does not use yet are kept on purpose so the wire format does not have to be guessed later. `docs/FMDN.md` section S8.4 holds the inventory.
+
 ## Proto3 scalar presence reminder
 
 Proto3 **non-optional scalar fields do not support `HasField`**. Access them directly and rely on their default values (for example, `0` for integers) instead of calling presence checks that raise `ValueError`.

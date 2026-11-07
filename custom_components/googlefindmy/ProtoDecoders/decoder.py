@@ -277,6 +277,69 @@ class _DecryptLocationsCallable(Protocol):
 # --------------------------------------------------------------------------------------
 
 
+# Fields that hold or wrap key material, tracker secrets or personal data of the
+# phone or the account. Developer output shows at most their length; the
+# integration never logs them. `tests/test_decoder_spot_schema.py` fails on a new
+# field whose name reads like a secret or like personal data and that is neither
+# listed here nor explained there. Only scalar fields count: `phoneInformation`
+# on `IdentitfierInformation` is a message that holds the canonical ids, and a
+# message of a listed name shows its fields one by one.
+_SECRET_PROTO_FIELDS: frozenset[str] = frozenset(
+    {
+        "contactInfo",
+        "cookieValue",
+        "droidGuardResults",
+        "email",
+        "encryptedEIK",
+        "infoMessage",
+        "encryptedPrivateKeyWrapper",
+        "imei",
+        "inviteeKey",
+        "inviterKey",
+        "keyRotationInformation",
+        "phoneInformation",
+        "phoneNumber",
+        "privateKey",
+        "recoveryKey",
+        "reportsEncryptedWithServerKey",
+        "ringKey",
+        "sharingKeys",
+        "unwantedTrackingKey",
+        "updateForAccount",
+    }
+)
+
+
+_SECRET_MESSAGE_FIELD = "gcmRegistrationId"  # The FCM push token of this client.
+
+
+def _clear_secret_fields(message: Message) -> None:
+    """Remove the scalar fields of ``_SECRET_PROTO_FIELDS``, also in sub-messages.
+
+    ``gcmRegistrationId`` is removed as a whole: its only field is a plain ``id``.
+    """
+    for field, value in message.ListFields():
+        if field.message_type is None:
+            if field.name in _SECRET_PROTO_FIELDS:
+                message.ClearField(field.name)
+        elif field.name == _SECRET_MESSAGE_FIELD:
+            message.ClearField(field.name)
+        elif isinstance(value, Message):
+            _clear_secret_fields(value)
+        else:
+            items = value.values() if hasattr(value, "values") else value
+            for item in items:
+                _clear_secret_fields(item)
+
+
+def _redacted_copy(message: Message) -> Message:
+    """Return a copy of ``message`` without secret fields for developer output."""
+    copy = type(message)()
+    copy.CopyFrom(message)
+    _clear_secret_fields(copy)
+    return copy
+
+
 def custom_message_formatter(
     message: Message,
     indent: str,
@@ -308,11 +371,20 @@ def custom_message_formatter(
             display_tz_name = "UTC"
 
     for field, value in message.ListFields():
-        if field.type == field.TYPE_BYTES:
-            hex_value = binascii.hexlify(value).decode("utf-8")
-            lines.append(f'{indent}{field.name}: "{hex_value}"')
+        if field.name == _SECRET_MESSAGE_FIELD:
+            lines.append(f"{indent}{field.name}: <redacted>")
+        elif field.message_type is None and field.name in _SECRET_PROTO_FIELDS:
+            size = len(value) if hasattr(value, "__len__") else 1
+            lines.append(f"{indent}{field.name}: <redacted len={size}>")
+        elif field.type == field.TYPE_BYTES:
+            # Repeated bytes fields hold a container of values.
+            for item in [value] if isinstance(value, bytes) else value:
+                hex_value = binascii.hexlify(item).decode("utf-8")
+                lines.append(f'{indent}{field.name}: "{hex_value}"')
         elif field.type == field.TYPE_MESSAGE:
-            if field.label == field.LABEL_REPEATED:
+            # The upb descriptor of current runtimes has no `label`, so repeated
+            # is read from the value (see `_unknown_field_numbers`).
+            if not isinstance(value, Message):
                 for sub_message in value:
                     if field.message_type.name == "Time":
                         # seconds (+ optional nanos) -> float seconds
@@ -441,6 +513,25 @@ def parse_device_list_protobuf(
 # --------------------------------------------------------------------------------------
 
 
+def trackable_components_of(registration: object) -> int | None:
+    """Return ``DeviceCapabilities.trackableComponents`` of a registration.
+
+    ``capabilities`` is declared ``bytes`` because foreign content must not fail
+    the device list (see ``ProtoDecoders/AGENTS.md``). This is the only reader:
+    it returns ``None`` for anything but a positive count and logs no content.
+    """
+    raw = getattr(registration, "capabilities", None)
+    if not isinstance(raw, bytes) or not raw:
+        return None
+    capabilities = DeviceUpdate_pb2.DeviceCapabilities()
+    try:
+        capabilities.ParseFromString(raw)
+    except DecodeError:
+        return None
+    count = capabilities.trackableComponents
+    return count if count > 0 else None
+
+
 def get_canonic_ids(
     device_list: DeviceUpdate_pb2.DevicesList,
 ) -> list[tuple[str, str]]:
@@ -517,6 +608,7 @@ _DEVICE_STUB_KEYS: tuple[str, ...] = (
     "fast_pair_model_id",
     "manufacturer",
     "model",
+    "trackable_components",
     "latitude",
     "longitude",
     "altitude",
@@ -550,6 +642,7 @@ def _build_device_stub(device_name: str, canonic_id: str) -> dict[str, Any]:
         "fast_pair_model_id": None,
         "manufacturer": None,
         "model": None,
+        "trackable_components": None,
         "latitude": None,
         "longitude": None,
         "altitude": None,
@@ -1164,8 +1257,8 @@ def get_devices_with_location(
                 # (BSkando/GoogleFindMy-HA#224, hypothesis "ID in the other
                 # branch"). Not on the capability probe pass, like the other
                 # canonicless output.
-                id_type, has_phone_info, phone_ids, generic_ids = (
-                    _identifier_structure(device)
+                id_type, has_phone_info, phone_ids, generic_ids = _identifier_structure(
+                    device
                 )
                 _LOGGER.debug(
                     "Device '%s' IDENTIFIER STRUCTURE: type=%s, "
@@ -1186,6 +1279,7 @@ def get_devices_with_location(
         fast_pair_model_id: str | None = None
         manufacturer: str | None = None
         model: str | None = None
+        trackable_components: int | None = None
         pair_date: int | None = None
         secrets_creation_date: int | None = None
         encrypted_account_key: str | None = None
@@ -1279,6 +1373,8 @@ def get_devices_with_location(
             if isinstance(raw_model, str):
                 raw_model = raw_model.strip()
                 model = raw_model or None
+
+            trackable_components = trackable_components_of(registration)
 
             # Anchor timestamps used for relative EID timebases
             # - pairDate is a scalar proto3 field: default 0 means "unset"
@@ -1445,6 +1541,7 @@ def get_devices_with_location(
             row["fast_pair_model_id"] = fast_pair_model_id
             row["manufacturer"] = manufacturer
             row["model"] = model
+            row["trackable_components"] = trackable_components
             row["pair_date"] = pair_date
             row["secrets_creation_date"] = secrets_creation_date
             row["encrypted_account_key"] = encrypted_account_key
@@ -1591,7 +1688,7 @@ def get_devices_with_location(
 
 
 def print_location_report_upload_protobuf(hex_string: str) -> None:
-    msg = parse_location_report_upload_protobuf(hex_string)
+    msg = _redacted_copy(parse_location_report_upload_protobuf(hex_string))
     try:
         s = _get_text_format().MessageToString(
             msg, message_formatter=custom_message_formatter
@@ -1602,7 +1699,7 @@ def print_location_report_upload_protobuf(hex_string: str) -> None:
 
 
 def print_device_update_protobuf(hex_string: str) -> None:
-    msg = parse_device_update_protobuf(hex_string)
+    msg = _redacted_copy(parse_device_update_protobuf(hex_string))
     try:
         s = _get_text_format().MessageToString(
             msg, message_formatter=custom_message_formatter
@@ -1613,7 +1710,7 @@ def print_device_update_protobuf(hex_string: str) -> None:
 
 
 def print_device_list_protobuf(hex_string: str) -> None:
-    msg = parse_device_list_protobuf(hex_string)
+    msg = _redacted_copy(parse_device_list_protobuf(hex_string))
     try:
         s = _get_text_format().MessageToString(
             msg, message_formatter=custom_message_formatter

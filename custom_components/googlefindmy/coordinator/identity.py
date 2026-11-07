@@ -48,6 +48,9 @@ from .helpers.identity import (
     lookup_prio_with_source as _lookup_prio_with_source_impl,
 )
 from .helpers.identity import (
+    normalize_component_count as _normalize_component_count,
+)
+from .helpers.identity import (
     normalize_device_type as _normalize_device_type_impl,
 )
 from .helpers.identity import (
@@ -880,6 +883,9 @@ class IdentityOperations(_MixinBase):
                 merged_device_data.get("manufacturer")
             )
             model = self._normalize_optional_string(merged_device_data.get("model"))
+            trackable_components = _normalize_component_count(
+                merged_device_data.get("trackable_components")
+            )
             encrypted_account_key = self._normalize_encrypted_blob(
                 merged_device_data.get("encrypted_account_key")
                 or merged_device_data.get("encryptedAccountKey")
@@ -988,6 +994,7 @@ class IdentityOperations(_MixinBase):
                             encrypted_account_key=encrypted_account_key,
                             public_key_address=public_key_address,
                             time_anchors_debug=anchors_debug,
+                            trackable_components=trackable_components,
                         )
                     )
             else:
@@ -1008,6 +1015,7 @@ class IdentityOperations(_MixinBase):
                         encrypted_account_key=encrypted_account_key,
                         public_key_address=public_key_address,
                         time_anchors_debug=anchors_debug,
+                        trackable_components=trackable_components,
                     )
                 )
 

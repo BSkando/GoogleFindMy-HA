@@ -279,6 +279,7 @@ _PERSISTED_METADATA_KEYS: tuple[str, ...] = (
     "manufacturer",
     "model",
     "fast_pair_model_id",
+    "trackable_components",
 )
 
 
@@ -628,6 +629,9 @@ class DeviceIdentity:
             key; surfaced for debugging and potential resolver extensions.
         time_anchors_debug: Optional debug payload with server-provided anchor hints used
             to reason about EID drift; shape may vary and is forwarded best-effort.
+        trackable_components: ``DeviceCapabilities.trackableComponents`` when known. A
+            value above 1 marks a device with per-component EID series (measured on
+            Pixel Buds Pro 2, see ``docs/FMDN.md`` S3.4.1).
     """
 
     registry_id: str
@@ -645,6 +649,7 @@ class DeviceIdentity:
     encrypted_account_key: bytes | None = None
     public_key_address: bytes | None = None
     time_anchors_debug: Any | None = None
+    trackable_components: int | None = None
 
 
 class GoogleFindMyCoordinator(

@@ -485,7 +485,9 @@ def select_candidates(
 def compare_eid(eik: bytes, clock: int, reported_eid: bytes) -> dict[str, Any]:
     """Compare the tracker's EID with what the integration derives from its EIK."""
     from .FMDNCrypto.eid_generator import (  # noqa: PLC0415 - heavy, executor only
+        MEASURED_COMPONENT_ROWS,
         EidVariant,
+        derive_component_key,
         generate_eid_variant,
     )
 
@@ -506,12 +508,39 @@ def compare_eid(eik: bytes, clock: int, reported_eid: bytes) -> dict[str, Any]:
                     "variant": variant.value,
                     "window_offset": window_offset,
                     "variants_checked": checked,
+                    "component": None,
+                    "components_checked": 0,
+                }
+    # The measured per-component series (docs/FMDN.md S3.4.1), legacy form only.
+    legacy = EidVariant.LEGACY_SECP160R1_X20_BE
+    components_checked = 0
+    for component in MEASURED_COMPONENT_ROWS:
+        component_key = derive_component_key(eik, component)
+        for window_offset in EID_WINDOW_OFFSETS:
+            counter = clock + window_offset * ROTATION_SECONDS
+            if not 0 <= counter <= MAX_COUNTER:
+                continue
+            components_checked += 1
+            try:
+                derived = generate_eid_variant(component_key, counter, legacy)
+            except ValueError:
+                continue
+            if hmac.compare_digest(derived, reported_eid):
+                return {
+                    "result": "match",
+                    "variant": legacy.value,
+                    "window_offset": window_offset,
+                    "variants_checked": checked,
+                    "component": component,
+                    "components_checked": components_checked,
                 }
     return {
         "result": "no_match",
         "variant": None,
         "window_offset": None,
         "variants_checked": checked,
+        "component": None,
+        "components_checked": components_checked,
     }
 
 
@@ -604,7 +633,11 @@ def search_eid_counter(  # noqa: PLR0913
 
 
 def _mixing_key_candidates(eik: bytes) -> list[tuple[str, bytes]]:
-    """Return keys derived from the EIK with one extra byte."""
+    """Return keys derived from the EIK with one or two extra bytes."""
+    from .FMDNCrypto.eid_generator import (  # noqa: PLC0415 - heavy, executor only
+        MEASURED_COMPONENT_ROWS,
+    )
+
     candidates: list[tuple[str, bytes]] = []
     for value in _DERIVATION_MIXING_BYTES:
         byte = bytes((value,))
@@ -612,6 +645,15 @@ def _mixing_key_candidates(eik: bytes) -> list[tuple[str, bytes]]:
             (f"sha256_eik_then_{value}", hashlib.sha256(eik + byte).digest()),
             (f"sha256_{value}_then_eik", hashlib.sha256(byte + eik).digest()),
             (f"hmac_eik_{value}", hmac.new(eik, byte, hashlib.sha256).digest()),
+        ]
+        # Label and component, the shape of the measured derivation
+        # (docs/FMDN.md S3.4.1). Component 3 is Spot's value for the case.
+        candidates += [
+            (
+                f"sha256_eik_label_{value}_component_{component}",
+                hashlib.sha256(eik + bytes((value, component))).digest(),
+            )
+            for component in (*MEASURED_COMPONENT_ROWS, 3)
         ]
     return candidates
 

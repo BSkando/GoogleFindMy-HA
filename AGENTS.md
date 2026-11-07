@@ -651,6 +651,7 @@ Run `poetry lock` to fix the lock file.
 * The integration stores the uploaded secret bundle under `DATA_SECRET_BUNDLE` on the config entry; it originates from the user's `secrets.json` input.
 * Owner key derivation runs through the Spot API helper and is exposed at runtime via `async_get_owner_key(token_cache)`; the helper records the bytes and version in the entry-scoped token cache.
 * Shared-key retrieval is handled by `async_get_shared_key(cache=token_cache)`, which normalizes the value and stores it in the same entry-scoped cache under the canonical `shared_key` key (falling back to migrated per-user keys when present).
+* Per-component keys (`derive_component_key`, `docs/FMDN.md` S3.4.1) are only derived from the EIK, in memory: never persisted, never logged, never promoted to an identity key.
 
 ### Wrapped EIK hypothesis
 
@@ -660,6 +661,7 @@ Run `poetry lock` to fix the lock file.
 
 * Resolver scans currently seed three candidates: `ABSOLUTE` (wall-clock), `REL_PAIR` (pair-date anchored), and `REL_SECRETS` (secrets-creation anchored). Once a candidate yields a match, the resolver caches the winning epoch/offset per device to lock onto that timebase and narrow future rotation windows.
 * Runtime code outside the resolver does not re-derive these candidates or pick one of them as "the" counter (the CLI tools in `SpotApi/UploadPrecomputedPublicKeyIds` and `SpotApi/CreateBleDevice` derive counters from `pair_date` for precomputed IDs and device registration and are not consumers of the resolver). The FMDN finder reports what a match observed (`GoogleFindMyEIDResolver.last_confirmed_sighting`: variant, window counter, sighting time, and the observed unwanted tracking protection mode from `_effective_uwt_mode()`) and sends nothing without a recent sighting or while that mode is unknown, because the upload field cannot express "unknown" and a `0` would report the mode as off (field data: `docs/UWT_FIELD_DATA.md`), nor when none of the device's current candidate identity keys is the key the sighting was matched under (`ConfirmedSighting.key_fingerprint`), because the window counter belongs to that key; the owner resolves a report over the recent past and near future of the counter (FMDN specification, "Decryption of values encrypted with EID").
+* A sighting of a multi-component device also names its component series (`ConfirmedSighting.component`, `docs/FMDN.md` S3.4.1). The finder derives the per-component key from the identity key its fingerprint selects and reports that EID; the fingerprint always stays that of the EIK. The derivation is measured on one device and not published by Google.
 
 ### Owner-key error taxonomy (classify only from positive evidence)
 

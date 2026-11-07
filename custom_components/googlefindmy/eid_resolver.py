@@ -38,11 +38,15 @@ from homeassistant.util import dt as dt_util
 from .Auth.username_provider import username_string
 from .const import DOMAIN
 from .coordinator import DeviceIdentity, GoogleFindMyCoordinator
+from .coordinator.helpers.identity import normalize_component_count
 from .FMDNCrypto._lazy_crypto import get_aesgcm_class, get_invalid_tag_exception
 from .FMDNCrypto.curve_profile import SECP160R1, SECP256R1, ScalarDerivation
 from .FMDNCrypto.eid_generator import (
+    COMPONENT_MAX,
+    EIK_LENGTH,
     FHNA_COUNTER_MASK,
     LEGACY_EID_LENGTH,
+    MEASURED_COMPONENT_ROWS,
     MODERN_EID_LENGTH,
     P256_ORDER,
     ROTATION_PERIOD,
@@ -53,6 +57,7 @@ from .FMDNCrypto.eid_generator import (
     HeuristicBasis,
     HeuristicEidResult,
     compute_flags_xor_mask,
+    derive_component_key,
     generate_eid_variant,
     generate_heuristic_eid,
 )
@@ -135,6 +140,8 @@ _VARIANT_CURVE_PARAMS: dict[EidVariant, tuple[int, int, ScalarDerivation]] = {
 # _MEMO_HEADROOM below). tests/test_eid_resolver_memoization.py measures the
 # per-device key counts of the sizing case and fails if a new variant or
 # derivation outgrows these floors.
+# Devices with several FMDN components add one legacy key per measured series
+# and window (see _compute_variants); each build sizes the memos to that count.
 _EID_MEMO_MAXSIZE = 2048
 _EID_MASK_MEMO_MAXSIZE = 1024
 
@@ -322,6 +329,8 @@ class EIDMatch(NamedTuple):
     canonical_id: str
     time_offset: int
     is_reversed: bool
+    # The FMDN component series the EID belongs to, ``None`` for the EIK series.
+    component: int | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -726,12 +735,14 @@ class WorkItem:
     registry_id: str
     config_entry_id: str
     canonical_id: str
-    key_bytes: bytes
-    identity: DeviceIdentity
+    key_bytes: bytes = field(repr=False)
+    identity: DeviceIdentity = field(repr=False)
     lock: EIDGenerationLock | None
     locked_variant: EidVariant | None
     rotation_ts: int | None
     basis_hint: str | None
+    # (component, per-component key); empty for a single-component device.
+    component_keys: tuple[tuple[int, bytes], ...] = field(default=(), repr=False)
 
 
 @dataclass(slots=True, frozen=True)
@@ -757,10 +768,11 @@ class WindowSpec:
 class VariantSpec:
     """Variant generation request for a given window."""
 
-    key_bytes: bytes
+    key_bytes: bytes = field(repr=False)
     variant: EidVariant
     window: WindowCandidate
     include_reverse: bool = True
+    component: int | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -850,6 +862,7 @@ class CacheBuilder:
         advertisement_reversed: bool,
         flags_xor_mask: int | None = None,
         key_fingerprint: bytes | None = None,
+        component: int | None = None,
     ) -> None:
         """Register an EID and metadata, supporting multiple matches per EID.
 
@@ -918,6 +931,8 @@ class CacheBuilder:
             # wrong, the finder would report nothing rather than a wrong EID.
             if key_fingerprint is not None:
                 meta["key_fingerprint"] = key_fingerprint
+            if component is not None:
+                meta["component"] = component
             self.metadata[eid_bytes] = meta
         elif existing_metadata is not None and existing_bases is not None:
             existing_metadata["timestamp_bases"] = existing_bases
@@ -1051,7 +1066,8 @@ class _FlagsReading(NamedTuple):
     """What the hashed-flags decoder saw for one matched advertisement.
 
     ``uwt_bit`` is the decoded spec bit 7, or ``None`` when nothing was
-    decoded. ``origin`` says how the byte was located: ``"framed"`` at the
+    decoded or the advertisement belongs to a component series, whose flags have
+    no checked meaning. ``origin`` says how the byte was located: ``"framed"`` at the
     position the matched geometry defines, ``"guessed"`` by
     ``_guess_flags_byte``, ``"absent"`` when no byte was found. ``decoded``
     is the whole XOR-decoded flags byte, ``None`` when nothing was decoded;
@@ -1228,6 +1244,11 @@ class ConfirmedSighting:
     key: an EID computed from another key with this counter was never
     advertised. ``None`` means the binding is unknown, and the finder then
     reports nothing.
+
+    ``component`` names the FMDN component series of the advertised EID, ``None``
+    for the EIK series. The series of one device share ``pair_date`` and the
+    counter raster, so their counters stay comparable; the fingerprint stays the
+    one of the EIK, and the finder derives the series key from it.
     """
 
     variant: EidVariant
@@ -1236,6 +1257,7 @@ class ConfirmedSighting:
     uwt_mode: bool | None = None
     uwt_source: UwtSource = UwtSource.UNKNOWN
     key_fingerprint: bytes | None = field(default=None, repr=False)
+    component: int | None = None
 
 
 @dataclass(slots=True)
@@ -1378,6 +1400,14 @@ class GoogleFindMyEIDResolver:
     # FMDN_UWT_TRANSITION and the ``uwt_transitions`` diagnostics block. Keyed
     # by entry as well as device so that a tracker shared between two
     # accounts keeps one history per account, and no entry sees another's.
+    # (canonical_id, component) already logged as FMDN_COMPONENT_HIT.
+    _component_hits: set[tuple[str, int]] = field(init=False, default_factory=set)
+    # Last hashed flags per component series, in memory, for the diagnostics:
+    # (config entry, canonical id) -> component -> reading. What a series stands
+    # for is unknown, so its flags must not reach the per-device sensors.
+    _component_flags: dict[tuple[str, str], dict[int, dict[str, Any]]] = field(
+        init=False, default_factory=dict
+    )
     _uwt_track: dict[tuple[str, str], _UwtTrack] = field(
         init=False, default_factory=dict
     )
@@ -1478,6 +1508,10 @@ class GoogleFindMyEIDResolver:
             self._lock_last_seen_monotonic = {}
         if not hasattr(self, "_confirmed_sightings"):
             self._confirmed_sightings = {}
+        if not hasattr(self, "_component_hits"):
+            self._component_hits = set()
+        if not hasattr(self, "_component_flags"):
+            self._component_flags = {}
         if not hasattr(self, "_uwt_track"):
             self._uwt_track = {}
         if not hasattr(self, "_uwt_events"):
@@ -1754,6 +1788,8 @@ class GoogleFindMyEIDResolver:
             del self._uwt_track[key]
         for entry_id in [e for e in self._uwt_events if e not in loaded]:
             del self._uwt_events[entry_id]
+        for key in [key for key in self._component_flags if key not in known_pairs]:
+            del self._component_flags[key]
 
     def reset_device_offset(self, registry_id: str) -> None:
         """Forget cached offsets/locks for a given device registry ID."""
@@ -1915,6 +1951,15 @@ class GoogleFindMyEIDResolver:
                 lock.canonical_id = clean_canonical_id
                 self._schedule_lock_save()
 
+        component_keys: tuple[tuple[int, bytes], ...] = ()
+        # getattr: test doubles stand in for the identity and the work item.
+        trackable = getattr(identity, "trackable_components", None)
+        if (trackable or 0) > 1 and len(key_bytes) == EIK_LENGTH:
+            component_keys = tuple(
+                (component, derive_component_key(key_bytes, component))
+                for component in MEASURED_COMPONENT_ROWS
+            )
+
         return WorkItem(
             registry_id=identity.registry_id,
             config_entry_id=str(identity.config_entry_id),
@@ -1925,6 +1970,7 @@ class GoogleFindMyEIDResolver:
             locked_variant=locked_variant,
             rotation_ts=rotation_ts,
             basis_hint=basis_hint,
+            component_keys=component_keys,
         )
 
     def _collect_work_items(
@@ -2219,10 +2265,17 @@ class GoogleFindMyEIDResolver:
         work_item: WorkItem,
         window: WindowSpec,
     ) -> tuple[VariantSpec, ...]:
-        """Return the variants to generate for a window."""
+        """Return the variants to generate for a window.
 
+        A device with several FMDN components additionally gets the measured
+        series (``derive_component_key``): one forward legacy EID per component
+        and window, the only form the measurements cover. The EIK series stays,
+        so a device for which the measured derivation does not hold loses nothing.
+        """
+
+        root: tuple[VariantSpec, ...]
         if work_item.locked_variant is not None:
-            return tuple(
+            root = tuple(
                 VariantSpec(
                     key_bytes=work_item.key_bytes,
                     variant=work_item.locked_variant,
@@ -2230,6 +2283,29 @@ class GoogleFindMyEIDResolver:
                 )
                 for window_candidate in window.windows
             )
+        else:
+            root = self._unlocked_variants(work_item, window)
+        component_keys = getattr(work_item, "component_keys", ())
+        if not component_keys:
+            return root
+        return root + tuple(
+            VariantSpec(
+                key_bytes=component_key,
+                variant=EidVariant.LEGACY_SECP160R1_X20_BE,
+                window=window_candidate,
+                include_reverse=False,
+                component=component,
+            )
+            for component, component_key in component_keys
+            for window_candidate in window.windows
+        )
+
+    @staticmethod
+    def _unlocked_variants(
+        work_item: WorkItem,
+        window: WindowSpec,
+    ) -> tuple[VariantSpec, ...]:
+        """Return every known variant of the EIK for a window."""
 
         return tuple(
             VariantSpec(
@@ -2363,6 +2439,11 @@ class GoogleFindMyEIDResolver:
                                 window.time_basis,
                                 str(variant_spec.window.timestamp),
                                 str(variant_spec.window.semantic_offset),
+                                *(
+                                    ()
+                                    if variant_spec.component is None
+                                    else (str(variant_spec.component),)
+                                ),
                             )
                         )
                     )
@@ -2531,6 +2612,8 @@ class GoogleFindMyEIDResolver:
         try:
             # Pass two: generate and register.
             for work_item, specs in planned:
+                # Always the EIK, also for component series: the finder finds
+                # the identity by this fingerprint and derives the series key.
                 fingerprint = identity_key_fingerprint(work_item.key_bytes)
                 for variant_spec in specs:
                     xor_mask: int | None = None
@@ -2554,6 +2637,7 @@ class GoogleFindMyEIDResolver:
                             canonical_id=work_item.canonical_id,
                             time_offset=generated.window.semantic_offset,
                             is_reversed=generated.is_reversed,
+                            component=variant_spec.component,
                         )
                         builder.register_eid(
                             generated.eid_bytes,
@@ -2563,6 +2647,7 @@ class GoogleFindMyEIDResolver:
                             advertisement_reversed=generated.is_reversed,
                             flags_xor_mask=xor_mask,
                             key_fingerprint=fingerprint,
+                            component=variant_spec.component,
                         )
         finally:
             # Shrink even when pass two raised, so a failed build does not
@@ -2845,6 +2930,9 @@ class GoogleFindMyEIDResolver:
                     encrypted_account_key=encrypted_account_key,
                     public_key_address=public_key_address,
                     time_anchors_debug=identity.get("time_anchors_debug"),
+                    trackable_components=normalize_component_count(
+                        identity.get("trackable_components")
+                    ),
                 )
             elif isinstance(identity, DeviceIdentity):
                 target_identity = identity
@@ -3330,8 +3418,20 @@ class GoogleFindMyEIDResolver:
         Never raises: a variant this version does not know, or a window
         timestamp that is not an int in ``[0, FHNA_COUNTER_MASK]``, records
         nothing; a key fingerprint that is not exactly ``bytes`` of the
-        fingerprint length is recorded as ``None``.
+        fingerprint length is recorded as ``None``. A ``component`` entry that is
+        not an int in ``[0, 255]`` records nothing: the finder would derive a key
+        from it. The comparisons above also hold across the component series of a
+        device, whose counters are comparable.
         """
+        component: int | None = None
+        if "component" in metadata:
+            raw_component = metadata["component"]
+            if (
+                type(raw_component) is not int
+                or not 0 <= raw_component <= COMPONENT_MAX
+            ):
+                return
+            component = raw_component
         window_ts = metadata.get("rotation_timestamp")
         if (
             not isinstance(window_ts, int)
@@ -3375,6 +3475,27 @@ class GoogleFindMyEIDResolver:
             uwt_mode=uwt_mode,
             uwt_source=uwt_source,
             key_fingerprint=key_fingerprint,
+            component=component,
+        )
+
+    def _note_component_hit(self, match: EIDMatch, frame: int | None) -> None:
+        """Log the first hit of each component series per process.
+
+        Live evidence for the measured derivation, in the spirit of
+        ``FMDN_FLAGS_PROBE``: identifiers and the series number only.
+        """
+        if match.component is None:
+            return
+        key = (match.canonical_id or match.device_id, match.component)
+        if key in self._component_hits:
+            return
+        self._component_hits.add(key)
+        _LOGGER.info(
+            "FMDN_COMPONENT_HIT device=%s canonical=%s component=%d frame=%s",
+            match.device_id,
+            match.canonical_id,
+            match.component,
+            "none" if frame is None else f"0x{frame:02x}",
         )
 
     def _sighting_is_older_than_the_lock(
@@ -3615,6 +3736,7 @@ class GoogleFindMyEIDResolver:
 
             # Update state for ALL matches (shared devices)
             for match in matches:
+                self._note_component_hit(match, candidate.frame_type)
                 # Intended, and worth naming because the value is persisted
                 # via EIDGenerationLock.frame_type / to_dict(): for a
                 # sliding-window hit this now stores None where the
@@ -3729,15 +3851,17 @@ class GoogleFindMyEIDResolver:
             reading.uwt_bit, reading.origin, candidate.frame_type
         )
         try:
-            self._note_uwt_observation(
-                matches,
-                mode=mode,
-                source=source,
-                reading=reading,
-                frame_type=candidate.frame_type,
-                payload_len=len(raw),
-                clock=clock,
-            )
+            # The history is per device; a component series is only part of it.
+            if "component" not in metadata:
+                self._note_uwt_observation(
+                    matches,
+                    mode=mode,
+                    source=source,
+                    reading=reading,
+                    frame_type=candidate.frame_type,
+                    payload_len=len(raw),
+                    clock=clock,
+                )
         except Exception as err:  # noqa: BLE001 - the match path must not fail
             _LOGGER.debug("uwt_transition_failed error_type=%s", type(err).__name__)
         return mode, source
@@ -4014,7 +4138,8 @@ class GoogleFindMyEIDResolver:
         DEBUG level only when the battery level changes.
 
         Returns the decoded protection-mode bit and how the flags byte was
-        located, for the sighting the caller records.
+        located, for the sighting the caller records. A component series stores
+        no state and returns no bit (``_record_component_flags``).
         """
         if not matches:
             return _FlagsReading(None, "absent")
@@ -4104,6 +4229,23 @@ class GoogleFindMyEIDResolver:
             # direct callers without a clock get the old "now" behaviour.
             observation = clock if clock is not None else _observation_clock(None)
             now_wall = observation.wall
+
+            if "component" in metadata:
+                # Measured series with an unknown meaning: a case value must not
+                # appear as the battery of the device, and a bit of unchecked
+                # meaning must not reach Google as the mode. Diagnostics only, and
+                # no bit: the finder falls back to the frame type, which is in
+                # clear text. A guessed byte may be EID material and is not
+                # recorded either.
+                if flags_origin == "framed":
+                    self._record_component_flags(
+                        matches,
+                        metadata["component"],
+                        decoded=decoded,
+                        frame=observed_frame,
+                        observation=observation,
+                    )
+                return _FlagsReading(None, flags_origin, decoded_flags)
 
             # Observe -- do not arbitrate -- the two redundant channels.
             #
@@ -4211,8 +4353,10 @@ class GoogleFindMyEIDResolver:
                         battery_label,
                         battery_raw,
                     )
-        else:
-            # Cannot decode — log once per device at INFO for diagnostics
+        elif "component" not in metadata:
+            # Cannot decode — log once per device at INFO for diagnostics. A
+            # component series has no probe of its own and must not use up the
+            # one of the device.
             for match in matches:
                 storage_key = match.canonical_id or match.device_id
                 if storage_key not in self._flags_logged_devices:
@@ -4242,6 +4386,52 @@ class GoogleFindMyEIDResolver:
     # ------------------------------------------------------------------
     # Public BLE battery API
     # ------------------------------------------------------------------
+    def _record_component_flags(
+        self,
+        matches: list[EIDMatch],
+        component: object,
+        *,
+        decoded: int,
+        frame: int | None,
+        observation: ObservationClock,
+    ) -> None:
+        """Keep the newest hashed flags of a component series for the diagnostics."""
+        if type(component) is not int:
+            return
+        for match in matches:
+            readings = self._component_flags.setdefault(
+                (match.config_entry_id, match.canonical_id or match.device_id), {}
+            )
+            previous = readings.get(component)
+            count = 1 if previous is None else previous["observations"] + 1
+            if previous is not None and (
+                observation.monotonic < previous["observed_at_monotonic"]
+            ):
+                previous["observations"] = count
+                continue
+            readings[component] = {
+                "decoded": decoded,
+                "frame": frame,
+                "observed_at_wall": observation.wall,
+                "observed_at_monotonic": observation.monotonic,
+                "observations": count,
+            }
+
+    def component_flags_snapshot(
+        self, entry_id: str
+    ) -> dict[str, dict[int, dict[str, Any]]]:
+        """Return a copy of the component readings of one config entry by device."""
+        readings: dict[tuple[str, str], dict[int, dict[str, Any]]] = getattr(
+            self, "_component_flags", {}
+        )
+        return {
+            canonical_id: {
+                component: dict(reading) for component, reading in per_series.items()
+            }
+            for (owner, canonical_id), per_series in readings.items()
+            if owner == entry_id
+        }
+
     def get_ble_battery_state(self, device_id: str) -> BLEBatteryState | None:
         """Return the last observed BLE battery state for a device, or None.
 
@@ -4711,6 +4901,12 @@ class GoogleFindMyEIDResolver:
         confirmed_sightings = getattr(self, "_confirmed_sightings", None)
         if isinstance(confirmed_sightings, dict):
             confirmed_sightings.clear()
+        component_hits = getattr(self, "_component_hits", None)
+        if isinstance(component_hits, set):
+            component_hits.clear()
+        component_flags = getattr(self, "_component_flags", None)
+        if isinstance(component_flags, dict):
+            component_flags.clear()
         for attr in ("_uwt_track", "_uwt_events"):
             mapping = getattr(self, attr, None)
             if isinstance(mapping, dict):

@@ -108,6 +108,7 @@ _METADATA_KEYS = (
     "fastPairModelId",
     "manufacturer",
     "model",
+    "trackable_components",
     "encrypted_account_key",
     "encryptedAccountKey",
     "public_key_address",

@@ -2861,3 +2861,88 @@ def test_prf_with_a_long_key_gives_the_published_vector() -> None:
         bytes(range(32)), bytes.fromhex("00112233445566778899aabbccddeeff")
     )
     assert output.hex() == "8ea2b7ca516745bfeafc49904b496089"
+
+
+# --- Component series (measured derivation, docs/FMDN.md S3.4.1) ---------------
+
+_COMPONENT_EIK = bytes(range(32))
+_COMPONENT_COUNTER = 150528
+
+
+def _component_eid(component: int, label: int = 4) -> bytes:
+    key = hashlib.sha256(_COMPONENT_EIK + bytes((label, component))).digest()
+    return generate_eid_variant(
+        key, _COMPONENT_COUNTER, EidVariant.LEGACY_SECP160R1_X20_BE
+    )
+
+
+@pytest.mark.parametrize("component", [0, 1, 2, 254, 255])
+def test_compare_eid_finds_a_component_series(component: int) -> None:
+    report = ba.compare_eid(
+        _COMPONENT_EIK, _COMPONENT_COUNTER, _component_eid(component)
+    )
+    assert report["result"] == "match"
+    assert report["component"] == component
+    assert report["window_offset"] == 0
+    assert report["variant"] == "legacy_secp160r1_x20_be"
+    assert report["components_checked"] > 0
+
+
+def test_compare_eid_prefers_the_eik_series_and_names_no_component() -> None:
+    eid = generate_eid_variant(
+        _COMPONENT_EIK, _COMPONENT_COUNTER, EidVariant.LEGACY_SECP160R1_X20_BE
+    )
+    report = ba.compare_eid(_COMPONENT_EIK, _COMPONENT_COUNTER, eid)
+    assert report["result"] == "match"
+    assert report["component"] is None
+    assert report["components_checked"] == 0
+
+
+def test_compare_eid_no_match_has_no_component() -> None:
+    report = ba.compare_eid(_COMPONENT_EIK, _COMPONENT_COUNTER, b"\x77" * 20)
+    assert report["result"] == "no_match"
+    assert report["component"] is None
+    assert report["components_checked"] == 5 * len(ba.EID_WINDOW_OFFSETS)
+
+
+def test_compare_eid_skips_counters_out_of_range_for_series() -> None:
+    report = ba.compare_eid(_COMPONENT_EIK, 0, b"\x77" * 20)
+    assert report["components_checked"] < 5 * len(ba.EID_WINDOW_OFFSETS)
+
+
+def test_derivation_keys_cover_labels_and_components_by_name() -> None:
+    names = {
+        name
+        for name, _key in ba.derivation_keys(
+            ba.BeaconKeys(eik=_COMPONENT_EIK, account_key=None)
+        )
+    }
+    assert "sha256_eik_label_4_component_255" in names
+    assert "sha256_eik_label_5_component_2" in names
+    assert "sha256_eik_label_0_component_3" in names
+
+
+def test_derivation_keys_use_label_then_component() -> None:
+    keys = dict(ba.derivation_keys(ba.BeaconKeys(eik=_COMPONENT_EIK, account_key=None)))
+    assert (
+        keys["sha256_eik_label_5_component_2"]
+        == hashlib.sha256(_COMPONENT_EIK + bytes((5, 2))).digest()
+    )
+
+
+def test_derivation_search_finds_a_series_with_another_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The way to test the derivation on another model without changing code."""
+    keys = ba.BeaconKeys(ACCOUNT_KEY, _COMPONENT_EIK)
+    name = "sha256_eik_label_5_component_2"
+    key = dict(ba.derivation_keys(keys))[name]
+    boundary = CLOCK - CLOCK % 1024
+    block_name, block = ba.derivation_blocks(boundary)[0]
+    target = _derived_target(key, block, "big", False)
+    _narrow(monkeypatch, ["eik", name], [block_name])
+    report = ba.search_eid_derivations(keys, CLOCK, {target: "advertised"}, 1)
+    assert report["result"] == "match"
+    assert report["key"] == name
+    assert key.hex() not in repr(report)
+    assert _COMPONENT_EIK.hex() not in repr(report)
