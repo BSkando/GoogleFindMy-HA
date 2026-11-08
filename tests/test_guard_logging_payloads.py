@@ -33,7 +33,8 @@ Eight shapes are recognised inside a log call's arguments:
   (E) an unsliced argument whose own name is a whole body (`hex_response`,
       `response_hex`, `result_hex`, `hex_string`, `response_bytes`,
       `raw_data`, `raw_bytes`, `raw_response`, `payload`, `body`, `blob`,
-      `merged_device_data`, `gcm_data`, `fcm_data`), passed whole to `%s`.
+      `merged_device_data`, `gcm_data`, `fcm_data`), passed whole to `%s`
+      or as an argument of a call that is not in `_SAFE_WRAPPERS`.
       The list is exact names, not the substring pattern of (B):
       `payload_len`, `raw_prefix` or `status_raw` carry a length, a prefix
       or a status, and a substring rule over them reported 31 sites of
@@ -63,9 +64,12 @@ bytes, rotating) and is excused by (path, leaf, format-string prefix), so the
 exception covers that one call and not every `payload` line of the module.
 
 Blind spot, stated on purpose: the guard sees only shapes (A) to (I). Shape
-(E) knows an exact list of names: a whole payload under any other name,
-or wrapped (`str(payload)`, `repr(payload)`, `payload.decode()`, an
-f-string), is not reported. Shape (D) follows assignments inside one
+(E) knows an exact list of names: a whole payload under any other name is
+not reported, and neither is one reached as the receiver of a method
+(`payload.decode()`) or inside an f-string. Passed to any call that is not
+in `_SAFE_WRAPPERS` (`summarize(hex_response)`, `str(payload)`), it is
+reported, because a helper not known to be log-safe renders what it is
+given. Shape (D) follows assignments inside one
 function, not across calls: a helper that returns the body it was given
 under a new name is trusted unless the name it is bound to is used in a log
 call of the same function. Shape (F) sees the dict display in the call
@@ -255,9 +259,10 @@ body name too and would be reported if logged; fail-closed, no instance
 today. A raw value under a neutral name that was not read from a
 response in the same function (`data`, `msg`), a slice whose whole chain is
 neutrally named (`page.read()[:16]`), a wrapping call whose arguments hide
-the name (`str(response)[:16]`, `bytes(payload)[:16]`: the chain follows the
-callee, not the arguments), `binascii.hexlify()`, `base64.b64encode()` or
-`repr(bytes)` are not reported; nor is a message passed whole to `%s`
+a name outside the exact list of shape (E) (`str(response)[:16]`: the chain
+follows the callee, not the arguments; `bytes(payload)[:16]` is reported
+through shape (E)), `binascii.hexlify()`, `base64.b64encode()` or
+`repr(bytes)` over such a name are not reported; nor is a message passed whole to `%s`
 (`str(message)` is its text format). Arguments of a logging wrapper that is
 not itself a log call are unchecked, whatever they carry; the two wrappers
 the package has, `_log_verbose` and `_log_warn_with_limit`, are treated as
@@ -317,7 +322,11 @@ _ROTATING_LEAVES: frozenset[str] = frozenset({"eid", "eid_hex", "truncated_eid_h
 # at module level; `missing_browser_dependency` quotes it after the install
 # hint (`browser_deps.py`). Its text comes from the import system and names
 # a module (`No module named 'selenium'`) or, for a broken installation, a
-# path inside it; not a server or a user, and the install hint needs it (shape (I) constructor, 2026-10-23). The prefix keys
+# path inside it; not a server or a user, and the install hint needs it (shape (I) constructor, 2026-10-23).
+# `gcm_data` in `fcmregister.py` and `merged_device_data` in
+# `coordinator/identity.py` go through `sorted(...)`, which iterates a mapping
+# and yields its key names, not its values (shape (E) through a helper,
+# 2026-11-08). The prefix keys
 # the exception to that one call; `test_each_reviewed_site_matches_
 # exactly_one_log_call` fails when the site disappears or is copied.
 _REVIEWED: frozenset[tuple[str, str, str]] = frozenset(
@@ -329,6 +338,12 @@ _REVIEWED: frozenset[tuple[str, str, str]] = frozenset(
             "Cannot refresh FCM token: missing credentials key",
         ),
         ("Auth/auth_flow.py", "_err", "raise"),
+        (
+            "Auth/firebase_messaging/fcmregister.py",
+            "gcm_data",
+            "GCM subscription: fields=%s",
+        ),
+        ("coordinator/identity.py", "merged_device_data", "Building Identity for %s"),
     }
 )
 
@@ -606,13 +621,48 @@ def _body_leaves(argument: ast.AST, bodies: frozenset[str]) -> list[tuple[str, s
     return found
 
 
-def _whole_body_leaves(argument: ast.AST) -> list[tuple[str, str]]:
-    """(shape, name) when the argument itself is a whole-body name (shape (E))."""
-    if isinstance(argument, (ast.Name, ast.Attribute)):
-        chain = _chain(argument)
+def _whole_body_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Starred):
+        node = node.value
+    if isinstance(node, (ast.Name, ast.Attribute)):
+        chain = _chain(node)
         if chain and chain[0] in _WHOLE_BODY_NAMES:
-            return [("whole", chain[0])]
-    return []
+            return chain[0]
+    return None
+
+
+def _whole_body_leaves(argument: ast.AST) -> list[tuple[str, str]]:
+    """(shape, name) for a whole-body name in one argument (shape (E)).
+
+    The argument itself, or an argument of any call inside it whose name is
+    not in `_SAFE_WRAPPERS` (`summarize(hex_response)`, `str(payload)`): a
+    helper that is not known to be log-safe renders what it is given. The walk
+    stops at a log-safe wrapper, as in shape (D).
+    """
+    found: list[tuple[str, str]] = []
+    name = _whole_body_name(argument)
+    if name is not None:
+        found.append(("whole", name))
+
+    def walk(node: ast.AST) -> None:
+        if isinstance(node, ast.Call):
+            func = node.func
+            called = (
+                func.attr
+                if isinstance(func, ast.Attribute)
+                else getattr(func, "id", "")
+            )
+            if called in _SAFE_WRAPPERS:
+                return
+            for inner in [*node.args, *(kw.value for kw in node.keywords)]:
+                inner_name = _whole_body_name(inner)
+                if inner_name is not None:
+                    found.append(("whole", inner_name))
+        for child in ast.iter_child_nodes(node):
+            walk(child)
+
+    walk(argument)
+    return found
 
 
 def _expansion_leaves(argument: ast.AST) -> list[tuple[str, str]]:
@@ -2959,6 +3009,39 @@ async def fetch(self, resp, first):
         (10, "content"),
         (14, "key"),
         (14, "code"),
+    ]
+
+
+def test_shape_e_reports_a_whole_body_passed_to_a_helper() -> None:
+    """A whole-body name as argument of a call outside `_SAFE_WRAPPERS` leaks.
+
+    Fixture in the shape of the locate callback: the summary helper is looked
+    up through `getattr` and bound to a neutral name, so neither the helper's
+    name nor a body read is visible. The helper renders whatever it is given,
+    so `summarize(hex_response)` puts the hex dump into the record; `len` and
+    the other log-safe wrappers stay silent, and a message name (`device_update`)
+    is a matter of shape (G), not of this rule.
+    """
+    source = """
+def on_location(hex_response, payload):
+    summarize = cast(Any, getattr(decoder_module, "_unknown_field_summary", None))
+    device_update = parse_device_update_protobuf(hex_response)
+    _LOGGER.debug("a: %s", summarize(device_update) or "none")
+    _LOGGER.debug("b: %s", summarize(hex_response))
+    _LOGGER.debug("c: %s", _unknown_field_summary(hex_response))
+    _LOGGER.debug("d: %s", len(hex_response))
+    _LOGGER.debug("e: %s", str(payload))
+    _LOGGER.debug("f: %s", _describe_body(raw_response=payload))
+    _LOGGER.debug("g: %s", render(*payload))
+"""
+    offenders, scanned = _scan_tree(ast.parse(source), "fixture.py")
+
+    assert scanned == 7
+    assert [(line, leaf) for _p, line, leaf, _f in offenders] == [
+        (6, "hex_response"),
+        (7, "hex_response"),
+        (9, "payload"),
+        (11, "payload"),
     ]
 
 
