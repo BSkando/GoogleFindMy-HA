@@ -14,15 +14,18 @@ dependency update raises one of the three tools, the same PR bumps the matching
 ``rev:`` and the pin in ``script/local_verify.py`` (root ``AGENTS.md``, bullet
 "Configuration alignment").
 
-Two further checks pin the configuration defects this file was written for: the
+Further checks pin the configuration defects this file was written for: the
 legacy ``ruff`` hook id, which received ``check`` twice and read it as a file
-name, and ``additional_dependencies`` entries such as ``.[dev]``, which a
-``repo: local`` hook cannot install because it has no project of its own. The
-``mypy`` and ``pytest`` hooks therefore run from the project environment.
+name, the same doubled ``check`` under the new ``ruff-check`` id, and
+``additional_dependencies`` entries such as ``.[dev]``, which a ``repo: local``
+hook cannot install because it has no project of its own. The ``mypy`` and
+``pytest`` hooks therefore run from the project environment, and the ``mypy``
+entry has to start the ``mypy`` executable.
 
 Blind spot: the CI skips the ``mypy`` and ``pytest`` hooks because both run in
 jobs of their own, so any other defect in those two entries goes unnoticed
-there; only the two forms checked here are covered.
+there; only the forms checked here are covered (``language: system`` for both,
+the executable of the ``mypy`` entry).
 """
 
 from __future__ import annotations
@@ -39,6 +42,8 @@ from script import local_verify
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = REPO_ROOT / ".pre-commit-config.yaml"
 LOCK_PATH = REPO_ROOT / "poetry.lock"
+CI_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+CI_BANDIT_STEP = "Run bandit (security)"
 
 # Hook repository of each tool whose rev must equal its version in poetry.lock.
 LOCKED_HOOK_REPOS = {
@@ -131,6 +136,80 @@ def test_no_legacy_ruff_hook_id() -> None:
     assert "ruff-check" in ids
 
 
+def ruff_check_doubled_subcommand(hooks: list[dict[str, Any]]) -> list[str]:
+    """Return the ``ruff-check`` hooks whose ``args`` start with ``check``.
+
+    The ``ruff-check`` hook already runs ``ruff check``; a leading ``check`` in
+    ``args`` is passed on as a file name, exactly the defect of the legacy id.
+    """
+
+    return [
+        str(hook["id"])
+        for hook in hooks
+        if hook["id"] == "ruff-check" and list(hook.get("args", []))[:1] == ["check"]
+    ]
+
+
+def mypy_entry_without_mypy(hooks: list[dict[str, Any]]) -> list[str]:
+    """Return the ``mypy`` hook entries whose executable is not ``mypy``.
+
+    An entry such as ``true`` passes every run while checking nothing, and the
+    CI skips this hook, so nothing else would notice.
+    """
+
+    return [
+        str(hook.get("entry"))
+        for hook in hooks
+        if hook["id"] == "mypy" and str(hook.get("entry", "")).split()[:1] != ["mypy"]
+    ]
+
+
+def test_ruff_check_args_do_not_repeat_the_subcommand() -> None:
+    """The real configuration passes no ``check`` to ``ruff-check``."""
+
+    assert ruff_check_doubled_subcommand(_hooks()) == []
+
+
+def test_mypy_entry_runs_mypy() -> None:
+    """The real ``mypy`` hook starts the ``mypy`` executable."""
+
+    assert mypy_entry_without_mypy(_hooks()) == []
+
+
+@pytest.mark.parametrize(
+    ("hook", "offending"),
+    [
+        ({"id": "ruff-check", "args": ["check", "--fix"]}, True),
+        ({"id": "ruff-check", "args": ["--fix", "check"]}, False),
+        ({"id": "ruff-check"}, False),
+        ({"id": "ruff-format", "args": ["check"]}, False),
+    ],
+)
+def test_ruff_check_arm_flags_a_leading_check(
+    hook: dict[str, Any], offending: bool
+) -> None:
+    """Self-test of the arm: only a leading ``check`` on ``ruff-check`` counts."""
+
+    assert bool(ruff_check_doubled_subcommand([hook])) is offending
+
+
+@pytest.mark.parametrize(
+    ("entry", "offending"),
+    [
+        ("mypy --strict -p custom_components.googlefindmy", False),
+        ("mypy", False),
+        ("true", True),
+        ("", True),
+        ("python -m mypy", True),
+        ("mypyc --strict", True),
+    ],
+)
+def test_mypy_arm_flags_another_executable(entry: str, offending: bool) -> None:
+    """Self-test of the arm: the first word of the entry must be ``mypy``."""
+
+    assert bool(mypy_entry_without_mypy([{"id": "mypy", "entry": entry}])) is offending
+
+
 def test_no_local_install_of_the_project() -> None:
     """A ``repo: local`` hook has no project, so ``.[dev]`` installs nothing."""
 
@@ -154,19 +233,76 @@ def test_environment_hooks_use_the_project_environment(hook_id: str) -> None:
     assert matches[0]["language"] == "system"
 
 
+def _ci_bandit_targets() -> list[str]:
+    """Return the paths after ``-r`` in the CI bandit step, in order."""
+
+    workflow = yaml.safe_load(CI_PATH.read_text(encoding="utf-8"))
+    steps = [
+        step
+        for job in workflow["jobs"].values()
+        for step in job.get("steps", [])
+        if step.get("name") == CI_BANDIT_STEP
+    ]
+    assert len(steps) == 1, f"expected one step named {CI_BANDIT_STEP!r}"
+    commands = [
+        line.split()
+        for line in str(steps[0]["run"]).splitlines()
+        if "bandit -r" in line and not line.lstrip().startswith("#")
+    ]
+    assert len(commands) == 1, "expected one bandit command in the CI step"
+    words = commands[0]
+    start = words.index("-r") + 1
+    targets: list[str] = []
+    for word in words[start:]:
+        if word.startswith("-"):
+            break
+        targets.append(word)
+    return targets
+
+
+def _hook_bandit_targets(args: list[str]) -> list[str]:
+    """Return the paths after ``-r`` in the bandit hook arguments."""
+
+    start = args.index("-r") + 1
+    targets: list[str] = []
+    for word in args[start:]:
+        if word.startswith("-"):
+            break
+        targets.append(word)
+    return targets
+
+
 def test_bandit_hook_scans_the_ci_tree_only() -> None:
     """The hook runs the CI job's command: same tree, same configuration.
 
-    With file names appended, bandit also scanned ``script/`` and reported
-    findings the CI job never sees. With a configuration file of its own, the
-    hook skipped other directories and tests than the CI job does.
+    With file names appended, bandit also scanned every other Python file and
+    reported findings the CI job never sees. With a configuration file of its
+    own, the hook skipped other directories and tests than the CI job does.
+    Both scan the shipped integration and the developer scripts under
+    ``script/``.
     """
 
     matches = [hook for hook in _hooks() if hook["id"] == "bandit"]
 
     assert len(matches) == 1
     assert matches[0].get("pass_filenames") is False
-    assert matches[0]["args"] == ["-c", "pyproject.toml", "-r", "custom_components"], (
+    assert matches[0]["args"] == [
+        "-c",
+        "pyproject.toml",
+        "-r",
+        "custom_components",
+        "script",
+    ], (
         "Keep the bandit hook arguments equal to the CI bandit job in "
-        ".github/workflows/ci.yml (bandit -r custom_components -c pyproject.toml)."
+        ".github/workflows/ci.yml (bandit -r custom_components script -c "
+        "pyproject.toml)."
     )
+
+
+def test_ci_bandit_job_scans_the_hook_tree() -> None:
+    """The CI step and the hook name the same trees, read from both files."""
+
+    hook = next(hook for hook in _hooks() if hook["id"] == "bandit")
+
+    assert _ci_bandit_targets() == _hook_bandit_targets(list(hook["args"]))
+    assert _ci_bandit_targets() == ["custom_components", "script"]

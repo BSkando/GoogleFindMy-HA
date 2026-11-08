@@ -58,6 +58,8 @@ lxml-stubs = ">=0.5.1"
 
 # Security auditing
 pip-audit = ">=2.6"
+# script/diff_coverage.py parses coverage.xml with it (bandit B314/B405)
+defusedxml = ">=0.7.1"
 
 # Additional dev tools
 pyyaml = ">=6.0.2"

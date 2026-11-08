@@ -8,6 +8,7 @@ homeassistant>=2025.9.1
 beautifulsoup4>=4.12.3
 certifi>=2024.7.4
 cmarkgfm>=2025.10.22
+defusedxml>=0.7.1
 ecdsa>=0.19.2
 gpsoauth>=2.0.0
 grpclib>=0.4.7
