@@ -115,7 +115,7 @@ When a dependency pin changes, delete the archive (and `.wheelhouse/`) or rerun
 - `make preflight`: Run the local preflight S1 to S8 and print the stage report; pass the tracks with `PREFLIGHT_PYTHONS="…"` (space separated, empty by default because the paths are machine-local). Unlike the other targets this one does not go through `poetry run`, because each track is its own virtualenv.
 - `make translation-check`: Check for missing translation keys across all locale files.
 - `make check-ha-compat`: Check dependency compatibility with Home Assistant via `script/check_ha_compatibility.py`.
-- `make doctoc`: Regenerate the AGENTS.md table of contents (requires Node.js; installs DocToc via `make bootstrap-doctoc`).
+- `make doctoc`: Regenerate the AGENTS.md table of contents with the pre-commit hook script `script/precommit_hooks/update_doctoc.py` (through `poetry run`).
 - `make bootstrap-doctoc`: Install the DocToc npm dev dependency into the local cache.
 
 ---

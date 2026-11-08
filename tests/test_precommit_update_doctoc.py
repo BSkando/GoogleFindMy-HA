@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from pathlib import Path
 
 import pytest
@@ -779,3 +780,33 @@ def test_replace_toc_does_not_split_at_a_form_feed() -> None:
     toc = update_doctoc._replace_toc(document).split(update_doctoc.END_MARKER)[0]
 
     assert "Hidden" not in toc
+
+
+def test_slug_drops_unicode_symbols_and_punctuation_like_github() -> None:
+    """A heading with a symbol gets the id GitHub renders, not the npm one.
+
+    The expected value is the ``id`` GitHub's own HTML rendering of the root
+    ``AGENTS.md`` gives this heading (``user-content-`` prefix removed): the
+    ``\\u2265`` sign and the ``%`` sign disappear, and the two spaces around the
+    removed sign leave a double hyphen.
+    """
+
+    slug = update_doctoc._slugify("1. High-confidence mode (≥ 90 %)", defaultdict(int))
+
+    assert slug == "1-high-confidence-mode--90-"
+
+
+def test_slug_keeps_hyphen_and_underscore_and_drops_ascii_punctuation() -> None:
+    """The ASCII rules stay as they were; ``-`` and ``_`` survive the filter."""
+
+    slug = update_doctoc._slugify("Cache_dir & re-use: `foo.bar`!", defaultdict(int))
+
+    assert slug == "cache_dir--re-use-foobar"
+
+
+def test_slug_keeps_letters_outside_ascii() -> None:
+    """Letters are kept, whatever the script; only marks and symbols go."""
+
+    slug = update_doctoc._slugify("Grüße aus Köln", defaultdict(int))
+
+    assert slug == "gr%C3%BC%C3%9Fe-aus-k%C3%B6ln"
