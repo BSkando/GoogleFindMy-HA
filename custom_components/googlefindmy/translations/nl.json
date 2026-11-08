@@ -862,7 +862,7 @@
       "message": "Apparaat {device_id} kon niet worden gevonden of maakt geen deel uit van deze integratie."
     },
     "no_active_entry": {
-      "message": "Geen actief Google Find My Device-item beschikbaar. Actieve items: {active_count}/{total_count}. Schakel een van de geconfigureerde items ({entries}) in of voeg een nieuw account toe en probeer het opnieuw."
+      "message": "Geen actief Google Find My Device-item beschikbaar. Actieve items: {active_count}/{total_count}. Schakel een van de geconfigureerde items in of voeg een nieuw account toe en probeer het opnieuw."
     },
     "locate_failed": {
       "message": "Kan apparaat {device_id} niet lokaliseren: {error}"

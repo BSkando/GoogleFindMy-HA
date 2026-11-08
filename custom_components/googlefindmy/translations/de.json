@@ -862,7 +862,7 @@
       "message": "Gerät {device_id} wurde nicht gefunden oder gehört nicht zu dieser Integration."
     },
     "no_active_entry": {
-      "message": "Es ist kein aktiver Google-Find-My-Gerät-Eintrag verfügbar. Aktive Einträge: {active_count}/{total_count}. Aktiviere einen der konfigurierten Einträge ({entries}) oder richte ein neues Konto ein und versuche es erneut."
+      "message": "Es ist kein aktiver Google-Find-My-Gerät-Eintrag verfügbar. Aktive Einträge: {active_count}/{total_count}. Aktiviere einen der konfigurierten Einträge oder richte ein neues Konto ein und versuche es erneut."
     },
     "locate_failed": {
       "message": "Ortung für Gerät {device_id} fehlgeschlagen: {error}"
