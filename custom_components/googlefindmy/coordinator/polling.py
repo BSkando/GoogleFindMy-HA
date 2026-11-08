@@ -2214,7 +2214,10 @@ class PollingOperations(_MixinBase):
                                 if should_filter:
                                     _LOGGER.warning(
                                         "Filtering out Google Home spam detection for %s",
-                                        dev_name,
+                                        dev_id,
+                                    )
+                                    _LOGGER.debug(
+                                        "Device %s is named %s", dev_id, dev_name
                                     )
                                     continue
                                 if replacement_attrs:
@@ -2321,8 +2324,9 @@ class PollingOperations(_MixinBase):
                             if not location.get("semantic_name"):
                                 _LOGGER.warning(
                                     "No location data (coordinates or semantic name) available for %s in this update.",
-                                    dev_name,
+                                    dev_id,
                                 )
+                                _LOGGER.debug("Device %s is named %s", dev_id, dev_name)
                             # Nothing to commit/update in cache
                             # Strip any internal hint before dropping to avoid accidental exposure
                             location.pop("_report_hint", None)
@@ -2478,8 +2482,9 @@ class PollingOperations(_MixinBase):
                     except SpotAuthPermanentError:
                         _LOGGER.warning(
                             "Authentication failed for %s; triggering reauth flow.",
-                            dev_name,
+                            dev_id,
                         )
+                        _LOGGER.debug("Device %s is named %s", dev_id, dev_name)
                         self._set_auth_state(
                             failed=True,
                             reason=f"Auth failed during poll for {dev_name}: session invalid",
@@ -2497,8 +2502,9 @@ class PollingOperations(_MixinBase):
                     except SpotApiEmptyResponseError:
                         _LOGGER.warning(
                             "Authentication failed for %s; triggering reauth flow.",
-                            dev_name,
+                            dev_id,
                         )
+                        _LOGGER.debug("Device %s is named %s", dev_id, dev_name)
                         self._set_auth_state(
                             failed=True,
                             reason=f"Auth failed during poll for {dev_name}: session invalid",
@@ -2519,9 +2525,10 @@ class PollingOperations(_MixinBase):
                         # Permanent auth failure (AAS token invalid) - immediate reauth
                         _LOGGER.error(
                             "Permanent authentication failure for %s: %s. Re-authentication required.",
-                            dev_name,
+                            dev_id,
                             perm_err,
                         )
+                        _LOGGER.debug("Device %s is named %s", dev_id, dev_name)
                         self._set_auth_state(
                             failed=True,
                             reason=f"Permanent auth failure for {dev_name}: credentials invalid",
@@ -2557,9 +2564,10 @@ class PollingOperations(_MixinBase):
                                 "Client error (HTTP %s) for %s: %s. "
                                 "Skipping this device; the sign-in is not in question.",
                                 getattr(transient_err, "status", "unknown"),
-                                dev_name,
+                                dev_id,
                                 transient_err,
                             )
+                            _LOGGER.debug("Device %s is named %s", dev_id, dev_name)
                             self.note_error(
                                 transient_err,
                                 where="poll_client_error",
@@ -2653,9 +2661,10 @@ class PollingOperations(_MixinBase):
                         _LOGGER.warning(
                             "Transient auth failure for %s: %s. "
                             "Will retry in next poll cycle.",
-                            dev_name,
+                            dev_id,
                             transient_err,
                         )
+                        _LOGGER.debug("Device %s is named %s", dev_id, dev_name)
                         cycle_failed = True
                         if last_exception is None:
                             last_exception = transient_err
@@ -2804,9 +2813,8 @@ class PollingOperations(_MixinBase):
                         cycle_unaccepted_devices += 1
                         continue
                     except Exception as err:
-                        _LOGGER.error(
-                            "Failed to get location for %s: %s", dev_name, err
-                        )
+                        _LOGGER.error("Failed to get location for %s: %s", dev_id, err)
+                        _LOGGER.debug("Device %s is named %s", dev_id, dev_name)
                         cycle_failed = True
                         self._consecutive_timeouts = 0
                         self.note_error(err, where="poll_exception", device=dev_name)

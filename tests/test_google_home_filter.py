@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -21,6 +22,31 @@ class _FakeState(SimpleNamespace):
 
     def __init__(self, entity_id: str, state: str, attributes: dict[str, Any]):
         super().__init__(entity_id=entity_id, state=state, attributes=attributes)
+
+
+_FILTER_LOGGER = "custom_components.googlefindmy.google_home_filter"
+
+
+def _assert_label_only_at_debug(
+    records: list[logging.LogRecord], device_id: str, label: str
+) -> None:
+    """The record above DEBUG names the device id; only DEBUG names the label.
+
+    The filter runs on every location update, so its records repeat
+    unattended (``AGENTS.md`` section 5 (b)); a Google Home label is a
+    user-chosen name.
+    """
+
+    own = [rec for rec in records if rec.name == _FILTER_LOGGER]
+    above = [rec for rec in own if rec.levelno >= logging.INFO]
+    assert above, [rec.getMessage() for rec in own]
+    assert all(label not in rec.getMessage() for rec in above), [
+        rec.getMessage() for rec in above
+    ]
+    assert any(device_id in rec.getMessage() for rec in above)
+    assert any(
+        rec.levelno == logging.DEBUG and label in rec.getMessage() for rec in own
+    ), [rec.getMessage() for rec in own]
 
 
 def _ensure_core_state_module(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
@@ -99,6 +125,7 @@ class _FakeStates:
 
 def test_should_filter_detection_when_zone_passive(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Passive ``zone.home`` prevents substitution for Google Home detections."""
 
@@ -149,15 +176,19 @@ def test_should_filter_detection_when_zone_passive(
     }
 
     gh_filter = GoogleHomeFilter(hass, filter_config)
+    caplog.set_level(logging.DEBUG, logger=_FILTER_LOGGER)
+    caplog.clear()
 
     assert gh_filter.should_filter_detection("device-1", "Nest Speaker") == (
         False,
         None,
     )
+    _assert_label_only_at_debug(caplog.records, "device-1", "Nest Speaker")
 
 
 def test_should_filter_detection_substitutes_home_coordinates(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Active ``zone.home`` coordinates substitute semantic Google Home detections."""
 
@@ -209,11 +240,14 @@ def test_should_filter_detection_substitutes_home_coordinates(
     }
 
     gh_filter = GoogleHomeFilter(hass, filter_config)
+    caplog.set_level(logging.DEBUG, logger=_FILTER_LOGGER)
+    caplog.clear()
 
     assert gh_filter.should_filter_detection("device-1", "Nest Speaker") == (
         False,
         {"latitude": 1.23, "longitude": 4.56, "radius": 10.0},
     )
+    _assert_label_only_at_debug(caplog.records, "device-1", "Nest Speaker")
 
     # Second call with literal Home exercises the spam debounce path.
     assert gh_filter.should_filter_detection("device-1", "Home") == (True, None)

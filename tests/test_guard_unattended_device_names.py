@@ -1,10 +1,10 @@
 # tests/test_guard_unattended_device_names.py
-"""Guard: three unattended paths name no device above DEBUG.
+"""Guard: five unattended paths name no device above DEBUG.
 
 `AGENTS.md` section 5 (b): a record that can repeat unattended keeps the
 user-chosen device name out of the record at INFO and above and carries it
-only at DEBUG. This guard pins that for three functions that run without a
-user action and used to log the display name at WARNING or ERROR:
+only at DEBUG. This guard pins that for five functions that run without a
+user action and used to log the display name at INFO, WARNING or ERROR:
 
 * `api.py` `GoogleFindMyAPI.async_get_device_location` (the location
   lookup shared by every poll cycle and the manual locate);
@@ -12,7 +12,12 @@ user action and used to log the display name at WARNING or ERROR:
   decoder, run on each unattended device list refresh);
 * `coordinator/registry.py` `_heal_tracker_device_subentry`, nested in
   `RegistryOperations._ensure_registry_for_devices` (the registry sync of
-  every poll cycle).
+  every poll cycle);
+* `coordinator/polling.py` `PollingOperations._async_start_poll_cycle` (the
+  per-device error and status records of every poll cycle);
+* `google_home_filter.py` `GoogleHomeFilter.should_filter_detection` (the
+  Google Home spam filter, run on every location update; its records named
+  the Google Home device label).
 
 Inside each function, every log call whose level is INFO or above is
 checked.
@@ -53,7 +58,7 @@ they are listed in `_FIELD_NAME_ROWS` with path, leaf and format prefix, and
 each entry must match exactly one call so that a copied line does not
 inherit the exception.
 
-Written as a pin on three functions rather than a package-wide rule,
+Written as a pin on five functions rather than a package-wide rule,
 because the package still has records bound to one invocation (buttons,
 services, the manual locate) that may name the device by section 5 (b), and
 a package-wide name predicate would need an exception list longer than the
@@ -72,7 +77,7 @@ functions call. The caplog tests in `tests/test_api_location_name_at_debug.py` a
 `tests/test_decoder_registry_name_at_debug.py` pin the record contents;
 this guard pins the shape of the call.
 
-Retire this guard when a package-wide device-name guard covers these three
+Retire this guard when a package-wide device-name guard covers these five
 functions.
 """
 
@@ -95,9 +100,10 @@ _DEBUG_LEVEL_SPELLINGS = frozenset(
 )
 
 # (path relative to the package, qualified name, minimum number of log calls
-# above DEBUG measured on 2026-10-18). The minimum is the vacuum guard: a
-# function that shrinks below it was renamed, moved or rewritten, and the
-# guard would no longer see what it was written for.
+# above DEBUG measured on 2026-10-18, the last two rows on 2026-11-08). The
+# minimum is the vacuum guard: a function that shrinks below it was renamed,
+# moved or rewritten, and the guard would no longer see what it was written
+# for.
 _UNATTENDED_FUNCTIONS: tuple[tuple[str, str, int], ...] = (
     ("api.py", "GoogleFindMyAPI.async_get_device_location", 11),
     ("ProtoDecoders/decoder.py", "get_devices_with_location", 7),
@@ -106,6 +112,8 @@ _UNATTENDED_FUNCTIONS: tuple[tuple[str, str, int], ...] = (
         "RegistryOperations._ensure_registry_for_devices._heal_tracker_device_subentry",
         1,
     ),
+    ("coordinator/polling.py", "PollingOperations._async_start_poll_cycle", 15),
+    ("google_home_filter.py", "GoogleHomeFilter.should_filter_detection", 2),
 )
 
 # Records that log protobuf field names, reviewed on 2026-10-18

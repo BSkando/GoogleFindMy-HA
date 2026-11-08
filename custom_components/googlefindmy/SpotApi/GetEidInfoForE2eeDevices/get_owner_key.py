@@ -40,6 +40,9 @@ from cryptography.exceptions import InvalidTag
 from homeassistant.exceptions import ConfigEntryAuthFailed
 
 from custom_components.googlefindmy._reauth_reason import ReauthReasonCode
+from custom_components.googlefindmy.Auth.aas_token_retrieval import (
+    _mask_email_for_logs,
+)
 from custom_components.googlefindmy.Auth.token_cache import TokenCache
 from custom_components.googlefindmy.Auth.username_provider import (
     async_get_username,
@@ -61,8 +64,6 @@ from custom_components.googlefindmy.typing_utils import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-_USERNAME_REDACTION_MIN_LENGTH = 13
 
 # Cache key base for owner keys. We migrate from legacy "owner_key" to per-user keys.
 _OWNER_KEY_CACHE_PREFIX = "owner_key"
@@ -247,11 +248,7 @@ async def _retrieve_owner_key(
         "Retrieved owner key (version=%s, len=%s) for user=%s",
         owner_key_version,
         len(owner_key),
-        (
-            f"{username[:3]}***{username[-10:]}"
-            if len(username) > _USERNAME_REDACTION_MIN_LENGTH
-            else "***"
-        ),  # Redact email for privacy
+        _mask_email_for_logs(username),
     )
 
     return {
@@ -306,7 +303,7 @@ async def _get_or_generate_user_owner_key_hex(
         await cache.set(user_key_name, legacy)
         _LOGGER.debug(
             "Migrated legacy 'owner_key' (entry-scoped) to user-scoped cache for %s",
-            username,
+            _mask_email_for_logs(username),
         )
         return legacy
 
@@ -314,7 +311,7 @@ async def _get_or_generate_user_owner_key_hex(
         await cache.set(user_key_name, legacy)
         _LOGGER.debug(
             "Migrated legacy 'owner_key' (entry-scoped) to user-scoped cache for %s",
-            username,
+            _mask_email_for_logs(username),
         )
         return legacy
 
