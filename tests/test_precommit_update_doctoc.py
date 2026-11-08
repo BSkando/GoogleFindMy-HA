@@ -863,3 +863,24 @@ def test_render_toc_links_a_symbol_heading_to_the_empty_anchor() -> None:
 
     assert "- [💡](#)" in toc[4]
     assert toc[5].endswith("(#-done)")
+
+
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        ("ÄÖÜ Straße", "%C3%A4%C3%B6%C3%BC-stra%C3%9Fe"),
+        ("ΣΑΣ", "%CF%83%CE%B1%CF%83"),  # no final-sigma rule, measured
+        ("Ǆ", "%C7%86"),
+    ],
+)
+def test_slug_lowercases_letters_outside_ascii_like_github(
+    title: str, expected: str
+) -> None:
+    """GitHub lowercases every letter, one character at a time.
+
+    Measured with ``gh api markdown``: ``## ÄÖÜ Straße`` links to
+    ``#äöü-straße`` and ``## ΣΑΣ`` to ``#σασ``; ``str.lower`` on the whole
+    title would apply the final-sigma rule and write ``ς`` instead.
+    """
+
+    assert update_doctoc._slugify(title, defaultdict(int)) == expected

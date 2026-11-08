@@ -129,10 +129,14 @@ def _iter_headings(lines: Iterable[str]) -> list[tuple[int, str]]:
     return headings
 
 
-def _ascii_only_lower(text: str) -> str:
-    """Lowercase ASCII characters without altering Unicode symbols."""
+def _lower_each_character(text: str) -> str:
+    """Lowercase every letter on its own, as GitHub does.
 
-    return "".join(char.lower() if "A" <= char <= "Z" else char for char in text)
+    ``str.lower`` on the whole text applies the final-sigma rule (``ΣΑΣ``
+    becomes ``σας``); GitHub's anchor for that heading is ``σασ``.
+    """
+
+    return "".join(char.lower() for char in text)
 
 
 def _basic_github_id(text: str) -> str:
@@ -145,8 +149,7 @@ def _basic_github_id(text: str) -> str:
     the plain space (categories ``Zs``, ``Zl``, ``Zp``, such as the no-break
     space) and format characters (``Cf``, such as the soft hyphen) disappear as
     well, except the join controls ZWNJ and ZWJ, measured against GitHub's
-    rendering with ``gh api markdown``. Known limit: letters outside ASCII keep
-    their case, because ``_ascii_only_lower`` runs first.
+    rendering with ``gh api markdown``.
     """
 
     text = text.replace(" ", "-")
@@ -172,7 +175,7 @@ def _slugify(title: str, seen: dict[str, int]) -> str:
     ``#-1``, ``#-2`` for repeats), so an empty slug stays empty.
     """
 
-    normalized = _basic_github_id(_ascii_only_lower(title.strip()))
+    normalized = _basic_github_id(_lower_each_character(title.strip()))
 
     count = seen[normalized]
     seen[normalized] += 1
