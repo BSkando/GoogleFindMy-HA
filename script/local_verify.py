@@ -62,7 +62,7 @@ STATUS_SKIPPED = "NOT CHECKED"
 # Versions pinned by .pre-commit-config.yaml. A local tool that is newer can
 # report findings the CI will not, and the reverse; the report names both.
 RUFF_PIN = "v0.17.2"
-CODESPELL_PIN = "v2.2.6"
+CODESPELL_PIN = "v2.4.3"
 
 # Version queries and git calls are short. The suite is not, so only the
 # capturing helper carries a deadline; a hanging tool must not hang the report.

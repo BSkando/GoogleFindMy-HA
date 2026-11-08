@@ -18,7 +18,7 @@ Codex review finding on PR #1208:
 * noVNC must stay bound to loopback by default (earlier finding), so the
   fixed-password session is not exposed on the LAN during sign-in.
 * A context-level ``.dockerignore`` must be an ALLOWLIST (ignore the whole
-  build context, re-include only the two paths the Dockerfile COPYs) so that
+  build context, re-include only the two paths the Dockerfile copies) so that
   EVERY secret location -- ``docker-login/data`` AND the legacy
   ``Auth/secrets.json`` AND any future token/cache path -- stays out of the
   ``--build`` context, not just the one path a denylist happens to name. A bare
@@ -598,7 +598,7 @@ def test_dockerignore_is_allowlist_excluding_every_secret_path() -> None:
     ``Auth/secrets.json`` default of ``main.py::_resolve_secrets_path`` (and any
     future token/cache location) would still be uploaded with the ``--build``
     context. An allowlist -- ignore ``*``, then re-include only the paths the
-    Dockerfile COPYs -- structurally keeps every secret out at once.
+    Dockerfile copies -- structurally keeps every secret out at once.
     """
 
     rules = _dockerignore_rules()

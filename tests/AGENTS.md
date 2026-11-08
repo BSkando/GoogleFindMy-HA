@@ -1392,7 +1392,7 @@ branch, guard file excluded: `also` 231, `falls` 127, `probe` 121, `dies` 23, `d
 (the DER encoding in the credential tests), `mit` 5 (the MIT licence header), `wichtig` 1
 (the `WICHTIG-2` ticket label). Six further words sit at zero today and are kept out
 pre-emptively because each collides with an acronym this domain really uses: `des` (DES),
-`ist` (IST), `dem` (DEM), `aus` (AUS), `als` (ambient light sensor) and `vor` (VHF
+`ist` (IST), `dem` (DEM), `aus` (AUS), `als` (ambient light sensor) and `vor` (VHF <!-- codespell:ignore -->
 omnidirectional range). The subtraction happens in `_german_markers_in`, not merely in the comment: an
 earlier draft documented the exclusion without performing it. Without those numbers the list gets tidied up later and the
 guard starts crying wolf, which gets it switched off rather than obeyed. The cost is

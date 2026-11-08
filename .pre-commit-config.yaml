@@ -12,11 +12,12 @@ repos:
       - id: ruff-format
 
   - repo: https://github.com/codespell-project/codespell
-    rev: v2.2.6
+    rev: v2.4.3
     hooks:
       - id: codespell
-        additional_dependencies:
-          - tomli
+        # Same scope as the `skip` in pyproject.toml, which codespell does not
+        # apply to file names passed on the command line.
+        exclude: ^(custom_components/googlefindmy/(translations|vendor/leaflet)/|tests/fixtures/)
 
   - repo: local
     hooks:

@@ -43,6 +43,7 @@ LOCK_PATH = REPO_ROOT / "poetry.lock"
 # Hook repository of each tool whose rev must equal its version in poetry.lock.
 LOCKED_HOOK_REPOS = {
     "ruff": "https://github.com/astral-sh/ruff-pre-commit",
+    "codespell": "https://github.com/codespell-project/codespell",
     "bandit": "https://github.com/PyCQA/bandit",
 }
 
@@ -50,11 +51,6 @@ LOCKED_HOOK_REPOS = {
 LOCAL_VERIFY_PINS = {
     "RUFF_PIN": "ruff",
     "CODESPELL_PIN": "codespell",
-}
-
-ALL_HOOK_REPOS = {
-    **LOCKED_HOOK_REPOS,
-    "codespell": "https://github.com/codespell-project/codespell",
 }
 
 SYSTEM_HOOKS = ("mypy", "pytest")
@@ -111,7 +107,7 @@ def test_local_verify_pin_matches_the_hook_rev(pin_name: str) -> None:
 
     tool = LOCAL_VERIFY_PINS[pin_name]
     pin = getattr(local_verify, pin_name)
-    rev = _rev(ALL_HOOK_REPOS[tool])
+    rev = _rev(LOCKED_HOOK_REPOS[tool])
 
     assert pin == rev, drift_message(tool, f"{pin_name} {pin}", f"rev {rev}")
 
