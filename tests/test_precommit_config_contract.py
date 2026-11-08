@@ -186,7 +186,7 @@ def test_mypy_entry_runs_mypy() -> None:
         ({"id": "ruff-format", "args": ["check"]}, False),
     ],
 )
-def test_ruff_check_arm_flags_a_leading_check(
+def test_ruff_check_arm_flags_a_check_element(
     hook: dict[str, Any], offending: bool
 ) -> None:
     """Self-test of the arm: a ``check`` element on ``ruff-check`` counts."""

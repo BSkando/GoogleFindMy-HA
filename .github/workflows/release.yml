@@ -135,7 +135,7 @@ jobs:
           # semantic-release only understands SemVer. This project's older
           # maintenance lines were tagged PEP 440 (beta `bN`, four-segment `.N`;
           # release-stamp.yml now refuses a new four-segment tag and a release
-          # below the newest tag), which PSR
+          # not greater than the newest tag), which PSR
           # silently skips -- so on those lines its "last release" view drifts
           # from the real newest tag and any proposal derives from a stale base.
           # Detect that branch-name-agnostically by comparing PSR's view with the

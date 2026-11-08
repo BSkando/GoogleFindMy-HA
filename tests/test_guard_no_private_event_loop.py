@@ -38,7 +38,9 @@ the shared helpers ``drain_loop`` and ``run_loop_until`` that root
 built at run time (``getattr(loop, name)``); a loop class reached through a
 name not bound by an asyncio import (``loop_class = asyncio.SelectorEventLoop``
 is a reference, not a call, and is not reported; the later ``loop_class()`` is
-not either); loops of other libraries (``uvloop.new_event_loop()`` is reported
+not either); a factory passed as a reference (``target=asyncio.run``,
+``f = asyncio.new_event_loop`` and the later ``f()``); names reached through
+``from asyncio import *``; loops of other libraries (``uvloop.new_event_loop()`` is reported
 only through the any-receiver rule, ``uvloop.Loop()`` is not); a loop reached
 through another module's helper. A file whose sites move without changing in
 number passes. ``tests/test_guard_asyncio_run_antipattern.py`` is the older

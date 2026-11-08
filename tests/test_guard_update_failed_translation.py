@@ -17,7 +17,8 @@ every module under ``custom_components/googlefindmy``:
     passed through a ``**`` mapping, ``type(err)(…)`` or ``err.__class__(…)``
     inside an ``except`` clause that catches the class as ``err`` (also
     through a module tuple holding it, and also after ``cls = type(err)`` in
-    that clause), or any use
+    that clause; the bare forms ``raise type(err)`` and
+    ``raise err.__class__`` without a call are not seen), or any use
     of the class as a value (``UF = UpdateFailed``,
     ``functools.partial(UpdateFailed)``, a bare ``raise UpdateFailed``, a
     ``:=`` inside an annotation) fails. Allowed positions are the called
