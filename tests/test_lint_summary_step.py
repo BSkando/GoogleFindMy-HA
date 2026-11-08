@@ -8,6 +8,8 @@ red or warning line. An earlier form counted with ``grep -c ... || echo "0"``;
 fallback added a second ``0`` and the comparison with ``"0"`` failed: green
 mypy and bandit runs were reported as errors. The ruff branch counted every
 output line, so the ``All checks passed!`` line of a clean run did the same.
+Each branch now decides by the exit code of its step; the count only labels a
+failure, and a run that fails without a counted line still shows red.
 
 These tests execute the REAL ``run`` block under ``bash -e``. Unlike
 ``tests/test_release_preview_step.py``, the block contains ``${{ ... }}``
@@ -20,6 +22,7 @@ tools' output, and the textual substitution stands in for the runner's.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -35,8 +38,11 @@ _STEP_IF = "always()"
 _EXPRESSIONS = {
     "matrix.check",
     "steps.ruff.outputs.exit_code",
+    "steps.mypy.outputs.exit_code",
+    "steps.bandit.outputs.exit_code",
     "steps.precommit.outputs.exit_code",
 }
+_STEP_IDS = ("ruff", "mypy", "bandit", "precommit")
 
 _RUFF_CLEAN = "All checks passed!\n42 files already formatted\n"
 _RUFF_DIRTY = "F401 `os` imported but unused\nFound 1 error.\n"
@@ -50,11 +56,15 @@ _MYPY_DIRTY = (
     "Found 2 errors in 2 files (checked 141 source files)\n"
     "Success: no issues found in 487 source files\n"
 )
+_MYPY_CRASH = "pyproject.toml: [mypy]: invalid option\nmypy exited unexpectedly\n"
+_MYPY_CRASH_LINE = "❌ **mypy failed without reporting a type error:**"
 _BANDIT_CLEAN = "Test results:\n\tNo issues identified.\n"
 _BANDIT_DIRTY = (
     "Test results:\n>> Issue: [B105:hardcoded_password_string] Possible\n"
     "   Severity: Low   Confidence: Medium\n"
 )
+_BANDIT_CRASH = "[main]\tERROR\tunable to load config pyproject.toml\n"
+_BANDIT_CRASH_LINE = "❌ **bandit failed without reporting an issue:**"
 
 
 def _summary_step() -> dict[str, Any]:
@@ -84,11 +94,14 @@ def _summary_block(check: str, exit_codes: dict[str, str]) -> str:
     run = _summary_step()["run"]
     assert isinstance(run, str)
     values = {"matrix.check": check}
-    for step_id in ("ruff", "precommit"):
+    for step_id in _STEP_IDS:
         values[f"steps.{step_id}.outputs.exit_code"] = exit_codes.get(step_id, "")
     for expression in _EXPRESSIONS:
         run = run.replace("${{ " + expression + " }}", values[expression])
-    assert "${{" not in run, "the summary uses an expression the test does not know"
+    unknown = re.findall(r"\$\{\{.*?\}\}", run)
+    assert not unknown, (
+        f"the summary uses expressions the test does not know: {unknown}"
+    )
     return run
 
 
@@ -132,8 +145,8 @@ def _run_summary(
     ("check", "output", "exit_codes", "expected"),
     [
         ("ruff", _RUFF_CLEAN, {"ruff": "0"}, "✅ **No issues found**"),
-        ("mypy", _MYPY_CLEAN, {}, "✅ **No type errors found**"),
-        ("bandit", _BANDIT_CLEAN, {}, "✅ **No security issues found**"),
+        ("mypy", _MYPY_CLEAN, {"mypy": "0"}, "✅ **No type errors found**"),
+        ("bandit", _BANDIT_CLEAN, {"bandit": "0"}, "✅ **No security issues found**"),
     ],
     ids=["ruff", "mypy", "bandit"],
 )
@@ -157,10 +170,31 @@ def test_summary_reports_clean_runs_as_clean(
     ("check", "output", "exit_codes", "expected"),
     [
         ("ruff", _RUFF_DIRTY, {"ruff": "1"}, "❌ **Issues found:**"),
-        ("mypy", _MYPY_DIRTY, {}, "❌ **2 type error(s) found:**"),
-        ("bandit", _BANDIT_DIRTY, {}, "⚠️ **1 potential security issue(s) found:**"),
+        ("mypy", _MYPY_DIRTY, {"mypy": "1"}, "❌ **2 type error(s) found:**"),
+        (
+            "bandit",
+            _BANDIT_DIRTY,
+            {"bandit": "1"},
+            "⚠️ **1 potential security issue(s) found:**",
+        ),
+        # A crash prints no counted line; the exit code still makes it red.
+        ("mypy", _MYPY_CRASH, {"mypy": "2"}, _MYPY_CRASH_LINE),
+        ("bandit", _BANDIT_CRASH, {"bandit": "2"}, _BANDIT_CRASH_LINE),
+        # A missing exit code (step cancelled mid-run) never reads as clean.
+        ("ruff", _RUFF_CLEAN, {}, "❌ **Issues found:**"),
+        ("mypy", _MYPY_CLEAN, {}, _MYPY_CRASH_LINE),
+        ("bandit", _BANDIT_CLEAN, {}, _BANDIT_CRASH_LINE),
     ],
-    ids=["ruff", "mypy", "bandit"],
+    ids=[
+        "ruff",
+        "mypy",
+        "bandit",
+        "mypy-crash",
+        "bandit-crash",
+        "ruff-no-exit-code",
+        "mypy-no-exit-code",
+        "bandit-no-exit-code",
+    ],
 )
 def test_summary_reports_findings(
     tmp_path: Path,
@@ -169,7 +203,7 @@ def test_summary_reports_findings(
     exit_codes: dict[str, str],
     expected: str,
 ) -> None:
-    """A run with findings gets its red or warning line and the output."""
+    """A failing run gets its red or warning line and the output."""
 
     summary = _run_summary(tmp_path, check, output, exit_codes)
 

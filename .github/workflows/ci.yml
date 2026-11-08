@@ -479,10 +479,14 @@ jobs:
             elif [ "${{ matrix.check }}" = "mypy" ]; then
               if [ -f mypy_output.txt ]; then
                 ERRORS=$(grep -c "error:" mypy_output.txt 2>/dev/null || true)
-                if [ "$ERRORS" = "0" ]; then
+                if [ "${{ steps.mypy.outputs.exit_code }}" = "0" ]; then
                   echo "✅ **No type errors found**"
                 else
-                  echo "❌ **$ERRORS type error(s) found:**"
+                  if [ "$ERRORS" = "0" ]; then
+                    echo "❌ **mypy failed without reporting a type error:**"
+                  else
+                    echo "❌ **$ERRORS type error(s) found:**"
+                  fi
                   echo ""
                   echo '```'
                   head -100 mypy_output.txt
@@ -518,10 +522,14 @@ jobs:
             elif [ "${{ matrix.check }}" = "bandit" ]; then
               if [ -f bandit_output.txt ]; then
                 ISSUES=$(grep -c "Issue:" bandit_output.txt 2>/dev/null || true)
-                if [ "$ISSUES" = "0" ]; then
+                if [ "${{ steps.bandit.outputs.exit_code }}" = "0" ]; then
                   echo "✅ **No security issues found**"
                 else
-                  echo "⚠️ **$ISSUES potential security issue(s) found:**"
+                  if [ "$ISSUES" = "0" ]; then
+                    echo "❌ **bandit failed without reporting an issue:**"
+                  else
+                    echo "⚠️ **$ISSUES potential security issue(s) found:**"
+                  fi
                   echo ""
                   echo '```'
                   cat bandit_output.txt
