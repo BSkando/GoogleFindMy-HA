@@ -42,6 +42,7 @@ jobs:
   hassfest:
     name: Hassfest validation
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: approval_gate
     # Every job states its condition explicitly: a skipped gate (push) must
     # not skip the jobs that depend on hassfest, and on a pull request only
@@ -150,6 +151,7 @@ jobs:
   hacs:
     name: HACS validation
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: hassfest
     if: ${{ !cancelled() && needs.hassfest.result == 'success' }}
     steps:
@@ -241,6 +243,7 @@ jobs:
   translations:
     name: Translations validation
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: hassfest
     if: ${{ !cancelled() && needs.hassfest.result == 'success' }}
     steps:
@@ -297,6 +300,7 @@ jobs:
   vendored_assets:
     name: Vendored assets freshness
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: hassfest
     if: ${{ !cancelled() && needs.hassfest.result == 'success' }}
     steps:
@@ -338,12 +342,13 @@ jobs:
   lint:
     name: Lint (${{ matrix.check }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: hassfest
     if: ${{ !cancelled() && needs.hassfest.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
-        check: [ruff, mypy, codespell, bandit]
+        check: [ruff, mypy, codespell, bandit, pre-commit]
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -367,7 +372,7 @@ jobs:
       # cached artefact is a complete virtualenv, so an interpreter-agnostic
       # prefix can restore a 3.13 `.venv` built before the lock moved to
       # `^3.14.2`; Poetry then adopts that interpreter as the project
-      # environment and `poetry install` refuses it, taking all four lint jobs
+      # environment and `poetry install` refuses it, taking all five lint jobs
       # down before they run. The `test` job already keys this way.
       - name: Cache Poetry dependencies
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -377,8 +382,29 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-py3.14-poetry-
 
+      - name: Cache pre-commit environments
+        if: matrix.check == 'pre-commit'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/pre-commit
+          key: ${{ runner.os }}-pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pre-commit-
+
       - name: Install dependencies
         run: poetry install --with dev,test
+
+      # Runs every hook of .pre-commit-config.yaml except mypy and pytest, which
+      # have jobs of their own, so a broken hook entry turns this check red.
+      - name: Run pre-commit
+        if: matrix.check == 'pre-commit'
+        id: precommit
+        run: |
+          set +e
+          SKIP=pytest,mypy poetry run pre-commit run --all-files --show-diff-on-failure 2>&1 | tee pre-commit_output.txt
+          EXIT_CODE=${PIPESTATUS[0]}
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+          exit $EXIT_CODE
 
       - name: Run Ruff
         if: matrix.check == 'ruff'
@@ -475,6 +501,18 @@ jobs:
                   echo '```'
                 fi
               fi
+            elif [ "${{ matrix.check }}" = "pre-commit" ]; then
+              if [ -f pre-commit_output.txt ]; then
+                if [ "${{ steps.precommit.outputs.exit_code }}" = "0" ]; then
+                  echo "✅ **All hooks passed** (mypy and pytest run in their own jobs)"
+                else
+                  echo "❌ **A hook failed or rewrote files:**"
+                  echo ""
+                  echo '```'
+                  tail -100 pre-commit_output.txt
+                  echo '```'
+                fi
+              fi
             elif [ "${{ matrix.check }}" = "bandit" ]; then
               if [ -f bandit_output.txt ]; then
                 ISSUES=$(grep -c "Issue:" bandit_output.txt 2>/dev/null || echo "0")
@@ -494,6 +532,7 @@ jobs:
   test:
     name: Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs:
       - hassfest
       - hacs
@@ -533,15 +572,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-py${{ matrix.python-version }}-poetry-
 
-      - name: Cache pre-commit environments
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/pre-commit
-          key: ${{ runner.os }}-pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pre-commit-
-
       - name: Install system dependencies
+        timeout-minutes: 5
         run: sudo apt-get update && sudo apt-get install -y libc-ares-dev
 
       - name: Install dependencies
@@ -578,6 +610,7 @@ jobs:
   test_legacy_python:
     name: Test (Python 3.13, ${{ matrix.label }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs:
       - hassfest
       - hacs
@@ -621,6 +654,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install system dependencies
+        timeout-minutes: 5
         run: sudo apt-get update && sudo apt-get install -y libc-ares-dev
 
       # Deliberately lock-free: poetry.lock resolves the dev/test tree for
@@ -790,9 +824,9 @@ jobs:
             fi
 
             if [ "${{ needs.lint.result }}" = "success" ]; then
-              echo "| Lint (ruff, mypy, codespell, bandit) | ✅ Pass |"
+              echo "| Lint (ruff, mypy, codespell, bandit, pre-commit) | ✅ Pass |"
             else
-              echo "| Lint (ruff, mypy, codespell, bandit) | ❌ Fail |"
+              echo "| Lint (ruff, mypy, codespell, bandit, pre-commit) | ❌ Fail |"
             fi
 
             if [ "${{ needs.test.result }}" = "success" ]; then

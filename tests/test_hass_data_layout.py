@@ -1813,7 +1813,7 @@ async def test_setup_entry_adopts_watch_path_armed_after_the_manager(
     discovery = importlib.import_module("custom_components.googlefindmy.discovery")
 
     default_path = tmp_path / "defaults" / "secrets.json"
-    extra_path = tmp_path / "reenabled" / "secrets.json"
+    extra_path = tmp_path / "reenabled" / "secrets.json"  # codespell:ignore reenabled
 
     async def _fake_translations(*_args: Any, **_kwargs: Any) -> dict[str, str]:
         return {}

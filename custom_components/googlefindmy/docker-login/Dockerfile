@@ -36,7 +36,7 @@ WORKDIR /app
 
 # --- Python dependencies -------------------------------------------------------
 # requirements.txt lives inside the integration package (the build context), so
-# it is COPYed at build time. The integration *code* is NOT copied (M2): it is
+# it is COPYed at build time. The integration *code* is NOT copied (M2): it is  # codespell:ignore copyed
 # mounted at run time, which keeps the image independent of the code version.
 COPY requirements.txt /app/requirements.txt
 # Install setuptools alongside the requirements: undetected-chromedriver 3.5.5

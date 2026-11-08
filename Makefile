@@ -33,9 +33,9 @@ bootstrap-doctoc:
 	@$(NPM) ci --prefer-offline --no-fund --no-audit --cache $(NPM_CACHE) --include=dev
 	@touch $(DOCTOC_SENTINEL)
 
-doctoc: bootstrap-doctoc
+doctoc:
 	@echo "[make doctoc] Regenerating AGENTS.md table of contents"
-	@$(NPM) run doctoc -- AGENTS.md
+	@$(POETRY) run python script/precommit_hooks/update_doctoc.py AGENTS.md
 
 install:
 	@echo "[make install] Installing Poetry dependencies"

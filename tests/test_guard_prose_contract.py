@@ -57,15 +57,17 @@ control because the three nouns of one concrete incident had been added to the l
 guard that cries wolf gets switched off rather than obeyed, as ``tests/AGENTS.md`` puts
 it, so the arm is tuned for precision and says so.
 
-A second note, on `codespell`: the word list below trips it ten times, because German
-function words look like English typos to a dictionary checker. That is the same state
-``tests/test_translation_placeholders.py`` has lived in for a long time (16 hits), and it
-is left as is on purpose. The CI job is non-blocking (``continue-on-error: true``), but
-the pre-commit hook is not, so a local ``pre-commit run`` flags this file exactly as it
-flags its sibling. Widening ``[tool.codespell] ignore-words-list`` would hide the
-real English typos that several of those words shadow, across the whole tree, which is a
-worse trade than the eleven report lines this file draws, ten of them from that list and
-one from the sample at the bottom.
+A second note, on `codespell`: German function words look like English typos to a
+dictionary checker, so the word list below and one sample near the bottom trip it, as do
+the address-form checks in ``tests/test_translation_placeholders.py``. Each such line
+carries a line-scoped ``codespell:ignore`` directive without a word list, because a word
+list would write the German word into the file once more. The CI spelling step is
+non-blocking (``continue-on-error: true``), but the pre-commit hook is not, and CI runs
+the hooks as the ``pre-commit`` entry of the lint matrix, so an unmarked line turns that
+entry red. Widening ``[tool.codespell] ignore-words-list`` instead would hide the real
+English typos that several of those words shadow, across the whole tree. The price of
+the directive: it silences every word on its line, so it belongs only on lines whose
+other words are not typo candidates.
 
 That list is a trade, not a rule, and the ``Write lint summary`` step in
 ``.github/workflows/ci.yml`` points a contributor at it: an entry buys quiet in the
@@ -76,11 +78,11 @@ family is the cheap case: the 2.4.3 dictionary maps all six members to the Ameri
 spelling, and neither half is a typo target of its own, so the entries cost only the
 split itself, which two files write the other way
 (``docs/TRIGGER_MECHANISMS.md``, ``tests/test_eid_resolver_executor_offload.py``). Three
-of the six have no occurrence here today and are listed to close the family. Two limits
-worth knowing before reusing this: the pinned 2.2.6 build carries only ``pre-empt`` in
-its dictionary, and the sharper tool for a single mention, a line-scoped ignore
-directive, arrived after the ``rev`` pinned in ``.pre-commit-config.yaml``, so that route
-starts by lifting the pin.
+of the six have no occurrence here today and are listed to close the family. The
+``unparseable``, ``addressings`` and hyphenated ``re-use`` families sit on the list for
+the same reason. For a single mention the sharper tool is the line-scoped directive;
+the 2.2.6 build the hook used to pin knew neither that directive nor more than
+``pre-empt`` of the family, which is why the hook rev now follows ``poetry.lock``.
 
 Note this paragraph cannot name those typo pairs: this guard reads its own docstring, so
 writing the German half of such a pair here turns the file red. The same reflex applies
@@ -195,20 +197,20 @@ _GERMAN_MARKERS = frozenset(
         "nicht",
         "noch",
         "ohne",
-        "oder",
+        "oder",  # codespell:ignore
         "schon",
         "sehr",
         "sein",
         "seine",
         "sich",
-        "sie",
+        "sie",  # codespell:ignore
         "sind",
         "soll",
         "ueber",
         "\u00fcber",
         "und",
-        "unser",
-        "unter",
+        "unser",  # codespell:ignore
+        "unter",  # codespell:ignore
         "vom",
         "von",
         "werde",
@@ -251,11 +253,11 @@ _HOMOGRAPH_EXCLUSIONS = frozenset(
         # measured at 0 today, kept out pre-emptively: each collides with an acronym
         # this domain really uses, exactly like der/DER above
         "des",  # DES cipher, next to FMDNCrypto/ and KeyBackup/
-        "ist",  # IST timezone, in a location integration
+        "ist",  # IST timezone, in a location integration  # codespell:ignore
         "dem",  # DEM, digital elevation model, in a geo context
         "aus",  # AUS country code
-        "als",  # ALS, ambient light sensor, in a Home Assistant integration
-        "vor",  # VOR, VHF omnidirectional range, in a location integration
+        "als",  # ALS, ambient light sensor, in a Home Assistant integration  # codespell:ignore
+        "vor",  # VOR, VHF omnidirectional range, in a location integration  # codespell:ignore
         # ordinary English, never measured because they were never candidates
         "die",
         "war",
@@ -834,7 +836,7 @@ _GERMAN_NESTED_SAMPLE = '''"""Plain English module docstring."""
 
 if True:
     def helper() -> None:
-        """Diese Erklaerung ist auf Deutsch und gehoert uebersetzt."""
+        """Diese Erklaerung ist auf Deutsch und gehoert uebersetzt."""  # codespell:ignore
 '''
 
 _AGENT_PATH_SAMPLE = (

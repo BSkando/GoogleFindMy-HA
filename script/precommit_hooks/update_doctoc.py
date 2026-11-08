@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import unicodedata
 from collections import defaultdict
 from collections.abc import Iterable
 from pathlib import Path
@@ -132,13 +133,24 @@ def _ascii_only_lower(text: str) -> str:
 
 
 def _basic_github_id(text: str) -> str:
-    """Mirror ``anchor-markdown-header`` GitHub slug generation."""
+    """Mirror GitHub's heading ids.
+
+    The ASCII removals follow ``anchor-markdown-header``. GitHub additionally
+    drops every other punctuation mark and symbol, such as ``\u2265`` or ``%``,
+    while keeping ``-`` and ``_``; without that step a heading like "mode
+    (\u2265 90 %)" got an anchor GitHub does not render. Known limit: letters
+    outside ASCII keep their case, because ``_ascii_only_lower`` runs first.
+    """
 
     text = text.replace(" ", "-")
     text = _PERCENT_ESCAPE_RE.sub("", text)
     text = text.translate(_REMOVE_TRANSLATION)
     text = "".join(char for char in text if char not in _CJK_PUNCTUATION)
-    return text
+    return "".join(
+        char
+        for char in text
+        if char in "-_" or unicodedata.category(char)[0] not in "PS"
+    )
 
 
 def _slugify(title: str, seen: dict[str, int]) -> str:

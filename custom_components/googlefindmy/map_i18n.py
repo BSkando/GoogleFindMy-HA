@@ -102,7 +102,7 @@ MAP_LABELS: dict[str, dict[str, str]] = {
     },
     "es": {
         "unknown_device": "Dispositivo desconocido",
-        "location_history": "Historial de ubicaciones",
+        "location_history": "Historial de ubicaciones",  # codespell:ignore historial
         "start_time": "Hora de inicio",
         "end_time": "Hora de fin",
         "min_accuracy": "Precisión mínima (metros)",
@@ -127,7 +127,7 @@ MAP_LABELS: dict[str, dict[str, str]] = {
         ),
     },
     "fr": {
-        "unknown_device": "Appareil inconnu",
+        "unknown_device": "Appareil inconnu",  # codespell:ignore appareil
         "location_history": "Historique de localisation",
         "start_time": "Heure de début",
         "end_time": "Heure de fin",
@@ -139,7 +139,7 @@ MAP_LABELS: dict[str, dict[str, str]] = {
         "time": "Heure :",
         "accuracy": "Précision :",
         "source": "Source :",
-        "own_device": "Appareil personnel",
+        "own_device": "Appareil personnel",  # codespell:ignore appareil
         "crowdsourced": "Réseau participatif",
         "location": "Lieu :",
         "coordinates": "Coordonnées :",

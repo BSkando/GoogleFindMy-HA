@@ -784,11 +784,17 @@ def test_an_empty_pytest_args_is_rejected_too() -> None:
 def test_the_pin_is_printed_in_the_tools_own_format(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A "v" on one side and not the other hides a mismatch the line promises to show."""
+    """A "v" on one side and not the other hides a mismatch the line promises to show.
 
-    monkeypatch.setattr(local_verify, "_tool_version", lambda _i, _m: "ruff 0.14.14")
+    The pin is read from the module, so a version bump does not touch this test;
+    the tool answers without the "v" that the hook rev carries.
+    """
+
+    assert local_verify.RUFF_PIN.startswith("v")
+    version = local_verify.RUFF_PIN.removeprefix("v")
+    monkeypatch.setattr(local_verify, "_tool_version", lambda _i, _m: f"ruff {version}")
     monkeypatch.setattr(local_verify, "_run_command", lambda _command: 0)
 
     result = local_verify._stage_static("S2", "lint", "/a/python", ["/a"], "ruff")
 
-    assert "ruff 0.14.14 (pin 0.14.14)" == result.detail
+    assert f"ruff {version} (pin {version})" == result.detail

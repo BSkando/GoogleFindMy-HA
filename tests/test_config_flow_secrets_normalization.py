@@ -63,7 +63,7 @@ def test_nested_fcm_token_normalized() -> None:
     """Whitelisted keys nested under fcm_credentials are normalized too."""
     bundle = {
         "fcm_credentials": {
-            "installation": {"token": " inst alled "},
+            "installation": {"token": " inst alled "},  # codespell:ignore alled
             "fcm": {"registration": {"token": "reg\nistration"}},
         }
     }
@@ -515,7 +515,7 @@ async def test_d2_seeding_warning_names_rotation_outage_when_owner_present(
     assert warnings, "Expected a missing-shared_key warning to be emitted"
     message = warnings[0]
     # The corrected wording now surfaces the rotation-driven late outage.
-    assert "rotat" in message.lower()
+    assert "rotat" in message.lower()  # codespell:ignore rotat
     assert "will fail" in message
 
 
@@ -543,7 +543,7 @@ async def test_d2_seeding_warning_names_total_outage_when_owner_missing(
     assert "No location can be decrypted" in message
     # The total-outage variant must not claim a (non-existent) rotation grace
     # period.
-    assert "rotat" not in message.lower()
+    assert "rotat" not in message.lower()  # codespell:ignore rotat
 
 
 @pytest.mark.asyncio
