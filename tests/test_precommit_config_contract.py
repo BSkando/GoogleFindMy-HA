@@ -152,3 +152,17 @@ def test_environment_hooks_use_the_project_environment(hook_id: str) -> None:
 
     assert len(matches) == 1
     assert matches[0]["language"] == "system"
+
+
+def test_bandit_hook_scans_the_ci_tree_only() -> None:
+    """The hook passes ``-r custom_components`` like the CI job.
+
+    With file names appended, bandit also scanned ``script/`` and reported
+    findings the CI job never sees.
+    """
+
+    matches = [hook for hook in _hooks() if hook["id"] == "bandit"]
+
+    assert len(matches) == 1
+    assert matches[0].get("pass_filenames") is False
+    assert "custom_components" in matches[0]["args"]
