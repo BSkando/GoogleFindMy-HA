@@ -39,7 +39,7 @@ import urllib.error
 import urllib.request
 from http import HTTPStatus
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:
@@ -146,7 +146,7 @@ def _fetch_url_content(url: str) -> str | None:
     try:
         # The scheme was checked by _require_https above.
         with urllib.request.urlopen(req, timeout=30) as response:  # nosec B310
-            return response.read().decode("utf-8")
+            return cast(bytes, response.read()).decode("utf-8")
     except urllib.error.HTTPError as e:
         if e.code == HTTPStatus.NOT_FOUND:
             return None
@@ -193,16 +193,16 @@ def fetch_ha_constraints(
     return _parse_constraints_content(content)
 
 
-def load_manifest(manifest_path: Path) -> dict:
+def load_manifest(manifest_path: Path) -> dict[str, Any]:
     """Load manifest.json."""
     with open(manifest_path) as f:
-        return json.load(f)
+        return cast(dict[str, Any], json.load(f))
 
 
 def load_manifest_requirements(manifest_path: Path) -> list[str]:
     """Load requirements from manifest.json."""
     manifest = load_manifest(manifest_path)
-    return manifest.get("requirements", [])
+    return cast(list[str], manifest.get("requirements", []))
 
 
 def _extract_ha_version_from_pyproject(pyproject_path: Path) -> str | None:
