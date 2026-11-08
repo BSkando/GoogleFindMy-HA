@@ -2,11 +2,11 @@
 
 ## TL;DR
 
-**The FMDN Finder upload functionality is disabled because it requires DroidGuard attestation** - a device integrity verification system that only real Android devices can provide.
+**The FMDN Finder upload functionality is disabled.** Finder reports require DroidGuard attestation - a device integrity verification system that only real Android devices can provide. In addition, the integration's own-device upload is built in an unverified shape (see [Owner location reports](#owner-location-reports-uploadownerscans-unverified)).
 
 This is not a bug or missing feature - it's a deliberate security measure by Google.
 
-The DroidGuard requirement is confirmed for **crowdsourced reports about other people's devices**. For **location reports about your own devices** a separate owner path exists (`SpotReportingService/UploadOwnerScans`, see [Owner location reports](#owner-location-reports-uploadownerscans-unverified)); whether Google accepts it from Home Assistant is **unmeasured**.
+The GoogleFindMyTools maintainer states that uploading **finder reports** requires DroidGuard ([Issue #19](https://github.com/leonboe1/GoogleFindMyTools/issues/19), asked about uploading sightings of one's own tags). The Spot client calls a separate owner method for location reports about **your own** devices (`SpotReportingService/UploadOwnerScans`, see [Owner location reports](#owner-location-reports-uploadownerscans-unverified)); whether Google accepts it from Home Assistant is **unmeasured**.
 
 ---
 
@@ -26,7 +26,7 @@ These manage **your own devices**:
 ### 2. FINDER Operations (❌ Blocked)
 
 These report sightings of **other people's devices**:
-- Upload location reports (`UploadLocationReports` or similar)
+- Upload location reports (`UploadLocationReports` or similar; the disabled finder of this integration uses this method for its own devices, see [Owner location reports](#owner-location-reports-uploadownerscans-unverified))
 - Contribute sightings to the crowdsourced network
 
 **These are blocked** because they require DroidGuard attestation.
@@ -39,18 +39,19 @@ The two categories above leave out a third one: reporting the location of **your
 
 ### What is read, and what is not measured
 
-* **Read:** the source of the iOS client [leonboe1/Spot](https://github.com/leonboe1/Spot) at commit `55f87f62302fae24150188124e8e07d5285568d8` (GPL-3.0, by the GoogleFindMyTools maintainer). Only names, message structure and file positions are taken from it here, no code.
-* **Not measured:** whether Google accepts an owner report sent from a non-Android client. Spot shows the request, not its success, and its ordinary sighting uploads are disabled by default (`uploadInterval`, Spot `README.md`).
-* **Scope of the DroidGuard statement:** [Issue #19](https://github.com/leonboe1/GoogleFindMyTools/issues/19) is about finder reports. Spot never sets `UploadScansRequest.droidGuardResults` on the owner path, and `ProtoDecoders/DeviceUpdate.proto` already marks `UploadScansResponse` with the comment `Only for UploadScans, not UploadOwnerScans.` Whether the owner path needs attestation is untested; the 192 combinations listed below do not include `SpotReportingService`.
+* **Read:** the source of the iOS client [leonboe1/Spot](https://github.com/leonboe1/Spot) at commit `55f87f62302fae24150188124e8e07d5285568d8` (GPL-3.0, by the GoogleFindMyTools maintainer). Only names, message structure and file names are taken from it here, no code.
+* **Not measured:** whether Google accepts an owner report sent from a non-Android client. Spot's source shows how the request is built and treats an HTTP 200 with a gRPC payload as success; it records no evidence that Google stores or returns the report. Its ordinary sighting uploads are disabled by default (`uploadInterval`, Spot `README.md`).
+* **Scope of the DroidGuard statement:** [Issue #19](https://github.com/leonboe1/GoogleFindMyTools/issues/19) asks about uploading sightings of one's own tags; the answer names finder reports as the blocked case and does not mention `UploadOwnerScans`. Spot never sets `UploadScansRequest.droidGuardResults` on the owner path, and `ProtoDecoders/DeviceUpdate.proto` already marks `UploadScansResponse` with the comment `Only for UploadScans, not UploadOwnerScans.` Whether the owner path needs attestation is untested; the 192 combinations listed below do not include `SpotReportingService`.
 
 ### How Spot sends an owner report
 
 1. Service and method: `spot-pa.googleapis.com/google.internal.spot.v1.SpotReportingService/UploadOwnerScans` (Spot `SpotApiManager.swift`, the `isUpload` branch).
 2. Inner payload: a protobuf `Location` with latitude and longitude multiplied by 1e7 and the altitude (Spot `OwnerReportGenerator` in `UploadOwnerScans.swift`).
 3. Location encryption: AES-GCM with `SHA256(identity key)` (Spot `LocationCryptor.encryptSymmetric`), `isOwnReport = true`, no ephemeral public key.
-4. Identifier: `advertisement.identifier.canonicDeviceID`.
+4. Identifier: `advertisement.identifier.canonicDeviceId` (Swift spelling `canonicDeviceID`).
 5. Envelope: the whole `LocationReportsUpload` is encrypted with Google's service key (`GetServicePublicKey`, Spot `ServerPublicKeyEncryptor.swift`) and placed in `UploadScansRequest.reportsEncryptedWithServerKey`.
 6. Metadata: `clientMetadata.version.playServicesVersion` is set; there are no random fields.
+7. Other report fields: the accuracy goes into `geoLocation.lastAggregatedAccuracy`; `status`, `semanticLocation` and `unwantedTrackingModeEnabled` are not set.
 
 ### Where the disabled finder code differs
 
@@ -59,15 +60,16 @@ The two categories above leave out a third one: reporting the location of **your
 | 1 | Endpoint | `SpotReportingService/UploadOwnerScans` | `SpotService/UploadLocationReports` (`FMDN_UPLOAD_SERVICE`, `FMDN_UPLOAD_METHOD` in `google_uploader.py`) |
 | 2 | Inner payload | protobuf `Location` | text `"lat,lon"` (`gps_data` in `location_uploader.py`) |
 | 3 | Location encryption | AES-GCM with `SHA256(EIK)`, own report | ECDH against the EID, yet `isOwnReport=True` |
-| 4 | Identifier | `canonicDeviceID` | `truncatedEid` |
+| 4 | Identifier | `canonicDeviceId` | `truncatedEid` |
 | 5 | Envelope | `LocationReportsUpload` encrypted with the service key inside `UploadScansRequest` | serialized `LocationReportsUpload` sent as is, without `UploadScansRequest` |
 | 6 | Metadata | `clientMetadata.version.playServicesVersion` | `random1` and `random2`, no `clientMetadata` |
+| 7 | Other report fields | `lastAggregatedAccuracy`; no `status`, `semanticLocation` or `unwantedTrackingModeEnabled` | `geoLocation.accuracy`; `status` `SEMANTIC` with `semanticLocation` when a Bermuda area is known, else `CROWDSOURCED`; `unwantedTrackingModeEnabled` |
 
-Row 2 also breaks the read-back inside this integration: `NovaApi/ExecuteAction/LocateTracker/decrypt_locations.py` parses every decrypted location payload as `device_update_pb2.Location`, so a text payload fails there even if Google accepted the upload. A comment in the same file already describes the contradiction of row 3: this uploader stamps reports with `isOwnReport=True` while carrying a non-empty `publicKeyRandom`.
+Rows 2 and 7 also break the read-back inside this integration (`NovaApi/ExecuteAction/LocateTracker/decrypt_locations.py`): a report without a Bermuda area (status `CROWDSOURCED`) is parsed as `device_update_pb2.Location`, so its text payload fails there even if Google accepted the upload; a report with an area is stored as `SEMANTIC`, whose encrypted payload the decrypt path does not read at all. A comment in the same file already describes the contradiction of row 3: this uploader stamps reports with `isOwnReport=True` while carrying a non-empty `publicKeyRandom`.
 
 ### Rule for changes
 
-Do not fix single rows of the table. A partial fix (for example only the payload format) produces untested code on a path that may be the wrong one. Change the upload path only together with a live probe: one `UploadOwnerScans` call for one own device, then a fetch through the integration that returns an own report with the expected timestamp. The finder stays disabled (`FEATURE_FMDN_FINDER_ENABLED = False` in `const.py`) until then.
+Do not fix single rows of the table. A partial fix (for example only the payload format) produces untested code on a path that may be the wrong one. Change the upload path only together with a live probe: one `UploadOwnerScans` call for one own device, then a fetch through the integration that returns an own report with the expected timestamp. The finder stays disabled until then (`FEATURE_FMDN_FINDER_ENABLED = False` in `const.py`, `FMDN_UPLOAD_ENABLED = False` in `fmdn_finder/google_uploader.py`). The table is the comparison read so far, not a proven complete list.
 
 ---
 
@@ -133,6 +135,8 @@ The error is misleading - the endpoint likely exists but rejects requests withou
 ---
 
 ## Most Likely Correct Endpoint
+
+> **Superseded for own devices** by [Owner location reports](#owner-location-reports-uploadownerscans-unverified). The endpoint below is the one the disabled code uses; follow the rule for changes there.
 
 Based on our research, the endpoint is **most likely**:
 
@@ -210,6 +214,8 @@ Google may eventually provide a public API for third-party finder devices. Howev
 
 ## Enabling Upload (Future)
 
+> **Not a complete recipe.** The steps below leave all differences listed under [Owner location reports](#owner-location-reports-uploadownerscans-unverified) in place, and the header form of the attestation is unverified (Spot's protobuf carries it in the body field `UploadScansRequest.droidGuardResults`). Follow the rule for changes there before enabling anything.
+
 If someone successfully obtains DroidGuard attestation (e.g., through a companion app), the upload can be enabled:
 
 1. **Edit `google_uploader.py`**:
@@ -249,4 +255,4 @@ If someone successfully obtains DroidGuard attestation (e.g., through a companio
 | Upload finder sightings | ❌ Blocked | Requires DroidGuard |
 | Upload own-device locations (`UploadOwnerScans`) | ❓ Unmeasured | Owner path read in Spot, not tested from HA |
 
-**The FMDN Finder upload is disabled by design. This is Google's security measure, not a bug in this integration.**
+**The FMDN Finder upload is disabled by design: finder uploads need DroidGuard, and the own-device upload path is unverified and would first need the changes listed under [Owner location reports](#owner-location-reports-uploadownerscans-unverified).**
