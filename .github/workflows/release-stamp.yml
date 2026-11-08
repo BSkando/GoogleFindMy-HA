@@ -94,6 +94,29 @@ jobs:
           echo "validated tag=$TAG_NAME version=$VERSION"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
+      - name: Check the version against the existing tags
+        # Refuses a version that is not X.Y.Z (no `v`, no fourth segment), not
+        # greater than every tag of this repository, outside the fork's release
+        # line, or (upstream) a number the fork line already used. HACS compares
+        # 1.7.15.34 > 1.15.33 as false, so such a release would never be offered.
+        # The release is already published when this runs: a refusal stops the
+        # stamp and the HACS ZIP, and the maintainer deletes the release and tag.
+        # The fork line moves when both lines meet; change `--line` then.
+        run: |
+          set -euo pipefail
+          git tag --list > "$RUNNER_TEMP/tags.txt"
+          CHECK_ARGS=(--version "$VERSION" --tag "$TAG_NAME" --check-against-tags "$RUNNER_TEMP/tags.txt")
+          if [ "$GITHUB_REPOSITORY" = "jleinenbach/GoogleFindMy-HA" ]; then
+            CHECK_ARGS+=(--line 1.15)
+          else
+            gh api --paginate repos/jleinenbach/GoogleFindMy-HA/tags --jq '.[].name' > "$RUNNER_TEMP/fork_tags.txt"
+            CHECK_ARGS+=(--reserved-tags "$RUNNER_TEMP/fork_tags.txt")
+          fi
+          if ! python script/stamp_version.py "${CHECK_ARGS[@]}"; then
+            echo "::error::version '$VERSION' fails the tag check above; delete the release and its tag '$TAG_NAME', then publish again with a valid number"
+            exit 1
+          fi
+
       - name: Stamp version into the three literals
         run: |
           set -euo pipefail

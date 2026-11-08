@@ -22,10 +22,14 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
+import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
@@ -364,3 +368,299 @@ def test_workflow_uploads_hacs_zip_before_branch_push() -> None:
         "the upload step must run unconditionally (no `if:`), independent of "
         "whether the stamp commit or the branch push happened"
     )
+
+
+# --- Tag check before the stamp: schema, monotonicity, version line ---------
+
+# Fork tags as published, measured on 2026-11-08: four-segment tags up to
+# 1.7.15.20, then 1.15.21 to 1.15.33 (the ".7." was dropped by hand).
+_FORK_TAGS = [
+    "v1.7.14",
+    "1.7.15.13",
+    "1.7.15.20",
+    *(f"1.15.{patch}" for patch in range(21, 34)),
+]
+
+
+def _check(version: str, tags: list[str], **kwargs: Any) -> list[str]:
+    from script import stamp_version
+
+    return stamp_version.check_against_tags(version, tags=tags, **kwargs)
+
+
+def test_next_fork_release_in_its_line_passes() -> None:
+    """``1.15.34`` follows ``1.15.33`` in the fork line and is accepted."""
+
+    assert _check("1.15.34", _FORK_TAGS, line="1.15") == []
+
+
+def test_return_to_the_four_segment_scheme_is_refused() -> None:
+    """Occasion: ``1.7.15.34`` after ``1.15.33``.
+
+    HACS compares ``1.7.15.34 > 1.15.33`` as false, so fork users would never
+    be offered the release. It also leaves the three-segment scheme and the
+    fork line.
+    """
+
+    reasons = _check("1.7.15.34", _FORK_TAGS, line="1.15")
+
+    assert any("three numeric segments" in reason for reason in reasons)
+    assert any("not greater than 1.15.33" in reason for reason in reasons)
+    assert any("line 1.15" in reason for reason in reasons)
+
+
+def test_leaving_the_line_in_force_is_refused() -> None:
+    """Occasion: ``1.15.21`` after ``1.7.15.20`` while ``1.7.15.x`` was meant.
+
+    The number is greater and has three segments, so only the line rule, with
+    the line that was in force then, catches the dropped ``.7.``.
+    """
+
+    tags = ["1.7.15.13", "1.7.15.20"]
+
+    assert _check("1.15.21", tags, line="1.7") == [
+        "version 1.15.21 leaves the release line 1.7 (expected 1.7.x)"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("version", "fragment"),
+    [
+        ("v1.15.34", "three numeric segments"),
+        ("1.15.34.1", "three numeric segments"),
+        ("1.15.33b1", "not greater than 1.15.33"),
+        ("1.15.32", "not greater than 1.15.33"),
+        ("1.8.0", "not greater than 1.15.33"),
+    ],
+)
+def test_schema_and_monotonicity_violations_are_refused(
+    version: str, fragment: str
+) -> None:
+    """A ``v``, a fourth segment, a repeated or lower number are each refused."""
+
+    assert any(fragment in reason for reason in _check(version, _FORK_TAGS))
+
+
+def test_the_published_tag_itself_is_not_compared() -> None:
+    """The workflow runs after publishing, so the new tag is already listed."""
+
+    assert _check("1.15.34", [*_FORK_TAGS, "1.15.34"], tag="1.15.34") == []
+
+
+def test_the_same_number_under_another_tag_name_is_refused() -> None:
+    """``v1.15.34`` and ``1.15.34`` name the same version."""
+
+    reasons = _check("1.15.34", [*_FORK_TAGS, "v1.15.34", "1.15.34"], tag="1.15.34")
+
+    assert reasons == ["version 1.15.34 is not greater than v1.15.34"]
+
+
+@pytest.mark.parametrize(
+    ("version", "tags", "passes"),
+    [
+        ("1.15.34", ["1.15.34b1"], True),  # a final release follows its beta
+        ("1.15.34b2", ["1.15.34b1"], True),
+        ("1.15.34b1", ["1.15.34"], False),  # a beta after its final release
+        ("1.15.34b1", ["1.15.34a3"], True),  # beta after alpha
+        ("1.15.34", ["nightly", "latest"], True),  # tags without a number
+        ("1.7.15", ["V1.7.0-6", "V1.5.4"], True),  # upstream's historic tags
+    ],
+)
+def test_prerelease_and_foreign_tags_are_ordered(
+    version: str, tags: list[str], passes: bool
+) -> None:
+    """Prereleases sort below their release; tags without a number are skipped."""
+
+    assert (_check(version, tags) == []) is passes
+
+
+def test_upstream_refuses_a_number_the_fork_already_used() -> None:
+    """Upstream must not publish a number the fork line already carries."""
+
+    upstream_tags = ["v1.7.14"]
+
+    assert _check("1.8.0", upstream_tags, reserved=_FORK_TAGS) == []
+    assert _check("1.15.21", upstream_tags, reserved=_FORK_TAGS) == [
+        "version 1.15.21 is already used by the fork as tag 1.15.21"
+    ]
+
+
+def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(_REPO_ROOT / "script" / "stamp_version.py"), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_cli_check_refuses_without_stamping(tmp_path: Path) -> None:
+    """``--check-against-tags`` only checks; it exits 1 and names the reason."""
+
+    tags = tmp_path / "tags.txt"
+    tags.write_text("\n".join(_FORK_TAGS) + "\n", encoding="utf-8")
+
+    refused = _run_cli(
+        "--version",
+        "1.7.15.34",
+        "--check-against-tags",
+        str(tags),
+        "--line",
+        "1.15",
+        "--repo-root",
+        str(tmp_path),
+    )
+    accepted = _run_cli(
+        "--version",
+        "1.15.34",
+        "--check-against-tags",
+        str(tags),
+        "--line",
+        "1.15",
+        "--repo-root",
+        str(tmp_path),
+    )
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "not greater than 1.15.33" in refused.stdout
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    # No stamp target exists under tmp_path; a stamp attempt would have failed.
+    assert "stamped" not in accepted.stdout
+
+
+_CHECK_STEP = "Check the version against the existing tags"
+
+
+def _workflow_steps() -> list[dict[str, Any]]:
+    wf = yaml.safe_load(
+        (_REPO_ROOT / ".github/workflows/release-stamp.yml").read_text(encoding="utf-8")
+    )
+    steps: list[dict[str, Any]] = wf["jobs"]["stamp"]["steps"]
+    return steps
+
+
+def test_tag_check_runs_after_validation_and_before_the_stamp() -> None:
+    """The check must stop the job before any literal is written or pushed."""
+
+    names = [step.get("name") for step in _workflow_steps()]
+
+    assert names.count(_CHECK_STEP) == 1
+    check = names.index(_CHECK_STEP)
+    assert names.index("Validate published tag") < check
+    assert check < names.index("Stamp version into the three literals")
+
+
+def _run_check_step(
+    tmp_path: Path, *, repository: str, tag: str, tags: list[str], fork_tags: str
+) -> subprocess.CompletedProcess[str]:
+    """Run the real ``run`` block as ``bash -e`` in a repository with ``tags``."""
+
+    (step,) = [s for s in _workflow_steps() if s.get("name") == _CHECK_STEP]
+    run = str(step["run"])
+    assert "${{" not in run and "env" not in step and "shell" not in step
+
+    repo = tmp_path / "repo"
+    (repo / "script").mkdir(parents=True)
+    shutil.copy(_REPO_ROOT / "script" / "stamp_version.py", repo / "script")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "python").symlink_to(sys.executable)
+    gh = bin_dir / "gh"
+    gh.write_text(
+        f"#!/bin/sh\necho \"$*\" >> {tmp_path / 'gh.log'}\nprintf '%s' '{fork_tags}'\n",
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+    git = shutil.which("git")
+    bash = shutil.which("bash")
+    assert git and bash, "git and bash are required"
+    env = {
+        "PATH": f"{bin_dir}:{Path(git).parent}:/usr/bin:/bin",
+        "HOME": str(tmp_path),
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": str(tmp_path / "gitconfig"),
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@example.invalid",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@example.invalid",
+        "TAG_NAME": tag,
+        "VERSION": tag.removeprefix("v"),
+        "GITHUB_REPOSITORY": repository,
+        "RUNNER_TEMP": str(tmp_path),
+        "GH_TOKEN": "x",
+    }
+    (tmp_path / "gitconfig").write_text("", encoding="utf-8")
+    subprocess.run([git, "init", "-q", str(repo)], check=True, env=env)
+    subprocess.run(
+        [git, "-C", str(repo), "commit", "-q", "--allow-empty", "-m", "c"],
+        check=True,
+        env=env,
+    )
+    for name in tags:
+        subprocess.run([git, "-C", str(repo), "tag", name], check=True, env=env)
+    return subprocess.run(
+        [bash, "-e", "-c", run],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_fork_step_refuses_a_number_below_the_line(tmp_path: Path) -> None:
+    """In the fork the step checks the line and tells to delete the release."""
+
+    result = _run_check_step(
+        tmp_path,
+        repository="jleinenbach/GoogleFindMy-HA",
+        tag="1.7.15.34",
+        tags=[*_FORK_TAGS, "1.7.15.34"],
+        fork_tags="",
+    )
+
+    assert result.returncode != 0
+    assert "line 1.15" in result.stdout
+    assert "delete the release" in result.stdout
+    assert not (tmp_path / "gh.log").exists()
+
+
+def test_fork_step_accepts_the_next_release(tmp_path: Path) -> None:
+    """The next fork release passes and the job goes on to the stamp."""
+
+    result = _run_check_step(
+        tmp_path,
+        repository="jleinenbach/GoogleFindMy-HA",
+        tag="1.15.34",
+        tags=[*_FORK_TAGS, "1.15.34"],
+        fork_tags="",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_upstream_step_reads_the_fork_tags(tmp_path: Path) -> None:
+    """Upstream compares with its own tags and refuses a fork number."""
+
+    fork_tags = "\n".join(_FORK_TAGS) + "\n"
+    ok = _run_check_step(
+        tmp_path / "ok",
+        repository="BSkando/GoogleFindMy-HA",
+        tag="1.8.0",
+        tags=["v1.7.14", "1.8.0"],
+        fork_tags=fork_tags,
+    )
+    taken = _run_check_step(
+        tmp_path / "taken",
+        repository="BSkando/GoogleFindMy-HA",
+        tag="1.15.21",
+        tags=["v1.7.14", "1.15.21"],
+        fork_tags=fork_tags,
+    )
+
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    assert "repos/jleinenbach/GoogleFindMy-HA/tags" in (
+        tmp_path / "ok" / "gh.log"
+    ).read_text(encoding="utf-8")
+    assert taken.returncode != 0
+    assert "already used by the fork" in taken.stdout
