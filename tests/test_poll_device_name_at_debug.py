@@ -35,7 +35,6 @@ from custom_components.googlefindmy.SpotApi.GetEidInfoForE2eeDevices.get_eid_inf
     SpotApiEmptyResponseError,
 )
 from custom_components.googlefindmy.SpotApi.spot_request import SpotAuthPermanentError
-from tests.helpers import drain_loop
 from tests.helpers.config_entries_stub import make_config_entry
 
 _POLLING_LOGGER = "custom_components.googlefindmy.coordinator.polling"
@@ -53,6 +52,9 @@ class _DummyCache:
         return None  # pragma: no cover
 
 
+pytestmark = pytest.mark.asyncio
+
+
 class _DummyBus:
     def async_listen(self, *_args: Any, **_kwargs: Any) -> Callable[[], None]:
         return lambda: None  # pragma: no cover
@@ -65,9 +67,12 @@ class _DummyHass:
     def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
         self.loop = loop
         self.bus = _DummyBus()
+        self.tasks: list[asyncio.Task[Any]] = []
 
     def async_create_task(self, coro: Any, *, name: str | None = None) -> Any:
-        return self.loop.create_task(coro, name=name)
+        task = self.loop.create_task(coro, name=name)
+        self.tasks.append(task)
+        return task
 
 
 class _RaisingAPI:
@@ -136,25 +141,29 @@ def _make_coordinator(
     return coordinator
 
 
-def _run_cycle(
+async def _run_cycle(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     api: object,
     *,
     google_home_filter: object | None = None,
 ) -> list[logging.LogRecord]:
-    loop = asyncio.new_event_loop()
     coordinator = _make_coordinator(
-        monkeypatch, loop, api, google_home_filter=google_home_filter
+        monkeypatch,
+        asyncio.get_running_loop(),
+        api,
+        google_home_filter=google_home_filter,
     )
+    hass = coordinator.hass
+    assert isinstance(hass, _DummyHass)
     devices = [{"id": DEVICE_ID, "name": DEVICE_NAME}]
     try:
         with caplog.at_level(logging.DEBUG, logger=_POLLING_LOGGER):
-            loop.run_until_complete(
-                coordinator._async_start_poll_cycle(devices, force=True)
-            )
+            await coordinator._async_start_poll_cycle(devices, force=True)
     finally:
-        drain_loop(loop)
+        for task in hass.tasks:
+            task.cancel()
+        await asyncio.gather(*hass.tasks, return_exceptions=True)
     return [rec for rec in caplog.records if rec.name == _POLLING_LOGGER]
 
 
@@ -194,17 +203,17 @@ _ERROR_CASES = {
 
 
 @pytest.mark.parametrize("case", sorted(_ERROR_CASES))
-def test_poll_error_branch_names_device_by_id(
+async def test_poll_error_branch_names_device_by_id(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, case: str
 ) -> None:
     """Each error branch of the poll cycle logs the id above DEBUG."""
 
     error, needle = _ERROR_CASES[case]
-    records = _run_cycle(monkeypatch, caplog, _RaisingAPI(error))
+    records = await _run_cycle(monkeypatch, caplog, _RaisingAPI(error))
     _assert_id_above_debug_and_name_at_debug(records, needle)
 
 
-def test_google_home_spam_filter_names_device_by_id(
+async def test_google_home_spam_filter_names_device_by_id(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A filtered Google Home detection logs the id above DEBUG."""
@@ -218,15 +227,17 @@ def test_google_home_spam_filter_names_device_by_id(
             "last_seen": time.time(),
         }
     )
-    records = _run_cycle(monkeypatch, caplog, api, google_home_filter=_SpamFilter())
+    records = await _run_cycle(
+        monkeypatch, caplog, api, google_home_filter=_SpamFilter()
+    )
     _assert_id_above_debug_and_name_at_debug(records, "Google Home spam detection")
 
 
-def test_update_without_location_names_device_by_id(
+async def test_update_without_location_names_device_by_id(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """An update without coordinates or semantic name logs the id above DEBUG."""
 
     api = _LocationAPI({"last_seen": time.time()})
-    records = _run_cycle(monkeypatch, caplog, api)
+    records = await _run_cycle(monkeypatch, caplog, api)
     _assert_id_above_debug_and_name_at_debug(records, "No location data")
