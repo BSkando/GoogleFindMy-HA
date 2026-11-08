@@ -37,6 +37,7 @@ from homeassistant.components.binary_sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
@@ -364,11 +365,13 @@ async def async_setup_entry(  # noqa: PLR0915
             )
 
         def _build_uwt_entities() -> list[BinarySensorEntity]:
-            """Build UWT-Mode binary sensors for devices with BLE data."""
+            """Build UWT-Mode binary sensors for devices with BLE data.
+
+            A device whose UWT sensor the entity registry already holds gets it
+            at once, even without BLE data or a resolver.
+            """
             entities: list[BinarySensorEntity] = []
             resolver = _get_ble_resolver()
-            if resolver is None:
-                return entities
             for device in coordinator.get_subentry_snapshot(tracker_key):
                 dev_id = device.get("id") if isinstance(device, Mapping) else None
                 dev_name = device.get("name") if isinstance(device, Mapping) else None
@@ -388,12 +391,11 @@ async def async_setup_entry(  # noqa: PLR0915
                     continue
 
                 battery_state = None
-                try:
-                    battery_state = resolver.get_ble_battery_state(dev_id)
-                except Exception:  # noqa: BLE001
-                    pass
-                if battery_state is None:
-                    continue
+                if resolver is not None:
+                    try:
+                        battery_state = resolver.get_ble_battery_state(dev_id)
+                    except Exception:  # noqa: BLE001
+                        pass
 
                 uwt_entity = GoogleFindMyUWTModeSensor(
                     coordinator,
@@ -402,15 +404,34 @@ async def async_setup_entry(  # noqa: PLR0915
                     subentry_identifier=tracker_identifier,
                 )
                 uwt_uid = getattr(uwt_entity, "unique_id", None)
-                if isinstance(uwt_uid, str) and uwt_uid not in added_unique_ids:
+                in_registry = (
+                    isinstance(uwt_uid, str)
+                    and er.async_get(hass).async_get_entity_id(
+                        "binary_sensor", DOMAIN, uwt_uid
+                    )
+                    is not None
+                )
+                if (
+                    (battery_state is not None or in_registry)
+                    and isinstance(uwt_uid, str)
+                    and uwt_uid not in added_unique_ids
+                ):
                     added_unique_ids.add(uwt_uid)
                     known_uwt_ids.add(dev_id)
                     entities.append(uwt_entity)
-                    _LOGGER.info(
-                        "UWT-Mode binary sensor created for device=%s (uwt_mode=%s)",
-                        dev_id,
-                        battery_state.uwt_mode,
-                    )
+                    if battery_state is not None:
+                        _LOGGER.info(
+                            "UWT-Mode binary sensor created for device=%s "
+                            "(uwt_mode=%s)",
+                            dev_id,
+                            battery_state.uwt_mode,
+                        )
+                    else:
+                        _LOGGER.debug(
+                            "UWT-Mode binary sensor created from entity registry "
+                            "for device=%s",
+                            dev_id,
+                        )
             return entities
 
         initial = _build_uwt_entities()
@@ -1016,8 +1037,12 @@ class GoogleFindMyUWTModeSensor(GoogleFindMyDeviceEntity, BinarySensorEntity):
     Data source: spec bit 7 (standard bit 0) of the FMDN hashed-flags byte,
     decoded by the EID resolver as :pyattr:`BLEBatteryState.uwt_mode`.
 
-    Created dynamically alongside the BLE battery sensor when the resolver
-    first decodes hashed-flags data for a device.
+    Created at setup when the entity registry already holds its unique_id,
+    otherwise alongside the BLE battery sensor when the resolver first decodes
+    hashed-flags data for a device; a new device without BLE data gets no UWT
+    sensor. Nothing is restored: until the first decoded flags byte the sensor
+    reports ``None`` (``unknown``) while the device is present and is
+    unavailable while it is absent.
     """
 
     _attr_has_entity_name = True
