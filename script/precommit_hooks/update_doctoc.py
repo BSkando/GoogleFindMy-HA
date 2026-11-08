@@ -36,6 +36,9 @@ _PROBE = ("", "# probe")
 _PERCENT_ESCAPE_RE = re.compile(r"%([a-fA-F]|\d){2}")
 _REMOVE_CHARS = "/?!:[]`.,()*\"';{}+=<>~$|#@&–—\\"
 _REMOVE_TRANSLATION = str.maketrans("", "", _REMOVE_CHARS)
+# The join controls ZWNJ and ZWJ belong to ``\w`` in Unicode regular
+# expressions, and GitHub keeps them; every other format character goes.
+_KEPT_FORMAT_CHARS = frozenset("\u200c\u200d")
 _CJK_PUNCTUATION = set("。？！、；：“”【】（）〔〕［］﹃﹄‘’﹁﹂—…－～《》〈〉「」")
 
 
@@ -138,8 +141,12 @@ def _basic_github_id(text: str) -> str:
     The ASCII removals follow ``anchor-markdown-header``. GitHub additionally
     drops every other punctuation mark and symbol, such as ``\u2265`` or ``%``,
     while keeping ``-`` and ``_``; without that step a heading like "mode
-    (\u2265 90 %)" got an anchor GitHub does not render. Known limit: letters
-    outside ASCII keep their case, because ``_ascii_only_lower`` runs first.
+    (\u2265 90 %)" got an anchor GitHub does not render. Separators other than
+    the plain space (categories ``Zs``, ``Zl``, ``Zp``, such as the no-break
+    space) and format characters (``Cf``, such as the soft hyphen) disappear as
+    well, except the join controls ZWNJ and ZWJ, measured against GitHub's
+    rendering with ``gh api markdown``. Known limit: letters outside ASCII keep
+    their case, because ``_ascii_only_lower`` runs first.
     """
 
     text = text.replace(" ", "-")
@@ -149,16 +156,23 @@ def _basic_github_id(text: str) -> str:
     return "".join(
         char
         for char in text
-        if char in "-_" or unicodedata.category(char)[0] not in "PS"
+        if char in "-_"
+        or char in _KEPT_FORMAT_CHARS
+        or (
+            unicodedata.category(char)[0] not in "PSZ"
+            and unicodedata.category(char) != "Cf"
+        )
     )
 
 
 def _slugify(title: str, seen: dict[str, int]) -> str:
-    """Return a GitHub-compatible anchor slug for the provided heading."""
+    """Return a GitHub-compatible anchor slug for the provided heading.
+
+    A heading of symbols only has an empty anchor on GitHub (``#``, then
+    ``#-1``, ``#-2`` for repeats), so an empty slug stays empty.
+    """
 
     normalized = _basic_github_id(_ascii_only_lower(title.strip()))
-    if not normalized:
-        normalized = title.lower()
 
     count = seen[normalized]
     seen[normalized] += 1
