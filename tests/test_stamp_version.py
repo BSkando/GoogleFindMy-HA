@@ -464,6 +464,8 @@ def test_the_same_number_under_another_tag_name_is_refused() -> None:
         ("1.15.34b1", ["1.15.34a3"], True),  # beta after alpha
         ("1.15.34", ["nightly", "latest"], True),  # tags without a number
         ("1.7.15", ["V1.7.0-6", "V1.5.4"], True),  # upstream's historic tags
+        ("1.15.34", ["2026-snapshot", "1.x", "7-day-build"], True),  # no version
+        ("1.15.34", ["1.15.35-6"], False),  # a historic suffix still counts
     ],
 )
 def test_prerelease_and_foreign_tags_are_ordered(
@@ -551,7 +553,13 @@ def test_tag_check_runs_after_validation_and_before_the_stamp() -> None:
 
 
 def _run_check_step(
-    tmp_path: Path, *, repository: str, tag: str, tags: list[str], fork_tags: str
+    tmp_path: Path,
+    *,
+    repository: str,
+    tag: str,
+    tags: list[str],
+    fork_tags: str,
+    gh_fails: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Run the real ``run`` block as ``bash -e`` in a repository with ``tags``."""
 
@@ -566,8 +574,13 @@ def _run_check_step(
     bin_dir.mkdir()
     (bin_dir / "python").symlink_to(sys.executable)
     gh = bin_dir / "gh"
+    reply = (
+        "echo 'HTTP 404: Not Found (https://api.github.com/repos/x)' >&2\nexit 1\n"
+        if gh_fails
+        else f"printf '%s' '{fork_tags}'\n"
+    )
     gh.write_text(
-        f"#!/bin/sh\necho \"$*\" >> {tmp_path / 'gh.log'}\nprintf '%s' '{fork_tags}'\n",
+        f'#!/bin/sh\necho "$*" >> {tmp_path / "gh.log"}\n{reply}',
         encoding="utf-8",
     )
     gh.chmod(0o755)
@@ -664,3 +677,36 @@ def test_upstream_step_reads_the_fork_tags(tmp_path: Path) -> None:
     ).read_text(encoding="utf-8")
     assert taken.returncode != 0
     assert "already used by the fork" in taken.stdout
+
+
+def test_upstream_step_goes_on_when_the_fork_tags_cannot_be_read(
+    tmp_path: Path,
+) -> None:
+    """A read failure warns and skips the fork comparison, nothing more.
+
+    Stopping there would publish the release without its HACS ZIP. The check
+    against the repository's own tags still runs.
+    """
+
+    passes = _run_check_step(
+        tmp_path / "passes",
+        repository="BSkando/GoogleFindMy-HA",
+        tag="1.15.21",
+        tags=["v1.7.14", "1.15.21"],
+        fork_tags="",
+        gh_fails=True,
+    )
+    own_tags = _run_check_step(
+        tmp_path / "own",
+        repository="BSkando/GoogleFindMy-HA",
+        tag="1.7.13",
+        tags=["v1.7.14", "1.7.13"],
+        fork_tags="",
+        gh_fails=True,
+    )
+
+    assert passes.returncode == 0, passes.stdout + passes.stderr
+    assert "::warning::" in passes.stdout
+    assert "HTTP 404" in passes.stdout
+    assert own_tags.returncode != 0
+    assert "not greater than v1.7.14" in own_tags.stdout

@@ -65,17 +65,24 @@ from pathlib import Path
 # lines, so release.yml (Workflow A) opens an empty hand-tag draft there instead
 # of proposing a stale number; the stamp path here still honours the exact chosen
 # tag verbatim. The shell guard in release-stamp.yml MUST stay byte-equal to this
-# pattern (locked by tests/test_stamp_version.py).
+# pattern (locked by tests/test_stamp_version.py). This shape is what may be
+# *stamped*; which tag may be *released* is narrower: release-stamp.yml runs
+# ``--check-against-tags`` first, which refuses a fourth segment, a ``v`` and
+# any number not greater than every existing tag of the repository, so a
+# release on an older maintenance line is refused too. There is no switch for
+# a deliberate exception; it needs a change of that workflow step.
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?([ab][0-9]+)?$")
 
 # Shape of a new release (``--check-against-tags``): three numeric segments,
 # optionally a PEP 440 alpha/beta suffix, no ``v`` and no fourth segment.
 RELEASE_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+([ab][0-9]+)?$")
-# Leading version of an existing tag: an optional ``v``/``V``, the numeric
-# release segments and an optional alpha/beta suffix. Anything after that (such
-# as the ``-6`` of upstream's historic ``V1.7.0-6``) is ignored.
+# Version of an existing tag: an optional ``v``/``V``, at least two numeric
+# release segments, an optional alpha/beta suffix and an optional ``-N`` (as in
+# upstream's historic ``V1.7.0-6``, which is ignored). Any other tag, such as
+# ``2026-snapshot`` or ``nightly``, carries no version and is skipped.
 _TAG_VERSION_RE = re.compile(
-    r"^[vV]?(?P<release>[0-9]+(?:\.[0-9]+)*)(?:(?P<pre>[ab])(?P<pre_n>[0-9]+))?"
+    r"^[vV]?(?P<release>[0-9]+(?:\.[0-9]+)+)"
+    r"(?:(?P<pre>[ab])(?P<pre_n>[0-9]+))?(?:-[0-9]+)?$"
 )
 _RELEASE_WIDTH = 6
 _LINE_RE = re.compile(r"^[0-9]+\.[0-9]+$")
