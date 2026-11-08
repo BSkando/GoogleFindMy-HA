@@ -424,11 +424,13 @@ jobs:
         id: mypy
         run: |
           set +e
-          {
-            poetry run mypy --install-types --non-interactive --strict -p custom_components.googlefindmy
-            poetry run mypy --install-types --non-interactive --strict -p tests
-          } 2>&1 | tee mypy_output.txt
-          EXIT_CODE=${PIPESTATUS[0]}
+          # One pipeline per run: PIPESTATUS of a `{ ...; ...; } | tee` group only
+          # holds the status of its last command, which hid package failures.
+          poetry run mypy --install-types --non-interactive --strict -p custom_components.googlefindmy 2>&1 | tee mypy_output.txt
+          PACKAGE_EXIT=${PIPESTATUS[0]}
+          poetry run mypy --install-types --non-interactive --strict -p tests 2>&1 | tee -a mypy_output.txt
+          TESTS_EXIT=${PIPESTATUS[0]}
+          EXIT_CODE=$(( PACKAGE_EXIT > TESTS_EXIT ? PACKAGE_EXIT : TESTS_EXIT ))
           echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
           exit $EXIT_CODE
 
