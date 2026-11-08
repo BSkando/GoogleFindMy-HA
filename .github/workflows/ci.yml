@@ -465,8 +465,8 @@ jobs:
             echo ""
             if [ "${{ matrix.check }}" = "ruff" ]; then
               if [ -f ruff_output.txt ]; then
-                ISSUES=$(grep -c "^" ruff_output.txt 2>/dev/null || echo "0")
-                if [ "$ISSUES" = "0" ] || [ ! -s ruff_output.txt ]; then
+                # A clean run still prints "All checks passed!"; judge by exit code.
+                if [ "${{ steps.ruff.outputs.exit_code }}" = "0" ]; then
                   echo "✅ **No issues found**"
                 else
                   echo "❌ **Issues found:**"
@@ -478,7 +478,7 @@ jobs:
               fi
             elif [ "${{ matrix.check }}" = "mypy" ]; then
               if [ -f mypy_output.txt ]; then
-                ERRORS=$(grep -c "error:" mypy_output.txt 2>/dev/null || echo "0")
+                ERRORS=$(grep -c "error:" mypy_output.txt 2>/dev/null || true)
                 if [ "$ERRORS" = "0" ]; then
                   echo "✅ **No type errors found**"
                 else
@@ -517,7 +517,7 @@ jobs:
               fi
             elif [ "${{ matrix.check }}" = "bandit" ]; then
               if [ -f bandit_output.txt ]; then
-                ISSUES=$(grep -c "Issue:" bandit_output.txt 2>/dev/null || echo "0")
+                ISSUES=$(grep -c "Issue:" bandit_output.txt 2>/dev/null || true)
                 if [ "$ISSUES" = "0" ]; then
                   echo "✅ **No security issues found**"
                 else
