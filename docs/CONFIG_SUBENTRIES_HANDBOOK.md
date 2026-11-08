@@ -343,7 +343,7 @@ class LocationSubentryFlowHandler(config_entries.ConfigSubentryFlow):
     async def async_step_user(self, user_input=None):
         # self._get_entry() returns the PARENT ConfigEntry
         parent = self._get_entry()
-        
+
         if user_input:
             return self.async_create_entry(
                 title=user_input["name"],
@@ -370,7 +370,7 @@ class RuntimeData:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # 1. Setup Shared Client
     client = APIClient(entry.data["api_key"])
-    
+
     # 2. Setup Subentries
     coordinators = {}
     for subentry in entry.subentries.values():
@@ -385,10 +385,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # 4. Forward Platforms (per subentry)
     await _async_setup_new_subentries(hass, entry, entry.subentries.values())
-    
+
     # 5. Listen for updates (to trigger reloads on subentry changes when configured)
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
-    
+
     return True
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -452,7 +452,7 @@ async def async_setup_entry(
     for subentry_id, coordinator in runtime_data.subentry_coordinators.items():
         # Retrieve the config object for metadata
         subentry = entry.subentries[subentry_id]
-        
+
         entities.append(
             MySubentryEntity(
                 coordinator=coordinator,
@@ -461,7 +461,7 @@ async def async_setup_entry(
             )
         )
 
-    # Pass entities to HA. 
+    # Pass entities to HA.
     # Note: HA 2025.11 allows passing `config_subentry_id` if supported by the entity platform wrapper,
     # BUT usually, the link is established via DeviceInfo or the Entity Registry helper.
     async_add_entities(entities)
@@ -510,8 +510,8 @@ class MySubentryEntity(CoordinatorEntity):
             identifiers={(DOMAIN, self._subentry.unique_id)},
             name=self._subentry.title,
             # Crucial: Explicitly link this device to the subentry
-            # Note: Check strict typing for DeviceInfo in 2025.11. 
-            # If `config_subentry_id` is not a valid DeviceInfo argument, 
+            # Note: Check strict typing for DeviceInfo in 2025.11.
+            # If `config_subentry_id` is not a valid DeviceInfo argument,
             # the link is established via the EntityRegistry entry which points to the device.
         )
 ```

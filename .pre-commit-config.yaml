@@ -1,21 +1,12 @@
-# pre-commit.ci configuration
-ci:
-  autofix_prs: true
-  autofix_commit_msg: "style: auto-fix from pre-commit.ci"
-  autoupdate_schedule: monthly
-  autoupdate_commit_msg: "chore(deps): update pre-commit hooks"
-  skip:
-    # Skip hooks that require the full test environment
-    - mypy
-    - pytest
-
+# Hooks run from the project environment (`poetry run pre-commit run --all-files`)
+# and in CI. The revs of ruff, codespell and bandit follow poetry.lock;
+# tests/test_precommit_config_contract.py fails when they drift apart.
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.14
+    rev: v0.17.2
     hooks:
-      - id: ruff
+      - id: ruff-check
         args:
-          - check
           - --fix
           - --exit-non-zero-on-fix
       - id: ruff-format
@@ -29,17 +20,20 @@ repos:
 
   - repo: local
     hooks:
+      # mypy and pytest run from the project environment: `repo: local` has no
+      # project to install, so `.[dev]` never reached them. Activate the
+      # environment first (`poetry run pre-commit ...`); a missing tool fails
+      # the hook instead of passing it.
       - id: mypy
-        name: mypy (dev extras)
-        entry: python -m mypy --strict
-        language: python
-        pass_filenames: true
+        name: mypy
+        entry: mypy --strict -p custom_components.googlefindmy -p tests
+        language: system
+        pass_filenames: false
         types: [python]
-        additional_dependencies:
-          - .[dev]
+        require_serial: true
 
   - repo: https://github.com/PyCQA/bandit
-    rev: 1.7.10
+    rev: 1.9.4
     hooks:
       - id: bandit
         args:
@@ -54,8 +48,13 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
+      # The vendored Leaflet copy is checked against a recorded digest; leave
+      # it byte-identical. Two trailing spaces in Markdown are line breaks.
       - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+        exclude: ^custom_components/googlefindmy/vendor/leaflet/
       - id: end-of-file-fixer
+        exclude: ^custom_components/googlefindmy/vendor/leaflet/
       - id: check-yaml
       - id: check-toml
       - id: check-json
@@ -97,9 +96,7 @@ repos:
 
       - id: pytest
         name: pytest with coverage
-        entry: python -m pytest --cov -q
-        language: python
-        additional_dependencies:
-          - .[dev]
+        entry: pytest --cov -q
+        language: system
         pass_filenames: false
         always_run: true
