@@ -817,16 +817,20 @@ def test_slug_keeps_letters_outside_ascii() -> None:
 @pytest.mark.parametrize(
     ("title", "expected"),
     [
-        ("a b", "ab"),  # no-break space (Zs)
-        ("a b", "ab"),  # em space (Zs)
-        ("a b", "ab"),  # line separator (Zl)
-        ("a­b", "ab"),  # soft hyphen (Cf)
+        ("a\u00a0b", "ab"),  # no-break space (Zs)
+        ("a\u2003b", "ab"),  # em space (Zs)
+        ("a\u2028b", "ab"),  # line separator (Zl)
+        ("a\u00adb", "ab"),  # soft hyphen (Cf)
         ("x\u200bY", "xy"),  # zero width space (Cf)
-        ("a⁠b", "ab"),  # word joiner (Cf)
-        ("a﻿b", "ab"),  # zero width no-break space (Cf)
-        ("a  b", "a-b"),  # only the plain space becomes a hyphen
-        ("a‍b", "a%E2%80%8Db"),  # zero width joiner is kept by GitHub
-        ("a‌b", "a%E2%80%8Cb"),  # zero width non-joiner is kept by GitHub
+        ("a\u2060b", "ab"),  # word joiner (Cf)
+        ("a\ufeffb", "ab"),  # zero width no-break space (Cf)
+        ("a \u00a0b", "a-b"),  # only the plain space becomes a hyphen
+        ("a\u200db", "a%E2%80%8Db"),  # zero width joiner is kept by GitHub
+        ("a\u200cb", "a%E2%80%8Cb"),  # zero width non-joiner is kept by GitHub
+        ("a\tb", "ab"),  # tab (Cc)
+        ("a\x01b", "ab"),  # start of heading (Cc)
+        ("a\x7fb", "ab"),  # delete (Cc)
+        ("x\x85y", "xy"),  # next line (Cc)
     ],
 )
 def test_slug_drops_separators_and_format_characters_like_github(

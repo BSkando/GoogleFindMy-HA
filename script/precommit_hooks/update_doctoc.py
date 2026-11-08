@@ -147,8 +147,9 @@ def _basic_github_id(text: str) -> str:
     while keeping ``-`` and ``_``; without that step a heading like "mode
     (\u2265 90 %)" got an anchor GitHub does not render. Separators other than
     the plain space (categories ``Zs``, ``Zl``, ``Zp``, such as the no-break
-    space) and format characters (``Cf``, such as the soft hyphen) disappear as
-    well, except the join controls ZWNJ and ZWJ, measured against GitHub's
+    space), control characters (``Cc``, such as a tab) and format characters
+    (``Cf``, such as the soft hyphen) disappear as well, except the join
+    controls ZWNJ and ZWJ, measured against GitHub's
     rendering with ``gh api markdown``.
     """
 
@@ -163,7 +164,7 @@ def _basic_github_id(text: str) -> str:
         or char in _KEPT_FORMAT_CHARS
         or (
             unicodedata.category(char)[0] not in "PSZ"
-            and unicodedata.category(char) != "Cf"
+            and unicodedata.category(char) not in {"Cc", "Cf"}
         )
     )
 
