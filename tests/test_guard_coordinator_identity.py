@@ -114,13 +114,56 @@ def _module_level_consumers() -> set[str]:
 _HELPER = "import_coordinator_consumers"
 
 
+_MAPPING_WRITERS = frozenset(
+    {"update", "setdefault", "pop", "__setitem__", "__delitem__"}
+)
+
+
+def _mapping_write_names(call: ast.Call) -> set[str]:
+    """Names a ``update``/``setdefault``/``pop``/``__setitem__`` call writes.
+
+    Covers ``globals().update(name=...)``, ``.update({"name": ...})`` and the
+    string first argument of the other methods, whatever mapping they act on.
+    """
+
+    if not (
+        isinstance(call.func, ast.Attribute) and call.func.attr in _MAPPING_WRITERS
+    ):
+        return set()
+    names = {kw.arg for kw in call.keywords if kw.arg}
+    for arg in call.args:
+        if isinstance(arg, ast.Dict):
+            names |= {
+                key.value
+                for key in arg.keys
+                if isinstance(key, ast.Constant) and isinstance(key.value, str)
+            }
+    if (
+        call.func.attr != "update"
+        and call.args
+        and isinstance(call.args[0], ast.Constant)
+        and isinstance(call.args[0].value, str)
+    ):
+        names.add(call.args[0].value)
+    return names
+
+
 def _bindings_of(tree: ast.AST, name: str) -> list[ast.AST]:
     """Every node anywhere in ``tree`` that binds, deletes or rebinds ``name``.
 
-    Counts definitions, assignments (also under ``if``/``try``/loops), ``del``,
-    ``global``/``nonlocal`` declarations, import aliases and the string form
-    ``globals()["name"]``. Walking the whole tree instead of the module body
-    is what catches a rebinding hidden in a branch or a function.
+    Counts definitions, parameters, assignments (also under ``if``/``try``/
+    loops), ``del``, ``except … as``, the capture names of ``match`` patterns,
+    ``global``/``nonlocal`` declarations, import aliases, an attribute of that
+    name assigned or deleted on any object (``sys.modules[__name__].name =``),
+    ``setattr``/``delattr`` with the name as a string, the string form
+    ``globals()["name"]`` and the mapping writers ``update``/``setdefault``/
+    ``pop``/``__setitem__``/``__delitem__`` with the name as keyword, key or
+    first argument. Walking the whole tree instead of the module body is what
+    catches a rebinding hidden in a branch or a function.
+
+    Not seen: a name built at run time (``setattr(m, prefix + "s", f)``,
+    ``globals()[key]``), code run through ``exec``/``eval`` and writes from
+    another module.
     """
 
     found: list[ast.AST] = []
@@ -130,6 +173,20 @@ def _bindings_of(tree: ast.AST, name: str) -> list[ast.AST]:
                 found.append(node)
         elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store | ast.Del):
             if node.id == name:
+                found.append(node)
+        elif isinstance(node, ast.Attribute) and isinstance(
+            node.ctx, ast.Store | ast.Del
+        ):
+            if node.attr == name:
+                found.append(node)
+        elif isinstance(node, ast.arg):
+            if node.arg == name:
+                found.append(node)
+        elif isinstance(node, ast.ExceptHandler | ast.MatchAs | ast.MatchStar):
+            if node.name == name:
+                found.append(node)
+        elif isinstance(node, ast.MatchMapping):
+            if node.rest == name:
                 found.append(node)
         elif isinstance(node, ast.Global | ast.Nonlocal):
             if name in node.names:
@@ -142,6 +199,15 @@ def _bindings_of(tree: ast.AST, name: str) -> list[ast.AST]:
                 found.append(node)
         elif isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
             if node.slice.value == name:
+                found.append(node)
+        elif isinstance(node, ast.Call):
+            called = node.func.id if isinstance(node.func, ast.Name) else None
+            if (
+                called in {"setattr", "delattr"}
+                and len(node.args) >= 2
+                and isinstance(node.args[1], ast.Constant)
+                and node.args[1].value == name
+            ) or name in _mapping_write_names(node):
                 found.append(node)
     return found
 
@@ -400,3 +466,41 @@ def test_guard_ignores_the_lazily_bound_package_symbol(
     with monkeypatch.context() as patcher:
         patcher.setattr(package, "GoogleFindMyCoordinator", _PlaceholderCoordinator)
         assert detect_coordinator_identity_leaks() == []
+
+
+_N = "import_coordinator_consumers"
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (f"def {_N}():\n    pass", 1),
+        (f"{_N} = None", 1),
+        (f'globals()["{_N}"] = None', 1),
+        (f'setattr(sys.modules[__name__], "{_N}", f)', 1),
+        (f'delattr(sys.modules[__name__], "{_N}")', 1),
+        (f"sys.modules[__name__].{_N} = f", 1),
+        (f"del sys.modules[__name__].{_N}", 1),
+        (f"globals().update({_N}=f)", 1),
+        (f'globals().update({{"{_N}": f}})', 1),
+        (f'globals().__setitem__("{_N}", f)', 1),
+        (f'globals().setdefault("{_N}", f)', 1),
+        (f'globals().pop("{_N}")', 1),
+        (f"try:\n    pass\nexcept E as {_N}:\n    pass", 1),
+        (f"match x:\n    case [*{_N}]:\n        pass", 1),
+        (f"match x:\n    case {{**{_N}}}:\n        pass", 1),
+        (f"match x:\n    case _ as {_N}:\n        pass", 1),
+        (f"def g({_N}):\n    pass", 1),
+        (f"f({_N})", 0),
+        (f'print("{_N}")', 0),
+        (f'getattr(sys.modules[__name__], "{_N}")', 0),
+    ],
+)
+def test_bindings_of_sees_every_binding_form(source: str, expected: int) -> None:
+    """Each binding, deletion or rebinding counts once; a read counts zero.
+
+    ``setattr(sys.modules[__name__], ...)`` used to stay invisible, so a second
+    definition of the helper through it passed the "bound exactly once" check.
+    """
+
+    assert len(_bindings_of(ast.parse(source), _N)) == expected
