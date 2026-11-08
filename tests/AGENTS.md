@@ -117,11 +117,17 @@ pytest-homeassistant-custom-component` command to run for roughly five
 minutes in the hosted environment. Plan regression runs and shell work
 around that window so long installs finish before invoking `pytest`.
 
-When those stubs are active, remember that the entity registry fixture
-populates `hass.data["entity_registry"]`. Integration helpers under test
-should consult that cached instance before calling
-`entity_registry.async_get(...)` so recovery logic inspects the same
-registry object as the fixture.
+When those stubs are active, remember that the stub entity registry is
+cached on the hass double as `hass._entity_registry_stub`; the stub
+`entity_registry.async_get(hass)` creates it on first use and returns the
+same object afterwards. Integration code and tests reach it through
+`er.async_get(hass)`, so recovery logic inspects the same registry object as
+the fixture. Its `async_get_entity_id(domain, platform, unique_id)` has the
+Home Assistant signature: `domain` is the entity domain derived from the
+`entity_id` (as `RegistryEntry.domain` is in the core), and `platform` is
+the owning integration (`DOMAIN`), not the entity domain. The stub models
+active entries only; the core's trash (`deleted_entities`) is not modelled,
+which matches the core lookup, because `async_get_entity_id` never reads it.
 
 When patching Home Assistant network helpers, patch the module-level
 `get_url` import used by the integration (for example,
@@ -425,6 +431,22 @@ are installed. **Review this checklist on every single change under
     string representation contract below). Compare by construction, not by
     `inspect.signature`: the translation arguments live only in
     `HomeAssistantError.__init__`.
+
+13. **Entity registry and sensor restore stubs** — the `conftest` entity
+    registry answers `async_get_entity_id(domain, platform, unique_id)` like
+    the core and its entries carry `domain` derived from the `entity_id`;
+    `record_entity(..., platform=DOMAIN)` registers an entry owned by the
+    integration. The stub sensor module carries `SensorExtraStoredData`
+    (`as_dict`/`from_dict` for value and unit), the stub `SensorEntity`
+    exposes `native_unit_of_measurement` in the core's order
+    (`_attr_native_unit_of_measurement`, then the entity description, then
+    `None`), and the stub `RestoreSensor` exposes `extra_restore_state_data`,
+    `async_get_last_sensor_data`, `async_get_last_extra_data` and
+    `async_get_last_state` (the three getters return `None`; tests patch them
+    per entity). The date and `Decimal` encoding of the core's
+    `SensorExtraStoredData` is not modelled. When the core changes any of
+    these signatures, update the stubs together with
+    `tests/test_ble_battery_sensor_max_age.py`.
 
 Treat this checklist as a living document: if a new helper or guard
 becomes necessary, add it here and verify each item before completing

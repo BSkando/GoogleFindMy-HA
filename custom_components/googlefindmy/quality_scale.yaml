@@ -218,6 +218,7 @@ rules:
       status: done
       evidence:
         - "custom_components/googlefindmy/device_tracker.py:_scan_available_trackers_from_coordinator"
+        - "tests/test_ble_battery_sensor_setup.py:test_registry_entry_no_data"
     - id: entity-category
       status: done
       evidence:

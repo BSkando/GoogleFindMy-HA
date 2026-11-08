@@ -29,6 +29,7 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_LATITUDE, ATTR_LONGITUDE, PERCENTAGE
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -616,30 +617,49 @@ async def async_setup_entry(
                         )
                     )
 
-                # --- BLE Battery sensor (when resolver has data) ---
-                if dev_id not in known_battery_ids and resolver is not None:
+                # --- BLE Battery sensor (when the entity registry already
+                # holds it, or when the resolver has data) ---
+                if dev_id not in known_battery_ids:
                     battery_state = None
-                    try:
-                        battery_state = resolver.get_ble_battery_state(dev_id)
-                    except Exception:  # noqa: BLE001
-                        pass
-                    if battery_state is not None:
-                        battery_entity = GoogleFindMyBLEBatterySensor(
-                            coordinator,
-                            device,
-                            subentry_key=tracker_scope.subentry_key,
-                            subentry_identifier=tracker_identifier,
+                    if resolver is not None:
+                        try:
+                            battery_state = resolver.get_ble_battery_state(dev_id)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    battery_entity = GoogleFindMyBLEBatterySensor(
+                        coordinator,
+                        device,
+                        subentry_key=tracker_scope.subentry_key,
+                        subentry_identifier=tracker_identifier,
+                    )
+                    bat_uid = getattr(battery_entity, "unique_id", None)
+                    in_registry = (
+                        isinstance(bat_uid, str)
+                        and er.async_get(hass).async_get_entity_id(
+                            "sensor", DOMAIN, bat_uid
                         )
-                        bat_uid = getattr(battery_entity, "unique_id", None)
-                        if isinstance(bat_uid, str) and bat_uid not in added_unique_ids:
-                            added_unique_ids.add(bat_uid)
-                            known_battery_ids.add(dev_id)
-                            entities.append(battery_entity)
+                        is not None
+                    )
+                    if (
+                        (battery_state is not None or in_registry)
+                        and isinstance(bat_uid, str)
+                        and bat_uid not in added_unique_ids
+                    ):
+                        added_unique_ids.add(bat_uid)
+                        known_battery_ids.add(dev_id)
+                        entities.append(battery_entity)
+                        if battery_state is not None:
                             _LOGGER.info(
                                 "BLE battery sensor created for device=%s "
                                 "(battery=%s%%)",
                                 dev_id,
                                 battery_state.battery_pct,
+                            )
+                        else:
+                            _LOGGER.debug(
+                                "BLE battery sensor created from entity registry "
+                                "for device=%s",
+                                dev_id,
                             )
 
             return entities
@@ -1893,9 +1913,12 @@ class GoogleFindMyBLEBatterySensor(GoogleFindMyDeviceEntity, RestoreSensor):
     dynamic icons and HA battery grouping.
 
     Behavior:
-    - Created dynamically when the EID resolver first decodes battery data.
+    - Created at setup when the entity registry already holds its unique_id,
+      otherwise on the first decoded battery data from the EID resolver. A new
+      device without BLE data gets no battery sensor.
     - Restores state across HA restarts via RestoreSensor.
-    - Available as long as the coordinator considers the device present.
+    - Available while the coordinator considers the device present; while it
+      is absent, only as long as a value is known.
     - Reads battery state directly from the EID resolver (no coordinator proxy).
     """
 
