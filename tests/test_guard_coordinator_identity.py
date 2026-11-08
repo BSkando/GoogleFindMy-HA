@@ -155,7 +155,9 @@ def _bindings_of(tree: ast.AST, name: str) -> list[ast.AST]:
     loops), ``del``, ``except … as``, the capture names of ``match`` patterns,
     ``global``/``nonlocal`` declarations, import aliases, an attribute of that
     name assigned or deleted on any object (``sys.modules[__name__].name =``),
-    ``setattr``/``delattr`` with the name as a string, the string form
+    ``setattr``/``delattr`` (also ``builtins.setattr``) and
+    ``operator.setitem``/``operator.delitem`` with the name as a string, the
+    string form
     ``globals()["name"]`` and the mapping writers ``update``/``setdefault``/
     ``pop``/``__setitem__``/``__delitem__`` with the name as keyword, key or
     first argument. Walking the whole tree instead of the module body is what
@@ -201,9 +203,14 @@ def _bindings_of(tree: ast.AST, name: str) -> list[ast.AST]:
             if node.slice.value == name:
                 found.append(node)
         elif isinstance(node, ast.Call):
-            called = node.func.id if isinstance(node.func, ast.Name) else None
+            if isinstance(node.func, ast.Name):
+                called: str | None = node.func.id
+            elif isinstance(node.func, ast.Attribute):
+                called = node.func.attr
+            else:
+                called = None
             if (
-                called in {"setattr", "delattr"}
+                called in {"setattr", "delattr", "setitem", "delitem"}
                 and len(node.args) >= 2
                 and isinstance(node.args[1], ast.Constant)
                 and node.args[1].value == name
@@ -479,6 +486,10 @@ _N = "import_coordinator_consumers"
         (f'globals()["{_N}"] = None', 1),
         (f'setattr(sys.modules[__name__], "{_N}", f)', 1),
         (f'delattr(sys.modules[__name__], "{_N}")', 1),
+        (f'builtins.setattr(sys.modules[__name__], "{_N}", f)', 1),
+        (f'builtins.delattr(sys.modules[__name__], "{_N}")', 1),
+        (f'operator.setitem(globals(), "{_N}", f)', 1),
+        (f'operator.delitem(globals(), "{_N}")', 1),
         (f"sys.modules[__name__].{_N} = f", 1),
         (f"del sys.modules[__name__].{_N}", 1),
         (f"globals().update({_N}=f)", 1),
