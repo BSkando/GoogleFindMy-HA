@@ -474,3 +474,30 @@ async def test_registry_sensor_without_data_state(
     entity = created[0][0]
     assert entity.is_on is None
     assert entity.available is available
+
+
+class _FailingResolver(_ResolverStub):
+    """Resolver stand-in whose lookup raises."""
+
+    def get_ble_battery_state(self, device_id: str) -> BLEBatteryState | None:
+        raise RuntimeError("resolver lookup failed")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("registered", [True, False], ids=["registry", "no_registry"])
+async def test_resolver_error_counts_as_no_data(
+    stub_coordinator_factory: Any, registered: bool
+) -> None:
+    """A failing resolver lookup counts as no data; the registry arm still works."""
+    harness = _Harness(
+        stub_coordinator_factory,
+        devices_by_key=_one_device(),
+        resolver=_FailingResolver(),
+    )
+    uid = _uwt_uid(TRACKER_SUBENTRY_ID, DEV_ID)
+    if registered:
+        harness.register("binary_sensor.tag_uwt_mode", uid, TRACKER_SUBENTRY_ID)
+
+    await harness.setup()
+
+    assert harness.uwt_uids() == ([uid] if registered else [])
