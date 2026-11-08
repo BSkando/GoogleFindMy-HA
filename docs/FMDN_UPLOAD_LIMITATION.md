@@ -2,9 +2,9 @@
 
 ## TL;DR
 
-**The FMDN Finder upload functionality is disabled.** Finder reports require DroidGuard attestation - a device integrity verification system that only real Android devices can provide. In addition, the integration's own-device upload is built in an unverified shape (see [Owner location reports](#owner-location-reports-uploadownerscans-unverified)).
+**The FMDN Finder upload functionality is disabled.** Finder reports require DroidGuard attestation (maintainer statement, see below) - a device integrity verification system that only real Android devices can provide. In addition, the integration's own-device upload is built in an unverified shape (see [Owner location reports](#owner-location-reports-uploadownerscans-unverified)).
 
-This is not a bug or missing feature - it's a deliberate security measure by Google.
+The finder-report block is a deliberate security measure by Google, not a bug in this integration.
 
 The GoogleFindMyTools maintainer states that uploading **finder reports** requires DroidGuard ([Issue #19](https://github.com/leonboe1/GoogleFindMyTools/issues/19), asked about uploading sightings of one's own tags). The Spot client calls a separate owner method for location reports about **your own** devices (`SpotReportingService/UploadOwnerScans`, see [Owner location reports](#owner-location-reports-uploadownerscans-unverified)); whether Google accepts it from Home Assistant is **unmeasured**.
 
