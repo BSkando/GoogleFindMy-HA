@@ -43,8 +43,8 @@ development so that future contributors avoid the same pitfalls.
 | 3 | **Bermuda** (`fmdn/integration.py`) | `normalize_eid_bytes()` converts the type to `bytes` (no content stripping), then calls `resolver.resolve_eid(payload)` or `resolver.resolve_eid_all(payload)`. Note that this is only the raw-payload path: Bermuda's `auto` extraction mode additionally feeds *frame-and-flags-stripped* EID candidates through the same call as a fallback, and those carry no hashed-flags byte at all (`layout="bare"` on our side). |
 | 4 | **Resolver** (`eid_resolver.py`) | `_resolve_eid_internal()` looks up the EID in the precomputed cache. If found, returns `list[EIDMatch]` plus the raw payload and frame metadata. |
 | 5 | **Resolver** (`_update_ble_battery()`) | Takes the hashed-flags byte from the offset established by the matched EID candidate (`EidCandidate.offset + len(eid)`), rather than re-deriving that position from the payload — which the specification confirms is octet 28 for 160-bit-curve frames and octet 40 for 256-bit ones, i.e. directly after the EID. When the candidate's geometry says no flags byte is present (`layout="bare"`, or a framed payload that ends with the EID), none is decoded. Sliding-window matches carry no parsed geometry and keep the previous frame-format derivation. XOR-decodes it with `compute_flags_xor_mask()`, extracts 2-bit battery level and UWT mode. The FMDN spec qualifies the hashed-flags byte explicitly: *"bits are referenced from most significant to least significant"* (verbatim, [FHN spec §Hashed Flags](https://developers.google.com/nearby/fast-pair/specifications/extensions/fmdn#hashed_flags), retrieved 2026-06-02). So spec bits 5-6 (battery) map to standard LSB-first bits 2-1 and spec bit 7 (UWT) maps to standard bit 0, i.e. `battery = (byte >> 1) & 0x03` and `uwt = byte & 0x01`. The naive LSB-first reading `(byte >> 5) & 0x03` / `byte & 0x80` is wrong and is anti-regression-guarded by `tests/test_ble_battery_sensor.py::TestHashedFlagsMsbFirstConvention` and `::TestMsbFirstNotLsbFirstDemonstratesCodexMisinterpretation`. Stores a `BLEBatteryState` keyed by **`canonical_id`**. |
-| 6 | **Sensor** (`sensor.py` → `_build_entities()`) | On every coordinator update, iterates devices and calls `resolver.get_ble_battery_state(dev_id)` where `dev_id = device["id"]` (the canonical_id). If non-None, creates a `GoogleFindMyBLEBatterySensor`. |
-| 7 | **Sensor** (`native_value` property) | On each HA state poll, reads the latest `BLEBatteryState` from the resolver and returns `battery_pct`. |
+| 6 | **Sensor** (`sensor.py` → `_build_entities()`) | At setup and on every coordinator update, iterates devices (`dev_id = device["id"]`, the canonical_id). Creates a `GoogleFindMyBLEBatterySensor` when the entity registry already holds its `unique_id`, or when `resolver.get_ble_battery_state(dev_id)` returns non-None (see section 4). |
+| 7 | **Sensor** (`native_value` property) | On each HA state poll, reads the latest `BLEBatteryState` from the resolver and returns `battery_pct` while that sighting is at most 7 days old. Without fresh resolver data it falls back to the restored value under the same limit (see section 4). |
 
 ---
 
@@ -112,22 +112,45 @@ window the tracker is currently broadcasting.
 
 ---
 
-## 4. Lazy sensor creation
+## 4. Sensor creation and restore
 
-The battery sensor is **not** created at integration startup.  It is
-created **lazily** when the first BLE battery state arrives:
+The battery sensor is created in one of two ways:
 
-1. `_build_entities()` runs on every coordinator data update.
-2. It checks `resolver.get_ble_battery_state(dev_id)`.
-3. If the result is `None` (no BLE data yet), no sensor is created.
-4. Once Bermuda resolves a BLE advertisement and the resolver stores the
-   battery state, the next coordinator update detects non-None state and
-   creates the sensor entity.
-5. After creation, the sensor is tracked in `known_battery_ids` to avoid
-   duplicate creation.
+1. **From the entity registry at setup.** `_build_entities()` checks for every
+   visible device whether the entity registry already holds the sensor's
+   `unique_id` (`async_get_entity_id("sensor", DOMAIN, unique_id)`). If it does,
+   the sensor is created at once, even when the resolver has no BLE data yet or
+   no resolver exists. This path logs at DEBUG.
+2. **On the first BLE battery state.** For a device without a registry entry,
+   `_build_entities()` checks `resolver.get_ble_battery_state(dev_id)`. If the
+   result is `None` (no BLE data yet), no sensor is created. Once Bermuda (or
+   another BLE scanner) resolves an advertisement and the resolver stores the
+   battery state, the next coordinator update creates the sensor and logs
+   `BLE battery sensor created` at INFO.
 
-This means the sensor only appears after Bermuda (or another BLE
-scanner) has resolved at least one advertisement for the device.
+After creation, the sensor is tracked in `known_battery_ids` to avoid
+duplicate creation. A new device still gets no battery sensor until it has
+been seen over BLE once; a device that had one before a restart gets it back
+at setup.
+
+### Restored value and its age limit
+
+`GoogleFindMyBLEBatterySensor` is a `RestoreSensor`. Besides the value it
+stores the wall-clock time of the last BLE sighting (`last_observation_wall`
+in its extra restore data, `BLEBatteryExtraStoredData`; older states fall
+back to the `last_ble_observation` attribute). Without fresh resolver data
+the sensor shows the restored value only while that sighting is at most 7
+days old (`BLE_BATTERY_RESTORE_MAX_AGE_S`, the span of Home Assistant's
+`STATE_EXPIRATION`), at restore time and while running. Resolver data
+whose sighting is older than 7 days counts as no data, so a tracker that
+stops sending loses its value after 7 days even while Home Assistant keeps
+running. A restored value without a sighting time is discarded (DEBUG). Without a value the sensor shows
+`unknown` while the device is present and `unavailable` while it is absent.
+
+The unwanted tracking mode binary sensor (`binary_sensor.py`,
+`_build_uwt_entities()`) follows the same two creation paths but restores
+nothing: until the first sighting it shows `unknown` for a present device and
+`unavailable` for an absent one.
 
 ---
 
@@ -138,7 +161,9 @@ scanner) has resolved at least one advertisement for the device.
 | `FMDN_FLAGS_PROBE` (first decode) | **INFO** | Once per device (lifetime of resolver instance) | Confirms the BLE battery pipeline works end-to-end |
 | `FMDN_FLAGS_PROBE CANNOT_DECODE` | DEBUG | Once per device when decode fails | Diagnostics for missing XOR mask or truncated payload |
 | `BLE battery changed` | DEBUG | On every battery level change | Track battery transitions |
-| `BLE battery sensor created` | **INFO** | Once per device when entity is created | Confirms sensor appeared in HA |
+| `BLE battery sensor created` | **INFO** | Once per device when the entity is created from a first BLE battery state | Confirms sensor appeared in HA |
+| `BLE battery sensor created from entity registry` | DEBUG | Once per device and setup when the entity is created from its registry entry | Shows the sensor came back at setup without BLE data |
+| `Discarding restored BLE battery value` | DEBUG | At restore, when the stored state carries no BLE sighting time | Explains why a restored value is not shown |
 
 The first-decode `FMDN_FLAGS_PROBE` is at **INFO** level intentionally.
 It fires exactly once per device per HA session, so it adds no noise when
@@ -238,7 +263,11 @@ extract the flags byte.
 
 ## 7. Test coverage
 
-Tests live in `tests/test_ble_battery_sensor.py` and cover:
+Tests live in `tests/test_ble_battery_sensor.py`,
+`tests/test_ble_battery_sensor_setup.py` (creation at setup from the entity
+registry and on the first sighting), `tests/test_ble_battery_sensor_max_age.py`
+(the 7-day limit) and `tests/test_uwt_mode_binary_sensor_setup.py` (the same
+creation paths for the unwanted tracking mode binary sensor). They cover:
 
 - Battery state storage and retrieval via canonical_id
 - All battery levels (UNSUPPORTED, NORMAL, LOW, CRITICALLY_LOW)
@@ -255,15 +284,19 @@ that the storage key matches the lookup key in test scenarios.
 
 ## 8. File reference
 
-| File | Role |
-|---|---|
-| `eid_resolver.py:2300–2443` | `_update_ble_battery()`, `get_ble_battery_state()` |
-| `eid_resolver.py:150–173` | `BLEBatteryState` dataclass, `FMDN_BATTERY_PCT` mapping |
-| `eid_resolver.py:132–139` | `EIDMatch` (carries both `device_id` and `canonical_id`) |
-| `sensor.py:500–567` | `_build_entities()` — lazy battery sensor creation |
-| `sensor.py:1270–1400` | `GoogleFindMyBLEBatterySensor` class |
-| `coordinator/identity.py:457` | `registry_map[canonical_id] = (device.id, None)` |
-| `coordinator/main.py:505–520` | `DeviceIdentity` dataclass |
-| `FMDNCrypto/eid_generator.py:256` | `compute_flags_xor_mask()` |
-| `ProtoDecoders/decoder.py:334` | `"id": canonic_id` in device stub |
-| `tests/test_ble_battery_sensor.py` | Full test suite |
+| File | Symbol | Role |
+|---|---|---|
+| `eid_resolver.py` | `GoogleFindMyEIDResolver._update_ble_battery()`, `.get_ble_battery_state()` | Decode and store the battery state; read it back |
+| `eid_resolver.py` | `BLEBatteryState`, `FMDN_BATTERY_PCT` | Battery state dataclass and percentage mapping |
+| `eid_resolver.py` | `EIDMatch` | Carries both `device_id` and `canonical_id` |
+| `sensor.py` | `async_setup_entry` → `_add_tracker_scope` → `_build_entities()` | Battery sensor creation (section 4) |
+| `sensor.py` | `GoogleFindMyBLEBatterySensor`, `BLE_BATTERY_RESTORE_MAX_AGE_S`, `BLEBatteryExtraStoredData` | Sensor entity, 7-day limit, restore data with the sighting time |
+| `binary_sensor.py` | `_build_uwt_entities()` | Unwanted tracking mode sensor creation (section 4) |
+| `coordinator/identity.py` | `IdentityOperations.get_active_device_identities()` | `registry_map[canonical_id] = (device.id, None)` |
+| `coordinator/main.py` | `DeviceIdentity` | Device identity dataclass |
+| `FMDNCrypto/eid_generator.py` | `compute_flags_xor_mask()` | XOR mask for the hashed-flags byte |
+| `ProtoDecoders/decoder.py` | `_build_device_stub()` | `"id": canonic_id` in the device stub |
+| `tests/test_ble_battery_sensor.py` | (module) | Decoding, storage and sensor behaviour |
+| `tests/test_ble_battery_sensor_setup.py` | (module) | Creation at setup and on the first sighting |
+| `tests/test_ble_battery_sensor_max_age.py` | (module) | 7-day limit of the shown value |
+| `tests/test_uwt_mode_binary_sensor_setup.py` | (module) | Creation paths of the unwanted tracking mode sensor |
