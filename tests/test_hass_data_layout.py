@@ -4071,8 +4071,9 @@ def test_service_no_active_entry_placeholders(
         assert placeholders["active_count"] == "0"
         assert placeholders["total_count"] == "2"
         # Entry titles are usually account e-mails; Home Assistant logs the
-        # fallback message for every caller, so no title reaches either.
-        assert placeholders["entries"] == "\u2014"
+        # fallback message for every caller, so no title reaches either, and
+        # the error passes no entry list at all.
+        assert "entries" not in placeholders
         for value in placeholders.values():
             assert "Account One" not in value
             assert "Account Two" not in value
@@ -4087,7 +4088,8 @@ def test_service_no_active_entry_placeholders(
         template = translation["exceptions"]["no_active_entry"]["message"]
         rendered = template.format(**placeholders)
         assert "0/2" in rendered
-        assert "configured entries (\u2014)" in rendered
+        assert "(\u2014)" not in rendered
+        assert "()" not in rendered
         assert "Account One" not in rendered
     finally:
         loop.close()

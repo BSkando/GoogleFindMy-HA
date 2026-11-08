@@ -82,7 +82,7 @@ Add similar guards whenever a new optional attribute becomes relevant so future 
 ## Service validation fallbacks
 
 * When raising `ServiceValidationError`, always include both the translation metadata (`translation_domain`, `translation_key`, and `translation_placeholders`) **and** a sanitized `message` that reuses the same placeholders. This keeps UI translations working while ensuring Home Assistant surfaces a readable fallback when translations are unavailable.
-* The fallback message reuses the placeholders except values that may carry an account e-mail (entry titles): Home Assistant logs `str(err)` for every caller of a failed action. Such a value stays out of the placeholders as well, because every caller with access to the action sees them; `no_active_entry` therefore passes the em dash as `entries` and names only the counts.
+* The fallback message reuses the placeholders except values that may carry an account e-mail (entry titles): Home Assistant logs `str(err)` for every caller of a failed action. Such a value stays out of the placeholders as well, because every caller with access to the action sees them; `no_active_entry` therefore passes only the two counts; no entry list placeholder exists.
 
 ### Fallback verification checklist
 

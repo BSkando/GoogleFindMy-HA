@@ -36,6 +36,9 @@ _PROBE = ("", "# probe")
 _PERCENT_ESCAPE_RE = re.compile(r"%([a-fA-F]|\d){2}")
 _REMOVE_CHARS = "/?!:[]`.,()*\"';{}+=<>~$|#@&–—\\"
 _REMOVE_TRANSLATION = str.maketrans("", "", _REMOVE_CHARS)
+# The join controls ZWNJ and ZWJ belong to ``\w`` in Unicode regular
+# expressions, and GitHub keeps them; every other format character goes.
+_KEPT_FORMAT_CHARS = frozenset("\u200c\u200d")
 _CJK_PUNCTUATION = set("。？！、；：“”【】（）〔〕［］﹃﹄‘’﹁﹂—…－～《》〈〉「」")
 
 
@@ -126,10 +129,14 @@ def _iter_headings(lines: Iterable[str]) -> list[tuple[int, str]]:
     return headings
 
 
-def _ascii_only_lower(text: str) -> str:
-    """Lowercase ASCII characters without altering Unicode symbols."""
+def _lower_each_character(text: str) -> str:
+    """Lowercase every letter on its own, as GitHub does.
 
-    return "".join(char.lower() if "A" <= char <= "Z" else char for char in text)
+    ``str.lower`` on the whole text applies the final-sigma rule (``ΣΑΣ``
+    becomes ``σας``); GitHub's anchor for that heading is ``σασ``.
+    """
+
+    return "".join(char.lower() for char in text)
 
 
 def _basic_github_id(text: str) -> str:
@@ -138,8 +145,12 @@ def _basic_github_id(text: str) -> str:
     The ASCII removals follow ``anchor-markdown-header``. GitHub additionally
     drops every other punctuation mark and symbol, such as ``\u2265`` or ``%``,
     while keeping ``-`` and ``_``; without that step a heading like "mode
-    (\u2265 90 %)" got an anchor GitHub does not render. Known limit: letters
-    outside ASCII keep their case, because ``_ascii_only_lower`` runs first.
+    (\u2265 90 %)" got an anchor GitHub does not render. Separators other than
+    the plain space (categories ``Zs``, ``Zl``, ``Zp``, such as the no-break
+    space), control characters (``Cc``, such as a tab) and format characters
+    (``Cf``, such as the soft hyphen) disappear as well, except the join
+    controls ZWNJ and ZWJ, measured against GitHub's
+    rendering with ``gh api markdown``.
     """
 
     text = text.replace(" ", "-")
@@ -149,16 +160,23 @@ def _basic_github_id(text: str) -> str:
     return "".join(
         char
         for char in text
-        if char in "-_" or unicodedata.category(char)[0] not in "PS"
+        if char in "-_"
+        or char in _KEPT_FORMAT_CHARS
+        or (
+            unicodedata.category(char)[0] not in "PSZ"
+            and unicodedata.category(char) not in {"Cc", "Cf"}
+        )
     )
 
 
 def _slugify(title: str, seen: dict[str, int]) -> str:
-    """Return a GitHub-compatible anchor slug for the provided heading."""
+    """Return a GitHub-compatible anchor slug for the provided heading.
 
-    normalized = _basic_github_id(_ascii_only_lower(title.strip()))
-    if not normalized:
-        normalized = title.lower()
+    A heading of symbols only has an empty anchor on GitHub (``#``, then
+    ``#-1``, ``#-2`` for repeats), so an empty slug stays empty.
+    """
+
+    normalized = _basic_github_id(_lower_each_character(title.strip()))
 
     count = seen[normalized]
     seen[normalized] += 1

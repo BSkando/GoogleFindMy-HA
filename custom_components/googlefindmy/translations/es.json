@@ -862,7 +862,7 @@
       "message": "El dispositivo {device_id} no se encontró o no pertenece a esta integración."
     },
     "no_active_entry": {
-      "message": "No hay ninguna entrada activa de Google Find My Device. Entradas activas: {active_count}/{total_count}. Activa una de las entradas configuradas ({entries}) o añade una cuenta nueva y vuelve a intentarlo."
+      "message": "No hay ninguna entrada activa de Google Find My Device. Entradas activas: {active_count}/{total_count}. Activa una de las entradas configuradas o añade una cuenta nueva y vuelve a intentarlo."
     },
     "locate_failed": {
       "message": "No se pudo localizar el dispositivo {device_id}: {error}"

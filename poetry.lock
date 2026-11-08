@@ -1564,11 +1564,11 @@ description = "Cross-platform colored terminal text."
 optional = false
 python-versions = "!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,>=2.7"
 groups = ["dev", "test"]
-markers = "os_name == \"nt\" or sys_platform == \"win32\" or platform_system == \"Windows\""
 files = [
     {file = "colorama-0.4.6-py2.py3-none-any.whl", hash = "sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6"},
     {file = "colorama-0.4.6.tar.gz", hash = "sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44"},
 ]
+markers = {dev = "platform_system == \"Windows\" or os_name == \"nt\" or sys_platform == \"win32\"", test = "os_name == \"nt\" or sys_platform == \"win32\" or platform_system == \"Windows\""}
 
 [[package]]
 name = "coverage"
@@ -6658,6 +6658,18 @@ files = [
 types-setuptools = "*"
 
 [[package]]
+name = "types-defusedxml"
+version = "0.7.0.20260504"
+description = "Typing stubs for defusedxml"
+optional = false
+python-versions = ">=3.10"
+groups = ["dev"]
+files = [
+    {file = "types_defusedxml-0.7.0.20260504-py3-none-any.whl", hash = "sha256:a959e3a0a43b93e464bd625d91ec9193a2703ddc10443bdd627792485fae0b10"},
+    {file = "types_defusedxml-0.7.0.20260504.tar.gz", hash = "sha256:2ab2828a3f97111ba1c16cee273ad4124a831fc9198c41bf8368ff6ea48ad300"},
+]
+
+[[package]]
 name = "types-html5lib"
 version = "1.1.11.20260518"
 description = "Typing stubs for html5lib"
@@ -7831,4 +7843,4 @@ ifaddr = ">=0.1.7"
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.14.2"
-content-hash = "78d636b4870a98c95c39e3bc5fa828856b7b929e2c7f651ce3b5b02d34ee4ecf"
+content-hash = "f140f62b596d023fd750d117ee19b199bc26ce85032e75cda3255e87f36424d4"

@@ -862,7 +862,7 @@
       "message": "L’appareil {device_id} est introuvable ou ne fait pas partie de cette intégration."
     },
     "no_active_entry": {
-      "message": "Aucune entrée Google Find My Device active n'est disponible. Entrées actives : {active_count}/{total_count}. Activez l'une des entrées configurées ({entries}) ou ajoutez un nouveau compte, puis réessayez."
+      "message": "Aucune entrée Google Find My Device active n'est disponible. Entrées actives : {active_count}/{total_count}. Activez l'une des entrées configurées ou ajoutez un nouveau compte, puis réessayez."
     },
     "locate_failed": {
       "message": "Échec de la localisation de l’appareil {device_id} : {error}"

@@ -1093,10 +1093,8 @@ async def async_register_services(hass: HomeAssistant, ctx: dict[str, Any]) -> N
 
             # Entry titles are usually the account e-mail, and Home Assistant
             # logs the fallback message of a failed call for every caller, so
-            # neither the placeholder nor the message names an entry. The
-            # placeholder stays because every translation uses it.
+            # neither the placeholders nor the message name an entry.
             placeholders = {
-                "entries": "\u2014",
                 "active_count": str(active_count),
                 "total_count": str(total_count),
             }

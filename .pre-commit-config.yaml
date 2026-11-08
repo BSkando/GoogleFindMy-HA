@@ -38,8 +38,8 @@ repos:
   - repo: https://github.com/PyCQA/bandit
     rev: 1.9.4
     hooks:
-      # Same command as the CI bandit job (`bandit -r custom_components -c
-      # pyproject.toml`): same tree, same configuration. Without
+      # Same command as the CI bandit job (`bandit -r custom_components script
+      # -c pyproject.toml`): same trees, same configuration. Without
       # `pass_filenames: false`, pre-commit appends every Python file of the
       # repository.
       - id: bandit
@@ -49,6 +49,7 @@ repos:
           - pyproject.toml
           - -r
           - custom_components
+          - script
         additional_dependencies:
           - bandit[toml]
 

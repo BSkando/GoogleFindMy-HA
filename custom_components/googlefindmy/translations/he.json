@@ -862,7 +862,7 @@
       "message": "ההתקן {device_id} לא נמצא או אינו חלק משילוב זה."
     },
     "no_active_entry": {
-      "message": "אין רשומת Google Find My Device פעילה זמינה. רשומות פעילות: {active_count}/{total_count}. יש להפעיל אחת מהרשומות המוגדרות ({entries}) או להוסיף חשבון חדש, ולנסות שוב."
+      "message": "אין רשומת Google Find My Device פעילה זמינה. רשומות פעילות: {active_count}/{total_count}. יש להפעיל אחת מהרשומות המוגדרות או להוסיף חשבון חדש, ולנסות שוב."
     },
     "locate_failed": {
       "message": "איתור ההתקן {device_id} נכשל: {error}"

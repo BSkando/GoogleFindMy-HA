@@ -81,6 +81,9 @@ jobs:
         # stamp cleanly. semantic-release cannot *propose* for those lines (see
         # release.yml Workflow A, which opens a hand-tag draft there instead); this
         # step stamps the exact published tag regardless. Keep both regexes in sync.
+        # The next step is narrower than this shape: it refuses a four-segment
+        # or `v`-prefixed version and any number not greater than every tag of
+        # this repository, which includes a release on an older maintenance line.
         run: |
           set -euo pipefail
           # Strip at most one leading `v` (POSIX ${VAR#v}); a no-op for v-less
@@ -93,6 +96,39 @@ jobs:
           fi
           echo "validated tag=$TAG_NAME version=$VERSION"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Check the version against the existing tags
+        # Refuses a version that is not X.Y.Z (no `v`, no fourth segment), not
+        # greater than every tag of this repository (so also a release on an
+        # older maintenance line), outside the fork's release line, or (upstream)
+        # a number the fork line already used. HACS compares 1.7.15.34 > 1.15.33
+        # as false, so such a release would never be offered.
+        # All of this runs only after the release is published: a refusal stops
+        # the stamp and the HACS ZIP, and the maintainer deletes the release and
+        # its tag. There is no switch for a deliberate exception; it needs a
+        # change of this step. Upstream, a failure to read the fork tags (network,
+        # missing or private fork, API error) only warns and skips that one
+        # comparison, so a read error never costs a release its ZIP; only a real
+        # collision stops the job. The fork line moves when both lines meet;
+        # change `--line` then.
+        run: |
+          set -euo pipefail
+          git tag --list > "$RUNNER_TEMP/tags.txt"
+          CHECK_ARGS=(--version "$VERSION" --tag "$TAG_NAME" --check-against-tags "$RUNNER_TEMP/tags.txt")
+          if [ "$GITHUB_REPOSITORY" = "jleinenbach/GoogleFindMy-HA" ]; then
+            CHECK_ARGS+=(--line 1.15)
+          else
+            if gh api --paginate repos/jleinenbach/GoogleFindMy-HA/tags --jq '.[].name' > "$RUNNER_TEMP/fork_tags.txt" 2> "$RUNNER_TEMP/fork_tags.err"; then
+              CHECK_ARGS+=(--reserved-tags "$RUNNER_TEMP/fork_tags.txt")
+            else
+              REASON="$(tr '\n' ' ' < "$RUNNER_TEMP/fork_tags.err" | cut -c1-200)"
+              echo "::warning::could not read the fork tags (${REASON//%/%25}); the check against numbers used by the fork is skipped"
+            fi
+          fi
+          if ! python script/stamp_version.py "${CHECK_ARGS[@]}"; then
+            echo "::error::version '$VERSION' fails the tag check above; delete the release and its tag '$TAG_NAME', then publish again with a valid number"
+            exit 1
+          fi
 
       - name: Stamp version into the three literals
         run: |

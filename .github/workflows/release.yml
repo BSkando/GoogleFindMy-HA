@@ -13,6 +13,14 @@ on:
   # The maintainer then edits the draft (tag and/or body) and publishes it. That
   # publish fires release-stamp.yml (Workflow B), which writes the exact chosen
   # tag into the three version literals. Nothing releases automatically.
+  #
+  # Workflow B first checks the published tag: it refuses a four-segment or
+  # `v`-prefixed version and any number not greater than every tag of the
+  # repository. A draft on an older X.Y maintenance line, or with a hand-picked
+  # four-segment tag, can still be opened here, but publishing it ends in a
+  # refused stamp and a release without googlefindmy.zip, which has to be
+  # deleted. There is no switch for a deliberate exception; it needs a change
+  # of that step in release-stamp.yml.
   workflow_dispatch:
     inputs:
       dry_run:
@@ -124,8 +132,10 @@ jobs:
           set -euo pipefail
 
           # --- Can semantic-release propose for THIS line? --------------------
-          # semantic-release only understands SemVer. This project's maintenance
-          # lines are tagged PEP 440 (beta `bN`, four-segment `.N`), which PSR
+          # semantic-release only understands SemVer. This project's older
+          # maintenance lines were tagged PEP 440 (beta `bN`, four-segment `.N`;
+          # release-stamp.yml now refuses a new four-segment tag and a release
+          # not greater than the newest tag), which PSR
           # silently skips -- so on those lines its "last release" view drifts
           # from the real newest tag and any proposal derives from a stale base.
           # Detect that branch-name-agnostically by comparing PSR's view with the

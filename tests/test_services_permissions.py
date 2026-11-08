@@ -428,9 +428,9 @@ async def test_no_active_entry_names_no_account(
 ) -> None:
     """Without an active entry, no caller learns the entry titles.
 
-    Entry titles are usually the account e-mail. The placeholder carries the
-    em dash for every caller, and the English fallback message, which Home
-    Assistant logs for every failed call, carries only the counts.
+    Entry titles are usually the account e-mail. The error passes only the two
+    counts, and the English fallback message, which Home Assistant logs for
+    every failed call, carries only the counts too.
     """
 
     from homeassistant.exceptions import ServiceValidationError
@@ -448,9 +448,7 @@ async def test_no_active_entry_names_no_account(
     err = excinfo.value
     assert err.translation_key == "no_active_entry"
     placeholders = dict(err.translation_placeholders or {})
-    assert placeholders["active_count"] == "1"
-    assert placeholders["total_count"] == "1"
-    assert placeholders["entries"] == "\u2014"
+    assert placeholders == {"active_count": "1", "total_count": "1"}
     assert all(title not in str(value) for value in placeholders.values())
     assert title not in str(err)
     assert title not in str(err.args)
@@ -832,3 +830,29 @@ async def test_maintenance_runs_for_admin_and_without_user(
     user_id = hass_admin_user.id if who == "admin" else None
     await _call(hass, service, {"mode": "migrate"}, user_id)
     assert count(service) >= 1
+
+
+async def test_no_active_entry_message_uses_only_the_counts_in_every_locale() -> None:
+    """Every locale renders ``no_active_entry`` from the two counts alone.
+
+    The entry list placeholder rendered as an empty pair of parentheses around
+    a dash once the titles were dropped; each locale now words the sentence
+    without it.
+    """
+
+    import json
+    import string
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / "custom_components" / DOMAIN
+    files = [root / "strings.json", *sorted((root / "translations").glob("*.json"))]
+    assert len(files) == 11
+    for path in files:
+        message = json.loads(path.read_text(encoding="utf-8"))["exceptions"][
+            "no_active_entry"
+        ]["message"]
+        fields = {name for _, name, _, _ in string.Formatter().parse(message) if name}
+        assert fields == {"active_count", "total_count"}, path.name
+        rendered = message.format(active_count="0", total_count="2")
+        assert "()" not in rendered and "(\u2014)" not in rendered, path.name
+        assert "  " not in rendered, path.name

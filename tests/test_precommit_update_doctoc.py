@@ -810,3 +810,81 @@ def test_slug_keeps_letters_outside_ascii() -> None:
     slug = update_doctoc._slugify("Grüße aus Köln", defaultdict(int))
 
     assert slug == "gr%C3%BC%C3%9Fe-aus-k%C3%B6ln"
+
+
+# Anchors measured with ``gh api markdown -f text='## <title>'`` on 2026-11-08
+# (the ``href`` of the permalink GitHub renders next to the heading).
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        ("a\u00a0b", "ab"),  # no-break space (Zs)
+        ("a\u2003b", "ab"),  # em space (Zs)
+        ("a\u2028b", "ab"),  # line separator (Zl)
+        ("a\u00adb", "ab"),  # soft hyphen (Cf)
+        ("x\u200bY", "xy"),  # zero width space (Cf)
+        ("a\u2060b", "ab"),  # word joiner (Cf)
+        ("a\ufeffb", "ab"),  # zero width no-break space (Cf)
+        ("a \u00a0b", "a-b"),  # only the plain space becomes a hyphen
+        ("a\u200db", "a%E2%80%8Db"),  # zero width joiner is kept by GitHub
+        ("a\u200cb", "a%E2%80%8Cb"),  # zero width non-joiner is kept by GitHub
+        ("a\tb", "ab"),  # tab (Cc)
+        ("a\x01b", "ab"),  # start of heading (Cc)
+        ("a\x7fb", "ab"),  # delete (Cc)
+        ("x\x85y", "xy"),  # next line (Cc)
+    ],
+)
+def test_slug_drops_separators_and_format_characters_like_github(
+    title: str, expected: str
+) -> None:
+    """White space other than the plain space and invisible format characters go.
+
+    GitHub keeps the two join controls (ZWJ, ZWNJ), which belong to ``\\w`` in
+    Unicode regular expressions; every other separator or format character
+    disappears from the anchor.
+    """
+
+    assert update_doctoc._slugify(title, defaultdict(int)) == expected
+
+
+def test_heading_of_symbols_only_gets_the_empty_anchor_github_renders() -> None:
+    """GitHub renders ``#`` for such a heading, then ``#-1``, ``#-2``.
+
+    The old fallback to ``title.lower()`` linked to an anchor that does not
+    exist, for example ``#%E2%98%85%E2%98%85``.
+    """
+
+    seen: dict[str, int] = defaultdict(int)
+
+    slugs = [update_doctoc._slugify(title, seen) for title in ("★★", "★", "→")]
+
+    assert slugs == ["", "-1", "-2"]
+
+
+def test_render_toc_links_a_symbol_heading_to_the_empty_anchor() -> None:
+    """The table of contents carries the same empty anchor as GitHub's permalink."""
+
+    toc = update_doctoc._render_toc([(2, "💡"), (2, "✅ Done")])
+
+    assert "- [💡](#)" in toc[4]
+    assert toc[5].endswith("(#-done)")
+
+
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        ("ÄÖÜ Straße", "%C3%A4%C3%B6%C3%BC-stra%C3%9Fe"),
+        ("ΣΑΣ", "%CF%83%CE%B1%CF%83"),  # no final-sigma rule, measured
+        ("Ǆ", "%C7%86"),
+    ],
+)
+def test_slug_lowercases_letters_outside_ascii_like_github(
+    title: str, expected: str
+) -> None:
+    """GitHub lowercases every letter, one character at a time.
+
+    Measured with ``gh api markdown``: ``## ÄÖÜ Straße`` links to
+    ``#äöü-straße`` and ``## ΣΑΣ`` to ``#σασ``; ``str.lower`` on the whole
+    title would apply the final-sigma rule and write ``ς`` instead.
+    """
+
+    assert update_doctoc._slugify(title, defaultdict(int)) == expected
