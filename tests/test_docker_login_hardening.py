@@ -1916,7 +1916,9 @@ def test_login_sh_never_reassigns_ifs() -> None:
 # ``declare IFS`` make it unset in that scope), a loop variable, and the
 # assigning expansions ``${IFS:=…}``/``${IFS=…}``. ``$IFS`` and ``${IFS…}``
 # read the variable and are not names here.
-_IFS_WORD = r"(?<![A-Za-z0-9_${])IFS(?![A-Za-z0-9_=])"
+# The name may be quoted (``read -r "IFS"``, ``printf -v 'IFS'``); the shell
+# removes the quotes before the builtin sees the name.
+_IFS_WORD = r"""(?:(?<![A-Za-z0-9_${'"])IFS|"IFS"|'IFS')(?![A-Za-z0-9_=])"""
 _IFS_NAME_FORMS = re.compile(
     r"|".join(
         (
@@ -1981,6 +1983,10 @@ def _ifs_reassignments(script: str) -> list[str]:
         ("declare IFS", True),
         ("for IFS in a b; do :; done", True),
         ("select IFS in a b; do :; done", True),
+        ('read -r "IFS" <<< :', True),
+        ("printf -v 'IFS' %s :", True),
+        ('unset "IFS"', True),
+        ('echo "IFS is fine"', False),
     ],
 )
 def test_ifs_reassignment_check_sees_every_form(line: str, flagged: bool) -> None:
