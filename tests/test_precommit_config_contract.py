@@ -16,7 +16,7 @@ dependency update raises one of the three tools, the same PR bumps the matching
 
 Further checks pin the configuration defects this file was written for: the
 legacy ``ruff`` hook id, which received ``check`` twice and read it as a file
-name, the same doubled ``check`` under the new ``ruff-check`` id, and
+name, a ``check`` element in the ``args`` of the new ``ruff-check`` id, and
 ``additional_dependencies`` entries such as ``.[dev]``, which a ``repo: local``
 hook cannot install because it has no project of its own. The ``mypy`` and
 ``pytest`` hooks therefore run from the project environment, and the ``mypy``
@@ -137,16 +137,16 @@ def test_no_legacy_ruff_hook_id() -> None:
 
 
 def ruff_check_doubled_subcommand(hooks: list[dict[str, Any]]) -> list[str]:
-    """Return the ``ruff-check`` hooks whose ``args`` start with ``check``.
+    """Return the ``ruff-check`` hooks whose ``args`` contain ``check``.
 
-    The ``ruff-check`` hook already runs ``ruff check``; a leading ``check`` in
+    The ``ruff-check`` hook already runs ``ruff check``; a ``check`` anywhere in
     ``args`` is passed on as a file name, exactly the defect of the legacy id.
     """
 
     return [
         str(hook["id"])
         for hook in hooks
-        if hook["id"] == "ruff-check" and list(hook.get("args", []))[:1] == ["check"]
+        if hook["id"] == "ruff-check" and "check" in list(hook.get("args", []))
     ]
 
 
@@ -180,7 +180,8 @@ def test_mypy_entry_runs_mypy() -> None:
     ("hook", "offending"),
     [
         ({"id": "ruff-check", "args": ["check", "--fix"]}, True),
-        ({"id": "ruff-check", "args": ["--fix", "check"]}, False),
+        ({"id": "ruff-check", "args": ["--fix", "check"]}, True),
+        ({"id": "ruff-check", "args": ["--select=check"]}, False),
         ({"id": "ruff-check"}, False),
         ({"id": "ruff-format", "args": ["check"]}, False),
     ],
@@ -188,7 +189,7 @@ def test_mypy_entry_runs_mypy() -> None:
 def test_ruff_check_arm_flags_a_leading_check(
     hook: dict[str, Any], offending: bool
 ) -> None:
-    """Self-test of the arm: only a leading ``check`` on ``ruff-check`` counts."""
+    """Self-test of the arm: a ``check`` element on ``ruff-check`` counts."""
 
     assert bool(ruff_check_doubled_subcommand([hook])) is offending
 
