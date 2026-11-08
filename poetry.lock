@@ -6658,6 +6658,18 @@ files = [
 types-setuptools = "*"
 
 [[package]]
+name = "types-defusedxml"
+version = "0.7.0.20260504"
+description = "Typing stubs for defusedxml"
+optional = false
+python-versions = ">=3.10"
+groups = ["dev"]
+files = [
+    {file = "types_defusedxml-0.7.0.20260504-py3-none-any.whl", hash = "sha256:a959e3a0a43b93e464bd625d91ec9193a2703ddc10443bdd627792485fae0b10"},
+    {file = "types_defusedxml-0.7.0.20260504.tar.gz", hash = "sha256:2ab2828a3f97111ba1c16cee273ad4124a831fc9198c41bf8368ff6ea48ad300"},
+]
+
+[[package]]
 name = "types-html5lib"
 version = "1.1.11.20260518"
 description = "Typing stubs for html5lib"
@@ -7831,4 +7843,4 @@ ifaddr = ">=0.1.7"
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.14.2"
-content-hash = "339e11baac82c8b131eb172be203a2c9b4e6f2cfe497b11f1ac5e182584ebf78"
+content-hash = "f140f62b596d023fd750d117ee19b199bc26ce85032e75cda3255e87f36424d4"
