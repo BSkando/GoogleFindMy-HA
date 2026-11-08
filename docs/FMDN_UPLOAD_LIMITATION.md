@@ -6,6 +6,8 @@
 
 This is not a bug or missing feature - it's a deliberate security measure by Google.
 
+The DroidGuard requirement is confirmed for **crowdsourced reports about other people's devices**. For **location reports about your own devices** a separate owner path exists (`SpotReportingService/UploadOwnerScans`, see [Owner location reports](#owner-location-reports-uploadownerscans-unverified)); whether Google accepts it from Home Assistant is **unmeasured**.
+
 ---
 
 ## Background
@@ -28,6 +30,44 @@ These report sightings of **other people's devices**:
 - Contribute sightings to the crowdsourced network
 
 **These are blocked** because they require DroidGuard attestation.
+
+---
+
+## Owner location reports (`UploadOwnerScans`, unverified)
+
+The two categories above leave out a third one: reporting the location of **your own** devices. The disabled finder sits exactly there, because it only reports a device whose recent sighting the EID resolver matched against one of the account's identity keys (`fmdn_finder/bermuda_listener.py`). It nevertheless builds and sends the report in a shape that matches neither the decrypt path of this integration nor the owner upload of the Spot client.
+
+### What is read, and what is not measured
+
+* **Read:** the source of the iOS client [leonboe1/Spot](https://github.com/leonboe1/Spot) at commit `55f87f62302fae24150188124e8e07d5285568d8` (GPL-3.0, by the GoogleFindMyTools maintainer). Only names, message structure and file positions are taken from it here, no code.
+* **Not measured:** whether Google accepts an owner report sent from a non-Android client. Spot shows the request, not its success, and its ordinary sighting uploads are disabled by default (`uploadInterval`, Spot `README.md`).
+* **Scope of the DroidGuard statement:** [Issue #19](https://github.com/leonboe1/GoogleFindMyTools/issues/19) is about finder reports. Spot never sets `UploadScansRequest.droidGuardResults` on the owner path, and `ProtoDecoders/DeviceUpdate.proto` already marks `UploadScansResponse` with the comment `Only for UploadScans, not UploadOwnerScans.` Whether the owner path needs attestation is untested; the 192 combinations listed below do not include `SpotReportingService`.
+
+### How Spot sends an owner report
+
+1. Service and method: `spot-pa.googleapis.com/google.internal.spot.v1.SpotReportingService/UploadOwnerScans` (Spot `SpotApiManager.swift`, the `isUpload` branch).
+2. Inner payload: a protobuf `Location` with latitude and longitude multiplied by 1e7 and the altitude (Spot `OwnerReportGenerator` in `UploadOwnerScans.swift`).
+3. Location encryption: AES-GCM with `SHA256(identity key)` (Spot `LocationCryptor.encryptSymmetric`), `isOwnReport = true`, no ephemeral public key.
+4. Identifier: `advertisement.identifier.canonicDeviceID`.
+5. Envelope: the whole `LocationReportsUpload` is encrypted with Google's service key (`GetServicePublicKey`, Spot `ServerPublicKeyEncryptor.swift`) and placed in `UploadScansRequest.reportsEncryptedWithServerKey`.
+6. Metadata: `clientMetadata.version.playServicesVersion` is set; there are no random fields.
+
+### Where the disabled finder code differs
+
+| # | Aspect | Spot owner path | This integration (`fmdn_finder/`) |
+|---|--------|-----------------|-----------------------------------|
+| 1 | Endpoint | `SpotReportingService/UploadOwnerScans` | `SpotService/UploadLocationReports` (`FMDN_UPLOAD_SERVICE`, `FMDN_UPLOAD_METHOD` in `google_uploader.py`) |
+| 2 | Inner payload | protobuf `Location` | text `"lat,lon"` (`gps_data` in `location_uploader.py`) |
+| 3 | Location encryption | AES-GCM with `SHA256(EIK)`, own report | ECDH against the EID, yet `isOwnReport=True` |
+| 4 | Identifier | `canonicDeviceID` | `truncatedEid` |
+| 5 | Envelope | `LocationReportsUpload` encrypted with the service key inside `UploadScansRequest` | serialized `LocationReportsUpload` sent as is, without `UploadScansRequest` |
+| 6 | Metadata | `clientMetadata.version.playServicesVersion` | `random1` and `random2`, no `clientMetadata` |
+
+Row 2 also breaks the read-back inside this integration: `NovaApi/ExecuteAction/LocateTracker/decrypt_locations.py` parses every decrypted location payload as `device_update_pb2.Location`, so a text payload fails there even if Google accepted the upload. A comment in the same file already describes the contradiction of row 3: this uploader stamps reports with `isOwnReport=True` while carrying a non-empty `publicKeyRandom`.
+
+### Rule for changes
+
+Do not fix single rows of the table. A partial fix (for example only the payload format) produces untested code on a path that may be the wrong one. Change the upload path only together with a live probe: one `UploadOwnerScans` call for one own device, then a fetch through the integration that returns an own report with the expected timestamp. The finder stays disabled (`FEATURE_FMDN_FINDER_ENABLED = False` in `const.py`) until then.
 
 ---
 
@@ -207,5 +247,6 @@ If someone successfully obtains DroidGuard attestation (e.g., through a companio
 | Query device locations | ✅ Works | Owner operation |
 | Decrypt location reports | ✅ Works | Owner operation |
 | Upload finder sightings | ❌ Blocked | Requires DroidGuard |
+| Upload own-device locations (`UploadOwnerScans`) | ❓ Unmeasured | Owner path read in Spot, not tested from HA |
 
 **The FMDN Finder upload is disabled by design. This is Google's security measure, not a bug in this integration.**
