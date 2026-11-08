@@ -462,18 +462,22 @@ class GoogleHomeFilter:
         # Not home → substitute coordinates (if zone active & known coordinates)
         if self._home_zone_passive:
             _LOGGER.warning(
-                "zone.home is passive; cannot substitute coordinates for %s (semantic %r)",
+                "zone.home is passive; cannot substitute coordinates for %s",
                 device_id,
-                location_name,
+            )
+            _LOGGER.debug(
+                "Google Home detection for %s was at %r", device_id, location_name
             )
             return False, None
 
         attrs = self.get_home_zone_attributes()
         if attrs:
             _LOGGER.info(
-                "Substituting Google Home detection for %s at %r with Home coordinates",
+                "Substituting Google Home detection for %s with Home coordinates",
                 device_id,
-                location_name,
+            )
+            _LOGGER.debug(
+                "Google Home detection for %s was at %r", device_id, location_name
             )
             self._update_spam_tracking(device_id)
             repl = {"latitude": attrs["latitude"], "longitude": attrs["longitude"]}

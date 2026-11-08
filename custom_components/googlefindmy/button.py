@@ -29,7 +29,11 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from homeassistant.components.button import ButtonEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ServiceValidationError, Unauthorized
+from homeassistant.exceptions import (
+    ServiceValidationError,
+    Unauthorized,
+    UnknownUser,
+)
 from homeassistant.helpers import entity_platform
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
@@ -39,6 +43,8 @@ from homeassistant.helpers.restore_state import RestoreEntity as HARestoreEntity
 from homeassistant.util import dt as dt_util
 
 if TYPE_CHECKING:
+    from homeassistant.core import Context
+
     from .ha_typing import RestoreEntity as RestoreEntityType
 else:
     RestoreEntityType = HARestoreEntity
@@ -153,6 +159,7 @@ RESET_STATISTICS_DESCRIPTION = ButtonEntityDescription(
     key="reset_statistics",
     translation_key="reset_statistics",
     icon="mdi:restart",
+    entity_category=EntityCategory.CONFIG,
 )
 
 # Entity description for regenerating FCM token
@@ -816,10 +823,34 @@ async def async_setup_entry(
         )
 
 
+async def _async_require_admin(hass: HomeAssistant, context: Context | None) -> None:
+    """Reject a maintenance button press by a user who is not an administrator.
+
+    Home Assistant offers no administrator check for entities, so this mirrors
+    the check of its admin action wrapper
+    (``homeassistant.helpers.service.async_register_admin_service``), which
+    already guards the maintenance actions of this integration: a press without
+    a user (automation, script) passes, an unknown user raises ``UnknownUser``,
+    and a user who is not an administrator raises ``Unauthorized``.
+    """
+
+    user_id = context.user_id if context is not None else None
+    if not user_id:
+        return
+    user = await hass.auth.async_get_user(user_id)
+    if user is None:
+        raise UnknownUser(context=context)
+    if not user.is_admin:
+        _LOGGER.warning(
+            "Rejected maintenance button press: caller is not an administrator"
+        )
+        raise Unauthorized(context=context)
+
+
 class GoogleFindMyStatsResetButton(GoogleFindMyEntity, ButtonEntity, RestoreEntityType):
     """Button to reset integration statistics counters."""
 
-    _attr_entity_description = RESET_STATISTICS_DESCRIPTION
+    entity_description = RESET_STATISTICS_DESCRIPTION
     _attr_has_entity_name = True
     _attr_icon = RESET_STATISTICS_DESCRIPTION.icon
     _attr_translation_key = RESET_STATISTICS_DESCRIPTION.translation_key
@@ -883,6 +914,11 @@ class GoogleFindMyStatsResetButton(GoogleFindMyEntity, ButtonEntity, RestoreEnti
 
     async def async_press(self) -> None:
         """Reset coordinator statistics and refresh listeners."""
+
+        # Maintenance is for administrators, as for the maintenance actions.
+        # Home Assistant records the press timestamp before calling this
+        # method, so the button state changes even when the press is rejected.
+        await _async_require_admin(self.hass, self._context)
 
         hass = self.coordinator.hass
         # Counters, tally claims and the generation marker in one call: they are
@@ -1454,7 +1490,7 @@ class GoogleFindMyRegenerateFcmTokenButton(GoogleFindMyTokenRefreshButtonBase):
     obtains fresh GCM + FCM registration tokens via re-registration.
     """
 
-    _attr_entity_description = REGENERATE_FCM_TOKEN_DESCRIPTION
+    entity_description = REGENERATE_FCM_TOKEN_DESCRIPTION
     _attr_icon = REGENERATE_FCM_TOKEN_DESCRIPTION.icon
     _attr_translation_key = REGENERATE_FCM_TOKEN_DESCRIPTION.translation_key
     _token_type = "FCM"
@@ -1482,6 +1518,10 @@ class GoogleFindMyRegenerateFcmTokenButton(GoogleFindMyTokenRefreshButtonBase):
 
     async def async_press(self) -> None:
         """Handle the button press to regenerate FCM token."""
+        # Maintenance is for administrators, as for the maintenance actions.
+        # Home Assistant records the press timestamp before calling this
+        # method, so the button state changes even when the press is rejected.
+        await _async_require_admin(self.hass, self._context)
         from .Auth.token_refresh import async_regenerate_fcm_token
 
         # Fall back to "default", matching ``available``/``extra_state_attributes``
@@ -1534,7 +1574,7 @@ class GoogleFindMyRegenerateAdmTokenButton(GoogleFindMyTokenRefreshButtonBase):
     otherwise it will trigger AAS regeneration as well.
     """
 
-    _attr_entity_description = REGENERATE_ADM_TOKEN_DESCRIPTION
+    entity_description = REGENERATE_ADM_TOKEN_DESCRIPTION
     _attr_icon = REGENERATE_ADM_TOKEN_DESCRIPTION.icon
     _attr_translation_key = REGENERATE_ADM_TOKEN_DESCRIPTION.translation_key
     _token_type = "ADM"
@@ -1562,6 +1602,10 @@ class GoogleFindMyRegenerateAdmTokenButton(GoogleFindMyTokenRefreshButtonBase):
 
     async def async_press(self) -> None:
         """Handle the button press to regenerate ADM token."""
+        # Maintenance is for administrators, as for the maintenance actions.
+        # Home Assistant records the press timestamp before calling this
+        # method, so the button state changes even when the press is rejected.
+        await _async_require_admin(self.hass, self._context)
         from .Auth.token_refresh import async_regenerate_adm_token
 
         # Fall back to "default", matching ``available`` above. This value is the

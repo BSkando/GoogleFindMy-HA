@@ -279,10 +279,14 @@ def _add_device(
 
 
 async def _build_world(
-    hass: HomeAssistant, services: ModuleType, *, second_account: bool = False
+    hass: HomeAssistant,
+    services: ModuleType,
+    *,
+    second_account: bool = False,
+    title: str = "Account",
 ) -> _World:
     common = sys.modules["pytest_homeassistant_custom_component.common"]
-    entry = common.MockConfigEntry(domain=DOMAIN, entry_id="entry1", title="Account")
+    entry = common.MockConfigEntry(domain=DOMAIN, entry_id="entry1", title=title)
     entry.add_to_hass(hass)
     canon1 = _add_device(hass, entry, "CANON1", enabled=2, disabled=1, foreign=1)
     canon2 = _add_device(hass, entry, "CANON2", enabled=1)
@@ -411,6 +415,45 @@ async def test_unknown_user_raises_unknown_user(
         await _call(
             hass, "locate_device", {"device_id": world.canon1.device_id}, "gone"
         )
+    assert world.coordinator.async_locate_device.await_count == 0
+
+
+@pytest.mark.parametrize("who", ["user", "admin", "none"])
+async def test_no_active_entry_names_no_account(
+    hass: HomeAssistant,
+    services_module: ModuleType,
+    hass_admin_user: Any,
+    hass_user: Any,
+    who: str,
+) -> None:
+    """Without an active entry, no caller learns the entry titles.
+
+    Entry titles are usually the account e-mail. The placeholder carries the
+    em dash for every caller, and the English fallback message, which Home
+    Assistant logs for every failed call, carries only the counts.
+    """
+
+    from homeassistant.exceptions import ServiceValidationError
+
+    title = "owner@example.com"
+    world = await _build_world(hass, services_module, title=title)
+    hass.data[DOMAIN]["entries"].clear()
+    user_id = {"user": hass_user.id, "admin": hass_admin_user.id, "none": None}[who]
+
+    with pytest.raises(ServiceValidationError) as excinfo:
+        await _call(
+            hass, "locate_device", {"device_id": world.canon1.device_id}, user_id
+        )
+
+    err = excinfo.value
+    assert err.translation_key == "no_active_entry"
+    placeholders = dict(err.translation_placeholders or {})
+    assert placeholders["active_count"] == "1"
+    assert placeholders["total_count"] == "1"
+    assert placeholders["entries"] == "\u2014"
+    assert all(title not in str(value) for value in placeholders.values())
+    assert title not in str(err)
+    assert title not in str(err.args)
     assert world.coordinator.async_locate_device.await_count == 0
 
 

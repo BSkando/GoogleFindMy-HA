@@ -1090,22 +1090,19 @@ async def async_register_services(hass: HomeAssistant, ctx: dict[str, Any]) -> N
                     active_count = sum(
                         1 for entry in configured_entries if is_active(entry)
                     )
-                entry_titles = [
-                    entry.title or entry.entry_id for entry in configured_entries
-                ]
-                entries_placeholder = ", ".join(entry_titles) or "—"
-            else:
-                entries_placeholder = "—"
 
+            # Entry titles are usually the account e-mail, and Home Assistant
+            # logs the fallback message of a failed call for every caller, so
+            # neither the placeholder nor the message names an entry. The
+            # placeholder stays because every translation uses it.
             placeholders = {
-                "entries": entries_placeholder,
+                "entries": "\u2014",
                 "active_count": str(active_count),
                 "total_count": str(total_count),
             }
             raise _service_validation_error(
-                (
-                    "No active Google Find My entries (active {active_count}/{total_count};"
-                    " entries: {entries}).".format(**placeholders)
+                "No active Google Find My entries (active {active_count}/{total_count}).".format(
+                    **placeholders
                 ),
                 translation_key="no_active_entry",
                 translation_placeholders=placeholders,

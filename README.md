@@ -352,6 +352,13 @@ starts directly carries that user's context and is checked like a direct call.
   call.
 - **Maintenance actions** (`refresh_device_urls`, `rebuild_device_registry`,
   `rebuild_registry`) are for administrators only.
+- **Maintenance buttons** (Reset statistics, Regenerate FCM token, Regenerate ADM token)
+  are for administrators only when a user presses them; automations and scripts without
+  a user are not affected. Other users get an "Unauthorized" error and nothing is reset
+  or regenerated, although the "last pressed" time still changes. The three buttons are
+  configuration entities: they are listed under "Configuration" on the device page and
+  are not targets of actions aimed at a whole device or area. Existing installations
+  move them there on the next restart of Home Assistant.
 - **The rejection is the same** whether the device is unknown or the permission is
   missing, and it names neither the device nor an entity.
 - **Buttons** forward the user who pressed them. A user with control permission on the

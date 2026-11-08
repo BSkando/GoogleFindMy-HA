@@ -82,6 +82,7 @@ Add similar guards whenever a new optional attribute becomes relevant so future 
 ## Service validation fallbacks
 
 * When raising `ServiceValidationError`, always include both the translation metadata (`translation_domain`, `translation_key`, and `translation_placeholders`) **and** a sanitized `message` that reuses the same placeholders. This keeps UI translations working while ensuring Home Assistant surfaces a readable fallback when translations are unavailable.
+* The fallback message reuses the placeholders except values that may carry an account e-mail (entry titles): Home Assistant logs `str(err)` for every caller of a failed action. Such a value stays out of the placeholders as well, because every caller with access to the action sees them; `no_active_entry` therefore passes the em dash as `entries` and names only the counts.
 
 ### Fallback verification checklist
 
@@ -95,6 +96,7 @@ Add similar guards whenever a new optional attribute becomes relevant so future 
 * Do not add an `await` that yields to the event loop between that check and the coordinator call: the check and `_resolve_runtime_for_device_id` must see the same registry state. `TestNoSuspensionBetweenCheckAndDispatch` in `tests/test_services_handler_contracts.py` enforces this.
 * Maintenance actions register through `homeassistant.helpers.service.async_register_admin_service` with an explicit schema; its default schema rejects every field. Field validation stays in the handlers.
 * Rejections log only the action name and never a device name, entity ID or user ID.
+* The three maintenance buttons (Reset statistics, Regenerate FCM token, Regenerate ADM token) are administrator-only like the maintenance actions: their `async_press` calls `_async_require_admin` in `button.py` as its first statement, before any import, cooldown check or effect. It mirrors the check of `async_register_admin_service` (no user passes, unknown user raises `UnknownUser`, non-admin raises `Unauthorized`), because Home Assistant has no administrator check for entities. A new maintenance button does the same. They set `entity_description`, not `_attr_entity_description`, which Home Assistant never reads, so their `CONFIG` category takes effect. Tests: `tests/test_button_maintenance_permissions.py` (for example `test_non_admin_press_is_rejected_before_any_effect` and `test_maintenance_buttons_category_and_default`).
 * Viewing the map is a read operation and is not covered by this rule.
 * Tests: `tests/test_services_permissions.py` (real Home Assistant modules, for example `test_read_only_user_is_rejected` and `test_same_tracker_in_two_accounts`).
 

@@ -1224,16 +1224,19 @@ class TestLoggingNeverLeaksAccountAddresses:
     considered handled only when a *masking* helper wraps it; any other call
     around it is treated as still leaking.
 
-    Scope is the modules this feature owns. Older subsystems (`NovaApi`,
-    `SpotApi`, `Auth`) carry the same class of leak and are deliberately NOT
-    silently included here: widening the rule without fixing them would only
-    produce a red suite, and fixing them belongs in its own change.
+    Scope is the modules this feature owns, plus the owner-key lookup in
+    `SpotApi/GetEidInfoForE2eeDevices/get_owner_key.py`, which logs the account
+    on every key retrieval. Older subsystems (`NovaApi`, the rest of `SpotApi`,
+    `Auth`) carry the same class of leak and are deliberately NOT silently
+    included here: widening the rule without fixing them would only produce a
+    red suite, and fixing them belongs in its own change.
     """
 
     _MODULES = (
         "config_flow.py",
         "__init__.py",
         "discovery.py",
+        "SpotApi/GetEidInfoForE2eeDevices/get_owner_key.py",
     )
     _EMAIL_NAMES = frozenset(
         {
