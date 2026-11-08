@@ -372,7 +372,7 @@ jobs:
       # cached artefact is a complete virtualenv, so an interpreter-agnostic
       # prefix can restore a 3.13 `.venv` built before the lock moved to
       # `^3.14.2`; Poetry then adopts that interpreter as the project
-      # environment and `poetry install` refuses it, taking all four lint jobs
+      # environment and `poetry install` refuses it, taking all five lint jobs
       # down before they run. The `test` job already keys this way.
       - name: Cache Poetry dependencies
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

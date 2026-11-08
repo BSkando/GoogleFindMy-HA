@@ -15,10 +15,15 @@ The two gate jobs stay without a limit: ``approval_gate`` waits for a human
 approval, and ``tests/test_ci_approval_gate.py`` pins the exact key sets of
 ``approval_gate`` and ``ci-success``.
 
-Where the maximum durations come from (``MAX_JOB_SECONDS``): 30 successful runs
-of the CI workflow on the fork, run ids 38914060261 to 39936583884
-(2026-10-16 to 2026-10-23), job duration from ``startedAt`` to ``completedAt``
-in ``gh run view <id> --json jobs``. For ``test`` the larger of the two
+Where the maximum durations come from (``MAX_JOB_SECONDS``): the larger value of
+two windows of successful runs of the CI workflow on the fork, 30 runs with ids
+38914060261 to 39936583884 (2026-10-16 to 2026-10-23) and 12 runs with ids
+42233715176 to 42474366885 (2026-11-06 to 2026-11-08), job duration from
+``startedAt`` to ``completedAt`` in ``gh run view <id> --json jobs``. The test
+legs grew from 646 s to 881 s (run 42280905514, ``Test (Python 3.14)``) and
+880 s (run 42362012960); twice that, rounded up, is exactly the 30 minute
+ceiling, so a further increase needs a decision about the ceiling or the
+duration. For ``test`` the larger of the two
 ``Test (Python ...)`` matrix legs is used, for ``test_legacy_python`` the
 larger of its legs. The ``lint`` value is provisional: the ``pre-commit``
 matrix entry is new, and 200 s is a local cold run of it (installing the hook
@@ -50,8 +55,8 @@ MAX_JOB_SECONDS = {
     "translations": 14,
     "vendored_assets": 11,
     "lint": 200,
-    "test": 625,
-    "test_legacy_python": 646,
+    "test": 881,
+    "test_legacy_python": 880,
 }
 MAX_APT_STEP_SECONDS = 40
 JOB_LIMIT_CEILING_MINUTES = 30

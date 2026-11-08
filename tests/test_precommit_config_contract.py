@@ -155,14 +155,18 @@ def test_environment_hooks_use_the_project_environment(hook_id: str) -> None:
 
 
 def test_bandit_hook_scans_the_ci_tree_only() -> None:
-    """The hook passes ``-r custom_components`` like the CI job.
+    """The hook runs the CI job's command: same tree, same configuration.
 
     With file names appended, bandit also scanned ``script/`` and reported
-    findings the CI job never sees.
+    findings the CI job never sees. With a configuration file of its own, the
+    hook skipped other directories and tests than the CI job does.
     """
 
     matches = [hook for hook in _hooks() if hook["id"] == "bandit"]
 
     assert len(matches) == 1
     assert matches[0].get("pass_filenames") is False
-    assert "custom_components" in matches[0]["args"]
+    assert matches[0]["args"] == ["-c", "pyproject.toml", "-r", "custom_components"], (
+        "Keep the bandit hook arguments equal to the CI bandit job in "
+        ".github/workflows/ci.yml (bandit -r custom_components -c pyproject.toml)."
+    )

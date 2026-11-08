@@ -15,8 +15,10 @@ repos:
     rev: v2.4.3
     hooks:
       - id: codespell
-        # Same scope as the `skip` in pyproject.toml, which codespell does not
-        # apply to file names passed on the command line.
+        # Excludes what the `skip` in pyproject.toml lists as directories:
+        # codespell matches `skip` against each file name passed on the command
+        # line, so file patterns such as `*.lock` still apply, but a bare
+        # directory name does not.
         exclude: ^(custom_components/googlefindmy/(translations|vendor/leaflet)/|tests/fixtures/)
 
   - repo: local
@@ -36,14 +38,15 @@ repos:
   - repo: https://github.com/PyCQA/bandit
     rev: 1.9.4
     hooks:
-      # Scan the same tree as the CI bandit job (`-r custom_components`);
-      # without this, pre-commit appends every Python file of the repository.
+      # Same command as the CI bandit job (`bandit -r custom_components -c
+      # pyproject.toml`): same tree, same configuration. Without
+      # `pass_filenames: false`, pre-commit appends every Python file of the
+      # repository.
       - id: bandit
         pass_filenames: false
         args:
-          - -ll
           - -c
-          - bandit.yaml
+          - pyproject.toml
           - -r
           - custom_components
         additional_dependencies:

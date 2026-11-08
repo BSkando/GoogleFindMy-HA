@@ -561,7 +561,7 @@ Prefer the executable name when it is available; fall back to the module form wh
 
 > **Local run (VERIFY)**
 > **Offline mode:**
-> – pre-commit run --all-files *(mandatory)*
+> – pre-commit run --all-files *(mandatory; run it from the project environment, e.g. `poetry run pre-commit run --all-files`, because the mypy and pytest hooks use the installed tools)*
 > – ruff format --check *(mandatory; capture the outcome in the "Testing" section)*
 > – ruff check . *(mandatory; you may run `ruff check --fix` beforehand, but finish with a non-fixing run and document the result)*
 > – mypy --strict --explicit-package-bases custom_components/googlefindmy tests *(mandatory for Python changes; capture the outcome)*

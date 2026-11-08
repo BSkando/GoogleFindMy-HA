@@ -805,7 +805,7 @@ def test_slug_keeps_hyphen_and_underscore_and_drops_ascii_punctuation() -> None:
 
 
 def test_slug_keeps_letters_outside_ascii() -> None:
-    """Letters are kept, whatever the script; only marks and symbols go."""
+    """Letters are kept, whatever the script; only punctuation and symbols go."""
 
     slug = update_doctoc._slugify("Grüße aus Köln", defaultdict(int))
 
