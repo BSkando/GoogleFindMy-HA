@@ -8,14 +8,16 @@ falls back to the English text again. The checks run on the syntax tree of
 every module under ``custom_components/googlefindmy``:
 
 (a) coverage: each ``UpdateFailed(...)`` call passes a message text (not a
-    starred argument, not an empty string), and ``translation_domain`` as the
+    starred argument, not an empty string or ``f""``), and ``translation_domain`` as the
     name ``DOMAIN`` and a ``translation_key`` (without a text, ``str()`` is
     built from the key, which is the bare key while no translations are
     cached). No module may hide a raise from this scan: an import under an
     alias, a subclass, ``getattr(…, "UpdateFailed")``, a subscript with the
     key ``"UpdateFailed"`` (``uc.__dict__[…]``, ``vars(uc)[…]``), keywords
     passed through a ``**`` mapping, ``type(err)(…)`` or ``err.__class__(…)``
-    inside an ``except`` clause that catches the class as ``err``, or any use
+    inside an ``except`` clause that catches the class as ``err`` (also
+    through a module tuple holding it, and also after ``cls = type(err)`` in
+    that clause), or any use
     of the class as a value (``UF = UpdateFailed``,
     ``functools.partial(UpdateFailed)``, a bare ``raise UpdateFailed``, a
     ``:=`` inside an annotation) fails. Allowed positions are the called
@@ -41,7 +43,8 @@ every module under ``custom_components/googlefindmy``:
 
 Not seen: ``getattr`` or a subscript with a computed name; ``type(x)(…)`` and
 ``x.__class__(…)`` outside a handler that binds ``x`` to the class (they would
-hit unrelated code such as ``type(message)()``); a module tuple re-exported
+hit unrelated code such as ``type(message)()``), or on a copy of the bound name
+(``other = err``); a module tuple re-exported
 under another name or held in a class or function scope (reported, not
 allowed); code built at run time (``eval``, ``exec``); a placeholder value
 whose word is glued to another (``devname``, ``username``) or that reaches the
@@ -211,12 +214,37 @@ def _tuple_used_as_type_only(
     return True
 
 
-def _caught_names(handler: ast.ExceptHandler) -> bool:
+def _caught_names(handler: ast.ExceptHandler, tuples: frozenset[str]) -> bool:
+    """The handler catches the class, directly or through a module tuple."""
+
     node = handler.type
     if node is None:
         return False
     elts = node.elts if isinstance(node, ast.Tuple) else [node]
-    return any(_names_the_class(elt) for elt in elts)
+    return any(
+        _names_the_class(elt) or (isinstance(elt, ast.Name) and elt.id in tuples)
+        for elt in elts
+    )
+
+
+def _class_aliases(body: list[ast.stmt], caught: str) -> set[str]:
+    """Names a handler body binds to ``type(err)`` or ``err.__class__``."""
+
+    aliases: set[str] = set()
+    for stmt in body:
+        for sub in ast.walk(stmt):
+            if isinstance(sub, ast.Assign) and _recreates_caught(sub.value, caught):
+                aliases.update(
+                    target.id for target in sub.targets if isinstance(target, ast.Name)
+                )
+            elif (
+                isinstance(sub, ast.AnnAssign)
+                and sub.value is not None
+                and isinstance(sub.target, ast.Name)
+                and _recreates_caught(sub.value, caught)
+            ):
+                aliases.add(sub.target.id)
+    return aliases
 
 
 def _recreates_caught(func: ast.expr, caught: str) -> bool:
@@ -246,6 +274,11 @@ def _has_text(node: ast.Call) -> bool:
     first = node.args[0]
     if isinstance(first, ast.Starred):
         return False
+    if isinstance(first, ast.JoinedStr):
+        # ``f""`` and an f-string of empty literal parts render nothing.
+        return not all(
+            isinstance(part, ast.Constant) and part.value == "" for part in first.values
+        )
     return not (isinstance(first, ast.Constant) and first.value == "")
 
 
@@ -253,6 +286,9 @@ def _scan(sources: dict[str, str]) -> _Scan:
     scan = _Scan()
     trees = {path: ast.parse(source) for path, source in sorted(sources.items())}
     allowed = {path: _allowed_positions(tree) for path, tree in trees.items()}
+    tuple_names = frozenset(
+        name for tree in trees.values() for name in _module_tuples(tree)
+    )
     for path, tree in trees.items():
         for name, value in _module_tuples(tree).items():
             if _tuple_used_as_type_only(name, trees, allowed):
@@ -263,15 +299,19 @@ def _scan(sources: dict[str, str]) -> _Scan:
             if (
                 isinstance(node, ast.ExceptHandler)
                 and node.name
-                and _caught_names(node)
+                and _caught_names(node, tuple_names)
             ):
+                aliases = _class_aliases(node.body, node.name)
                 scan.hidden += [
                     f"{path}:{sub.lineno} re-creates the caught UpdateFailed "
                     f"through {ast.unparse(sub.func)}"
                     for stmt in node.body
                     for sub in ast.walk(stmt)
                     if isinstance(sub, ast.Call)
-                    and _recreates_caught(sub.func, node.name)
+                    and (
+                        _recreates_caught(sub.func, node.name)
+                        or (isinstance(sub.func, ast.Name) and sub.func.id in aliases)
+                    )
                 ]
             if isinstance(node, ast.ImportFrom):
                 scan.hidden += [
@@ -630,6 +670,21 @@ _REPORTED_FORMS = {
         'x: (UF := UpdateFailed) = None\nraise UF("x")',
         "as a value",
     ),
+    "type_of_caught_through_module_tuple": (
+        "_RETRY = (UpdateFailed, TimeoutError)\n"
+        'try:\n    pass\nexcept _RETRY as err:\n    raise type(err)("x")',
+        "re-creates",
+    ),
+    "class_of_caught_through_annotated_tuple": (
+        "_R: tuple[type[Exception], ...] = (UpdateFailed,)\n"
+        'try:\n    pass\nexcept _R as e:\n    raise e.__class__("x")',
+        "re-creates",
+    ),
+    "type_of_caught_bound_first": (
+        'try:\n    pass\nexcept UpdateFailed as err:\n    cls = type(err)\n    raise cls("x")',
+        "re-creates",
+    ),
+    "empty_fstring_text": (f'raise UpdateFailed(f"", {_KEYED})', "message text"),
     "module_tuple_indexed": (
         '_RETRY = (UpdateFailed, TimeoutError)\nraise _RETRY[0]("x")',
         "as a value",
