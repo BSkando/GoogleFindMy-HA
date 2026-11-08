@@ -98,10 +98,12 @@ def _summary_block(check: str, exit_codes: dict[str, str]) -> str:
         values[f"steps.{step_id}.outputs.exit_code"] = exit_codes.get(step_id, "")
     for expression in _EXPRESSIONS:
         run = run.replace("${{ " + expression + " }}", values[expression])
-    unknown = re.findall(r"\$\{\{.*?\}\}", run)
+    unknown = re.findall(r"\$\{\{.*?\}\}", run, flags=re.DOTALL)
     assert not unknown, (
         f"the summary uses expressions the test does not know: {unknown}"
     )
+    # Backstop for any opening the pattern above does not pair up.
+    assert "${{" not in run, "the summary contains an unpaired expression opening"
     return run
 
 
