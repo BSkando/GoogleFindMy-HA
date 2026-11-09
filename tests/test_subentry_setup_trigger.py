@@ -1085,16 +1085,22 @@ def _arm_global_timers(bucket: dict[str, Any]) -> dict[str, Mock]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("other_state", "released"),
-    [(ConfigEntryState.SETUP_RETRY, True), (ConfigEntryState.LOADED, False)],
+    ("other_state", "released", "spot_closed"),
+    [
+        (ConfigEntryState.SETUP_RETRY, True, True),
+        (ConfigEntryState.LOADED, False, False),
+        (ConfigEntryState.SETUP_IN_PROGRESS, True, False),
+    ],
 )
 async def test_parent_unload_releases_global_timers_and_spot_unless_other_loaded(
-    monkeypatch: pytest.MonkeyPatch, other_state: Any, released: bool
+    monkeypatch: pytest.MonkeyPatch, other_state: Any, released: bool, spot_closed: bool
 ) -> None:
     """Watchdog, URL timer and SPOT transport follow the LOADED predicate.
 
     An entry in SETUP_RETRY stays in the entries bucket, but Home Assistant
-    never unloads it, so it must not keep the global singletons alive.
+    never unloads it, so it must not keep the global singletons alive. An
+    entry still setting up may already use the lazy SPOT channel, so the
+    channel stays open for it (its setup end restores the other singletons).
     """
 
     parent_entry = FakeConfigEntry(entry_id="parent-entry")
@@ -1124,7 +1130,7 @@ async def test_parent_unload_releases_global_timers_and_spot_unless_other_loaded
         assert handle.call_count == (1 if released else 0), name
         assert (name in bucket) is (not released), name
     assert ("restart_check_registered" in bucket) is (not released)
-    assert spot_close.await_count == (1 if released else 0)
+    assert spot_close.await_count == (1 if spot_closed else 0)
 
 
 @pytest.mark.asyncio

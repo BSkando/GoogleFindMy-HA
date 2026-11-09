@@ -108,9 +108,20 @@ def _hass_with_entries(
 
     return SimpleNamespace(
         data={DOMAIN: bucket},
+        config=SimpleNamespace(components={"bluetooth"}),
         config_entries=SimpleNamespace(async_entries=_async_entries),
         async_create_task=asyncio.ensure_future,
     )
+
+
+def _bluetooth_hass(bucket: dict[str, Any]) -> SimpleNamespace:
+    """Build a hass double with the bluetooth integration loaded."""
+    return SimpleNamespace(
+        data={DOMAIN: bucket}, config=SimpleNamespace(components={"bluetooth"})
+    )
+
+
+_TIMER_FLAGS = {"restart_check_registered": True, "url_refresh_registered": True}
 
 
 # --------------------------------------------------------------------------- #
@@ -172,6 +183,24 @@ async def test_setup_replaces_a_handle_that_was_already_removed(
 
     assert fake_bluetooth.active == {2}
     assert bucket[DATA_BLE_SCANNER_UNSUB] is fake_bluetooth.handles[1]
+
+
+@pytest.mark.asyncio
+async def test_failed_replacement_keeps_the_old_callback(
+    fake_bluetooth: SimpleNamespace,
+) -> None:
+    """The old callback is removed only after the new one is registered."""
+    bucket: dict[str, Any] = {}
+    hass = SimpleNamespace(data={DOMAIN: bucket})
+    assert await async_setup_ble_scanner(hass) is True
+    fake_bluetooth.register.side_effect = RuntimeError("registration failed")
+
+    with pytest.raises(RuntimeError):
+        await async_setup_ble_scanner(hass)
+
+    assert fake_bluetooth.active == {1}
+    assert fake_bluetooth.handles[0].call_count == 0
+    assert bucket[DATA_BLE_SCANNER_UNSUB] is fake_bluetooth.handles[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -311,21 +340,46 @@ async def test_release_surfaces_unexpected_unsub_errors() -> None:
 
 
 @pytest.mark.asyncio
-async def test_setup_helper_skips_when_bluetooth_manager_is_not_ready(
-    monkeypatch: pytest.MonkeyPatch, fake_bluetooth: SimpleNamespace
+async def test_setup_helper_skips_when_bluetooth_is_not_loaded(
+    fake_bluetooth: SimpleNamespace,
 ) -> None:
-    """habluetooth raises RuntimeError before its manager is set; setup goes on."""
-    fake_bluetooth.register.side_effect = RuntimeError(
-        "BluetoothManager has not been set"
-    )
+    """Without the bluetooth integration no registration is attempted."""
     bucket: dict[str, Any] = {}
-    hass = SimpleNamespace(data={DOMAIN: bucket})
+    hass = SimpleNamespace(
+        data={DOMAIN: bucket}, config=SimpleNamespace(components=set())
+    )
 
     await gfm._async_setup_shared_ble_scanner(hass)
+
+    assert fake_bluetooth.register.call_count == 0
+    assert DATA_BLE_SCANNER_UNSUB not in bucket
+
+
+@pytest.mark.asyncio
+async def test_setup_helper_surfaces_runtime_errors_from_registration(
+    fake_bluetooth: SimpleNamespace,
+) -> None:
+    """With bluetooth loaded, a RuntimeError from the registration propagates."""
+    fake_bluetooth.register.side_effect = RuntimeError("unexpected")
+    bucket: dict[str, Any] = {}
+
+    with pytest.raises(RuntimeError):
+        await gfm._async_setup_shared_ble_scanner(_bluetooth_hass(bucket))
 
     assert DATA_BLE_SCANNER_UNSUB not in bucket
+
+
+@pytest.mark.asyncio
+async def test_setup_helper_without_scanner_module_goes_on(
+    monkeypatch: pytest.MonkeyPatch, fake_bluetooth: SimpleNamespace
+) -> None:
+    """A missing scanner module (ImportError) is the one optional fallback."""
     monkeypatch.setitem(sys.modules, _SCANNER_MODULE, None)  # import -> ImportError
-    await gfm._async_setup_shared_ble_scanner(hass)
+    bucket: dict[str, Any] = {}
+
+    await gfm._async_setup_shared_ble_scanner(_bluetooth_hass(bucket))
+
+    assert fake_bluetooth.register.call_count == 0
     assert DATA_BLE_SCANNER_UNSUB not in bucket
 
 
@@ -569,6 +623,7 @@ async def test_setup_restores_singletons_released_by_a_concurrent_unload(
 
     async def _rearm(hass: Any, bucket: Any) -> None:
         rearmed.append(bucket)
+        bucket.update(_TIMER_FLAGS)
 
     monkeypatch.setattr(gfm, "_async_ensure_restart_required_check", _rearm)
     bucket: dict[str, Any] = {}
@@ -607,8 +662,9 @@ async def test_setup_end_leaves_present_singletons_alone(
     bucket: dict[str, Any] = {
         DATA_EID_RESOLVER: resolver,
         DATA_BLE_SCANNER_UNSUB: unsub,
+        **_TIMER_FLAGS,
     }
-    hass = SimpleNamespace(data={DOMAIN: bucket})
+    hass = _bluetooth_hass(bucket)
 
     await gfm._async_restore_shared_singletons(hass, bucket)
 
@@ -649,3 +705,75 @@ async def test_setup_end_gives_up_after_bounded_restore_attempts(
     assert len(rounds) == gfm._SHARED_SINGLETON_RESTORE_ATTEMPTS
     assert DATA_EID_RESOLVER not in bucket
     assert "Shared BLE singletons still missing after restore attempts" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_setup_end_restores_a_missing_scanner_next_to_a_present_resolver(
+    monkeypatch: pytest.MonkeyPatch, fake_bluetooth: SimpleNamespace
+) -> None:
+    """Resolver present, BLE handle missing: only the scanner is registered.
+
+    A concurrent setup recreates the resolver before its first await; if its
+    refresh or scanner setup then fails, the resolver alone is no witness
+    that the callback exists.
+    """
+    resolver = Mock(spec=GoogleFindMyEIDResolver)
+    bucket: dict[str, Any] = {DATA_EID_RESOLVER: resolver, **_TIMER_FLAGS}
+
+    async def _unexpected(hass: Any, bucket: Any) -> None:
+        raise AssertionError("only the scanner was missing")
+
+    monkeypatch.setattr(gfm, "_async_ensure_shared_eid_resolver", _unexpected)
+    monkeypatch.setattr(gfm, "_async_ensure_restart_required_check", _unexpected)
+
+    await gfm._async_restore_shared_singletons(_bluetooth_hass(bucket), bucket)
+
+    assert fake_bluetooth.register.call_count == 1
+    assert bucket[DATA_BLE_SCANNER_UNSUB] is fake_bluetooth.handles[0]
+    assert bucket[DATA_EID_RESOLVER] is resolver
+
+
+@pytest.mark.asyncio
+async def test_setup_end_restores_in_the_last_round(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A restore that succeeds in the last allowed round logs no failure."""
+    rounds: list[object] = []
+
+    async def _kept_in_last_round(hass: Any, bucket: Any) -> None:
+        await asyncio.sleep(0)
+        rounds.append(bucket)
+        if len(rounds) == gfm._SHARED_SINGLETON_RESTORE_ATTEMPTS:
+            bucket[DATA_EID_RESOLVER] = Mock(spec=GoogleFindMyEIDResolver)
+        else:
+            bucket.pop(DATA_EID_RESOLVER, None)
+
+    monkeypatch.setattr(gfm, "_async_ensure_shared_eid_resolver", _kept_in_last_round)
+    caplog.set_level(logging.DEBUG, logger=gfm.__name__)
+    bucket: dict[str, Any] = dict(_TIMER_FLAGS)
+    hass = SimpleNamespace(data={DOMAIN: bucket})  # bluetooth not loaded
+
+    async with asyncio.timeout(2):
+        await gfm._async_restore_shared_singletons(hass, bucket)
+
+    assert len(rounds) == gfm._SHARED_SINGLETON_RESTORE_ATTEMPTS
+    assert isinstance(bucket[DATA_EID_RESOLVER], GoogleFindMyEIDResolver)
+    assert "still missing" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_missing_scanner_module_is_no_missing_singleton(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without the scanner module only resolver and timers are witnesses."""
+    monkeypatch.setitem(sys.modules, _SCANNER_MODULE, None)  # import -> ImportError
+    bucket: dict[str, Any] = {
+        DATA_EID_RESOLVER: Mock(spec=GoogleFindMyEIDResolver),
+        **_TIMER_FLAGS,
+    }
+
+    assert gfm._missing_shared_singletons(_bluetooth_hass(bucket), bucket) == set()
+    del bucket[DATA_EID_RESOLVER]
+    assert gfm._missing_shared_singletons(_bluetooth_hass(bucket), bucket) == {
+        "resolver"
+    }
