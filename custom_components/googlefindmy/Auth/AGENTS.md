@@ -61,7 +61,7 @@ The FCM supervisor uses a shared activity-health helper (freshness window + snap
 
 The supervisor in `fcm_receiver_ha.py` calls `FcmPushClient.stop()` before every restart and drops the client afterwards, so `stop()` must leave nothing running. Keep these guarantees when changing `firebase_messaging/fcmpushclient.py`:
 
-- When `stop()` returns, no task of the client is running, also when the listener already ended on its own (`STOPPING`/`STOPPED`), and also for a concurrent call: it waits for the `stop()` that holds `stopping_lock` instead of returning at once. A leftover heartbeat task keeps the whole client and its TLS connection alive (upstream #238).
+- When `stop()` returns, no task of the client is running, also when the listener already ended on its own (`STOPPING`/`STOPPED`), and also for a concurrent call: it waits for the `stop()` that holds `stopping_lock` instead of returning at once, then reaps whatever that call left running (it may have been cancelled midway). A leftover heartbeat task keeps the whole client and its TLS connection alive (upstream #238).
 - In that case `stop()` awaits the listener instead of cancelling it, for at most `writer_close_timeout + 1` seconds; after that it cancels the listener and awaits its end. Never `await` a cancelled task directly there: the `CancelledError` would escape `stop()`, and the supervisor only catches `Exception`.
 - Cancelling `stop()` itself does not cancel the listener (`asyncio.wait`, not `asyncio.gather`).
 - Every listener exit arm that ends the listener on its own (not cancellation), the generic `except Exception` arm included, sets `do_listen = False`.

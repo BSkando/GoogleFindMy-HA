@@ -1418,17 +1418,19 @@ class FcmPushClient[NotificationContextT]:  # pylint:disable=too-many-instance-a
         * When ``stop()`` returns, no task of this client is running, also when
           the listener already ended on its own (``STOPPING``/``STOPPED``) and
           left the heartbeat behind, and also for a concurrent call, which waits
-          for the running ``stop()`` to finish.
+          for the running ``stop()`` and then reaps whatever it left (it may
+          have been cancelled midway).
         * In that case the listener is awaited, not cancelled: ``stop()`` waits
           at most ``writer_close_timeout + 1`` seconds for it, then cancels it
           and awaits its end.
         * Cancelling ``stop()`` itself does not cancel the listener.
         """
         if self.stopping_lock.locked():
-            # A stop() in the regular path holds the lock and ends every task;
-            # wait until it is done so this caller gets the same guarantee.
+            # A stop() in the regular path holds the lock. Wait for it, then
+            # fall through: it leaves STOPPED behind, and if it was cancelled
+            # midway the early path below reaps the tasks it left running.
             async with self.stopping_lock:
-                return
+                pass
         if self.run_state in (
             FcmPushClientRunState.STOPPING,
             FcmPushClientRunState.STOPPED,

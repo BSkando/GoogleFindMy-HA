@@ -39,10 +39,11 @@ HANG_BOUND_S = 10.0
 class _Io:
     """I/O boundary stubs; the listener fails only when the test says so.
 
-    The listener task is created before the heartbeat task, so by the time a
-    waiter on ``receiving`` resumes, the heartbeat has entered its ``sleep``. Failing later,
-    via ``fail``, reproduces #238: the heartbeat is asleep when the listener
-    dies, so it cannot end by itself through ``do_listen``.
+    The listener task is created before the heartbeat task, so by the time
+    a waiter on ``receiving`` resumes, the heartbeat has entered its
+    ``sleep``. Failing later, via ``fail``, reproduces #238: the heartbeat
+    is asleep when the listener dies, so it cannot end by itself through
+    ``do_listen``.
     """
 
     def __init__(self, *, block_close: bool = False) -> None:
@@ -65,6 +66,10 @@ class _Io:
         raise RuntimeError("listener failure")
 
     async def close(self) -> None:
+        # Like the real ``_do_writer_close``: only the first call has a writer
+        # to close, later calls return at once.
+        if self.close_entered.is_set():
+            return
         self.close_entered.set()
         await self.close_release.wait()
 
@@ -244,6 +249,10 @@ async def test_concurrent_stop_returns_after_running_stop_finished() -> None:
             await io.receiving.wait()
             first = asyncio.create_task(pc.stop())
             await io.close_entered.wait()
+            assert pc.stopping_lock.locked()
+            # ``second`` is scheduled before ``first`` wakes up from the
+            # release (FIFO ready queue), so it finds the lock held. Keep the
+            # two lines in this order and without an ``await`` in between.
             second = asyncio.create_task(pc.stop())
             io.close_release.set()
             await asyncio.wait({second})
@@ -251,6 +260,37 @@ async def test_concurrent_stop_returns_after_running_stop_finished() -> None:
             assert heartbeat.done()
             assert first.done()
         assert second.exception() is None
+    finally:
+        io.close_release.set()
+        await _reap(listener, heartbeat, first, second)
+
+
+async def test_concurrent_stop_reaps_tasks_left_by_cancelled_stop() -> None:
+    """A waiting stop() still reaps the tasks when the running one is cancelled."""
+    io = _Io(block_close=True)
+    pc = _client(io, writer_close_timeout=0.05)
+    await pc.start()
+    listener = pc._listen_task
+    assert listener is not None
+    heartbeat = next(t for t in pc.tasks if t is not listener)
+    first: asyncio.Task[None] | None = None
+    second: asyncio.Task[None] | None = None
+    try:
+        async with asyncio.timeout(HANG_BOUND_S):
+            await io.receiving.wait()
+            first = asyncio.create_task(pc.stop())
+            await io.close_entered.wait()
+            assert pc.stopping_lock.locked()
+            # Same ordering as above: ``second`` runs before ``first`` handles
+            # its cancellation, so it waits for the lock.
+            second = asyncio.create_task(pc.stop())
+            first.cancel()
+            await asyncio.wait({second})
+            assert first.cancelled()
+            assert listener.done()
+            assert heartbeat.done()
+        assert second.exception() is None
+        assert pc.run_state is FcmPushClientRunState.STOPPED
     finally:
         io.close_release.set()
         await _reap(listener, heartbeat, first, second)
