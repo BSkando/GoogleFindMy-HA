@@ -274,14 +274,14 @@ async def test_async_purge_unloaded_subentry_registrations_removes_registries() 
 
     ent_reg.record_entity(
         "device_tracker.tracker_one",
-        platform="device_tracker",
+        platform=DOMAIN,
         unique_id="entity-1",
         config_entry_id=parent_entry_id,
         config_entry_subentry_id=config_subentry_id,
     )
     ent_reg.record_entity(
         "device_tracker.tracker_two",
-        platform="device_tracker",
+        platform=DOMAIN,
         unique_id="entity-2",
         config_entry_id=parent_entry_id,
         config_entry_subentry_id="other-subentry",
@@ -340,7 +340,7 @@ async def test_async_unload_subentry_purges_never_loaded_platforms() -> None:
 
     ent_reg.record_entity(
         "device_tracker.tracker_one",
-        platform="device_tracker",
+        platform=DOMAIN,
         unique_id="entity-1",
         config_entry_id=parent_entry_id,
         config_entry_subentry_id=config_subentry_id,

@@ -1407,14 +1407,11 @@ class RegistryOperations(_MixinBase):
             if not unique_id:
                 return None
 
-            try:
-                entity_id = ent_reg.async_get_entity_id(
-                    DEVICE_TRACKER_DOMAIN,
-                    DOMAIN,
-                    unique_id,
-                )
-            except TypeError:
-                entity_id = None
+            entity_id = ent_reg.async_get_entity_id(
+                DEVICE_TRACKER_DOMAIN,
+                DOMAIN,
+                unique_id,
+            )
 
             if not entity_id:
                 return None
@@ -1422,10 +1419,7 @@ class RegistryOperations(_MixinBase):
             entry: EntityRegistryEntry | None = None
             getter = getattr(ent_reg, "async_get", None)
             if callable(getter):
-                try:
-                    entry = getter(entity_id)
-                except TypeError:
-                    entry = None
+                entry = getter(entity_id)
 
             if entry is None and ent_registry_values:
                 for candidate in ent_registry_values:

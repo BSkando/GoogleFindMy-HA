@@ -32,6 +32,8 @@ class CloudDiscoveryRuntime:
 
 
 if TYPE_CHECKING:
+    from typing import Self
+
     from aiohttp import web
     from homeassistant.core import Context, HomeAssistant
 
@@ -125,10 +127,29 @@ if TYPE_CHECKING:
     class SensorEntity(_EntityBase):
         """Structural type for sensor platform entities."""
 
+        @property
+        def native_unit_of_measurement(self) -> str | None: ...
+
+    @dataclass
+    class SensorExtraStoredData:
+        """Structural type for the restore data of sensor entities."""
+
+        native_value: Any
+        native_unit_of_measurement: str | None
+
+        def as_dict(self) -> dict[str, Any]: ...
+
+        @classmethod
+        def from_dict(cls, restored: dict[str, Any]) -> Self | None: ...
+
     class RestoreSensor(SensorEntity):
         """Structural type for restore-capable sensors."""
 
         async def async_get_last_sensor_data(self) -> Any: ...
+
+        async def async_get_last_extra_data(self) -> Any: ...
+
+        async def async_get_last_state(self) -> Any: ...
 
     class TrackerEntity(_EntityBase):
         """Structural type for device_tracker entities."""
@@ -175,6 +196,7 @@ else:
     from homeassistant.components.sensor import (  # noqa: F401
         RestoreSensor,
         SensorEntity,
+        SensorExtraStoredData,
     )
     from homeassistant.helpers.restore_state import RestoreEntity  # noqa: F401
     from homeassistant.helpers.update_coordinator import (

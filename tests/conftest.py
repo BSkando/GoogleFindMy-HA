@@ -1953,6 +1953,7 @@ def _stub_homeassistant() -> None:
 
         __slots__ = (
             "entity_id",
+            "domain",
             "platform",
             "unique_id",
             "config_entry_id",
@@ -1971,6 +1972,9 @@ def _stub_homeassistant() -> None:
             config_entry_subentry_id: str | None,
         ) -> None:
             self.entity_id = entity_id
+            # Home Assistant derives the entity domain from the entity_id;
+            # ``platform`` names the integration that owns the entry.
+            self.domain = entity_id.split(".", 1)[0]
             self.platform = platform
             self.unique_id = unique_id
             self.config_entry_id = config_entry_id
@@ -1988,9 +1992,16 @@ def _stub_homeassistant() -> None:
         def async_get(self, entity_id: str) -> _StubEntityRegistryEntry | None:
             return self.entities.get(entity_id)
 
-        def async_get_entity_id(self, platform: str, unique_id: str) -> str | None:
+        def async_get_entity_id(
+            self, domain: str, platform: str, unique_id: str
+        ) -> str | None:
+            """Return the entity_id for ``(domain, platform, unique_id)`` like HA."""
             for entity_id, entry in self.entities.items():
-                if entry.platform == platform and entry.unique_id == unique_id:
+                if (
+                    entry.domain == domain
+                    and entry.platform == platform
+                    and entry.unique_id == unique_id
+                ):
                     return entity_id
             return None
 
@@ -2158,10 +2169,58 @@ def _stub_homeassistant() -> None:
     sensor_module = ModuleType("homeassistant.components.sensor")
 
     class SensorEntity(_entity_base()):  # pragma: no cover - stub
-        pass
+        @property
+        def native_unit_of_measurement(self) -> str | None:
+            """Mirror ``SensorEntity.native_unit_of_measurement`` from HA."""
+            if hasattr(self, "_attr_native_unit_of_measurement"):
+                return self._attr_native_unit_of_measurement
+            if hasattr(self, "entity_description"):
+                return getattr(
+                    self.entity_description, "native_unit_of_measurement", None
+                )
+            return None
+
+    @dataclass
+    class SensorExtraStoredData:  # pragma: no cover - stub
+        """Mirror ``SensorExtraStoredData`` (value and unit) from HA."""
+
+        native_value: Any
+        native_unit_of_measurement: str | None
+
+        def as_dict(self) -> dict[str, Any]:
+            return {
+                "native_value": self.native_value,
+                "native_unit_of_measurement": self.native_unit_of_measurement,
+            }
+
+        @classmethod
+        def from_dict(cls, restored: dict[str, Any]) -> Any:
+            try:
+                native_value = restored["native_value"]
+                native_unit_of_measurement = restored["native_unit_of_measurement"]
+            except KeyError:
+                return None
+            return cls(native_value, native_unit_of_measurement)
 
     class RestoreSensor(SensorEntity):  # pragma: no cover - stub
+        @property
+        def extra_restore_state_data(self) -> SensorExtraStoredData:
+            """Mirror ``RestoreSensor.extra_restore_state_data`` from HA."""
+            return SensorExtraStoredData(
+                self.native_value, self.native_unit_of_measurement
+            )
+
         async def async_get_last_sensor_data(self):
+            """Derive value and unit from the extra data, as HA does."""
+            extra = await self.async_get_last_extra_data()
+            if extra is None:
+                return None
+            return SensorExtraStoredData.from_dict(extra.as_dict())
+
+        async def async_get_last_extra_data(self):
+            return None
+
+        async def async_get_last_state(self):
             return None
 
     class SensorEntityDescription:  # pragma: no cover - stub
@@ -2180,6 +2239,7 @@ def _stub_homeassistant() -> None:
 
     sensor_module.SensorEntity = SensorEntity
     sensor_module.RestoreSensor = RestoreSensor
+    sensor_module.SensorExtraStoredData = SensorExtraStoredData
     sensor_module.SensorEntityDescription = SensorEntityDescription
     sensor_module.SensorDeviceClass = SensorDeviceClass
     sensor_module.SensorStateClass = SensorStateClass
