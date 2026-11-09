@@ -29,6 +29,7 @@ import pytest
 from homeassistant.config_entries import ConfigSubentry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from custom_components.googlefindmy import binary_sensor
 from custom_components.googlefindmy.const import (
@@ -551,3 +552,36 @@ async def test_entry_without_subentries_uses_default_tracker_key(
     await harness.setup()
 
     assert len(harness.uwt()) == 1
+
+
+@pytest.mark.asyncio
+async def test_unknown_subentry_id_falls_back_to_first_tracker_key(
+    stub_coordinator_factory: Any,
+) -> None:
+    """A signal with an id the entry does not know reads the first tracker key."""
+    seen_keys: list[str | None] = []
+    devices = {TRACKER_KEY: [{"id": DEV_ID, "name": "Tag"}]}
+
+    def _snapshot(key: str | None, _feature: str | None) -> list[dict[str, Any]]:
+        seen_keys.append(key)
+        return devices.get(key or "", [])
+
+    harness = _Harness(
+        stub_coordinator_factory, devices_by_key=devices, resolver=_ResolverStub()
+    )
+    harness.coordinator._snapshot_callback = _snapshot
+    harness.register(
+        "binary_sensor.tag_uwt_mode",
+        _uwt_uid(TRACKER_SUBENTRY_ID, DEV_ID),
+        TRACKER_SUBENTRY_ID,
+    )
+    await harness.setup()
+    seen_keys.clear()
+
+    async_dispatcher_send(
+        harness.hass, f"{DOMAIN}_subentry_setup_{ENTRY_ID}", "unknown-subentry"
+    )
+    await asyncio.sleep(0)
+
+    assert set(seen_keys) <= {TRACKER_KEY}
+    assert harness.uwt_uids() == [_uwt_uid(TRACKER_SUBENTRY_ID, DEV_ID)]
