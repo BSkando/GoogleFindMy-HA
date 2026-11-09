@@ -429,3 +429,31 @@ def test_resolver_future_sighting_time(
     entity, _ = _build_sensor(resolver)
 
     assert entity.native_value == expected
+
+
+@pytest.mark.asyncio
+async def test_sighting_time_lookup_without_extra_data(clock: _Clock) -> None:
+    """The sighting time falls back to the attribute when no extra data exists.
+
+    Home Assistant derives the sensor data from the extra data, so this state
+    only arises if a caller supplies the value another way; the lookup of the
+    sighting time must still not depend on the extra data being present.
+    """
+    entity, _ = _build_sensor()
+    entity.async_get_last_sensor_data = AsyncMock(
+        return_value=SimpleNamespace(native_value="25")
+    )
+    entity.async_get_last_extra_data = AsyncMock(return_value=None)
+    entity.async_get_last_state = AsyncMock(
+        return_value=SimpleNamespace(
+            state="25", attributes={"last_ble_observation": _iso(NOW - DAY_S)}
+        )
+    )
+    with patch.object(
+        GoogleFindMyBLEBatterySensor.__bases__[1],
+        "async_added_to_hass",
+        new_callable=AsyncMock,
+    ):
+        await entity.async_added_to_hass()
+
+    assert entity.native_value == 25
