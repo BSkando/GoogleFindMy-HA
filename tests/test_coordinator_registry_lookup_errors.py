@@ -21,7 +21,8 @@ from tests.helpers.config_entries_stub import make_config_entry
 class _MismatchedRegistry:
     """Entity registry whose ``async_get_entity_id`` has an incompatible signature."""
 
-    entities: dict[str, SimpleNamespace] = {}
+    def __init__(self) -> None:
+        self.entities: dict[str, SimpleNamespace] = {}
 
     def async_get_entity_id(self, platform: str, unique_id: str) -> str | None:
         """Two-argument form; the integration calls it with three arguments."""
@@ -43,5 +44,5 @@ def test_registry_type_error_reaches_the_caller(
     coordinator.config_entry = make_config_entry(entry_id="entry-42")
     coordinator.get_device_display_name = lambda device_id: f"Tracker {device_id}"
 
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match="positional argument"):
         coordinator.find_tracker_entity_entry("tracker-42")
