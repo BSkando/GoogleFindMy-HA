@@ -3,7 +3,7 @@
 
 A generic exception in the listener used to leave ``do_listen`` set, and
 ``stop()`` returned early once the listener had reached ``STOPPED`` on its own,
-so ``_cancel_and_gather`` never ran. Each supervisor restart therefore left one
+so the task cleanup never ran. Each supervisor restart therefore left one
 heartbeat task behind, and that task kept the whole client (TLS connection
 included) alive until Home Assistant ran out of memory.
 
@@ -39,8 +39,8 @@ HANG_BOUND_S = 10.0
 class _Io:
     """I/O boundary stubs; the listener fails only when the test says so.
 
-    The listener task is created before the heartbeat task, so by the time
-    ``receiving`` is set the heartbeat has entered its ``sleep``. Failing later,
+    The listener task is created before the heartbeat task, so by the time a
+    waiter on ``receiving`` resumes, the heartbeat has entered its ``sleep``. Failing later,
     via ``fail``, reproduces #238: the heartbeat is asleep when the listener
     dies, so it cannot end by itself through ``do_listen``.
     """
@@ -109,7 +109,7 @@ async def _reap(*tasks: asyncio.Task[Any] | None) -> None:
 
 
 async def test_generic_listener_error_clears_do_listen() -> None:
-    """The generic listener arm ends the heartbeat loop like every other arm."""
+    """The generic listener arm clears ``do_listen`` like every other arm."""
     io = _Io()
     pc = _client(io)
     listener: asyncio.Task[None] | None = None
@@ -155,7 +155,8 @@ async def test_restart_cycles_leave_no_heartbeat_or_client() -> None:
 async def test_stop_waits_for_listener_writer_close_without_cancelling_it() -> None:
     """stop() awaits the listener's own writer close instead of cancelling it."""
     io = _Io(block_close=True)
-    pc = _client(io)
+    # A large bound keeps stop()'s timeout out of the picture.
+    pc = _client(io, writer_close_timeout=3600)
     listener: asyncio.Task[None] | None = None
     heartbeat: asyncio.Task[None] | None = None
     stop_task: asyncio.Task[None] | None = None
@@ -205,7 +206,8 @@ async def test_stop_bounds_wait_for_hanging_listener() -> None:
 async def test_cancelled_stop_does_not_cancel_spared_listener() -> None:
     """Cancelling stop() itself leaves the listener to finish its close."""
     io = _Io(block_close=True)
-    pc = _client(io)
+    # A large bound keeps stop()'s timeout out of the picture.
+    pc = _client(io, writer_close_timeout=3600)
     listener: asyncio.Task[None] | None = None
     heartbeat: asyncio.Task[None] | None = None
     stop_task: asyncio.Task[None] | None = None
@@ -225,3 +227,30 @@ async def test_cancelled_stop_does_not_cancel_spared_listener() -> None:
     finally:
         io.close_release.set()
         await _reap(listener, heartbeat, stop_task)
+
+
+async def test_concurrent_stop_returns_after_running_stop_finished() -> None:
+    """A second stop() during a regular stop() returns only once all tasks end."""
+    io = _Io(block_close=True)
+    pc = _client(io)
+    await pc.start()
+    listener = pc._listen_task
+    assert listener is not None
+    heartbeat = next(t for t in pc.tasks if t is not listener)
+    first: asyncio.Task[None] | None = None
+    second: asyncio.Task[None] | None = None
+    try:
+        async with asyncio.timeout(HANG_BOUND_S):
+            await io.receiving.wait()
+            first = asyncio.create_task(pc.stop())
+            await io.close_entered.wait()
+            second = asyncio.create_task(pc.stop())
+            io.close_release.set()
+            await asyncio.wait({second})
+            assert listener.done()
+            assert heartbeat.done()
+            assert first.done()
+        assert second.exception() is None
+    finally:
+        io.close_release.set()
+        await _reap(listener, heartbeat, first, second)
