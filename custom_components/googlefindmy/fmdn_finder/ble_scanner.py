@@ -65,11 +65,21 @@ def _is_fmdn_service_data(
     return None, None
 
 
-async def async_setup_ble_scanner(hass: HomeAssistant) -> bool:
+async def async_setup_ble_scanner(
+    hass: HomeAssistant, *, replace_existing: bool = True
+) -> bool:
     """Register HA-Bluetooth callback for FMDN advertisements.
 
-    Returns True if the scanner was successfully registered, False if the
-    bluetooth integration is not available (non-fatal).
+    One callback serves every config entry of the domain: it reads the shared
+    resolver on each advertisement. When a callback is already registered,
+    the default replaces it (unregister, then register again, with no await
+    in between), so exactly one stays active and Home Assistant replays the
+    advertisement history for the entry that just loaded; HA replays it only
+    inside ``async_register_callback``. With ``replace_existing=False`` an
+    existing registration is kept as it is.
+
+    Returns True if the scanner is registered, False if the bluetooth
+    integration is not available (non-fatal).
     """
     try:
         from homeassistant.components.bluetooth import (  # noqa: PLC0415
@@ -91,15 +101,9 @@ async def async_setup_ble_scanner(hass: HomeAssistant) -> bool:
         _LOGGER.debug("Domain bucket not ready — skipping BLE scanner setup")
         return False
 
-    # One callback serves every config entry of the domain: it reads the
-    # shared resolver on each advertisement. Every entry setup calls this
-    # function, so a second registration would process each advertisement
-    # twice and orphan the first handle. No await lies between this check
-    # and storing the handle below, so concurrent setups cannot both pass.
-    if callable(domain_bucket.get(DATA_BLE_SCANNER_UNSUB)):
-        _LOGGER.debug(
-            "FMDN BLE scanner already registered; skipping duplicate registration"
-        )
+    existing_unsub = domain_bucket.get(DATA_BLE_SCANNER_UNSUB)
+    if callable(existing_unsub) and not replace_existing:
+        _LOGGER.debug("FMDN BLE scanner already registered; keeping it")
         return True
 
     # Track last log time for unresolved EIDs (keyed by 4-byte prefix).
@@ -199,6 +203,22 @@ async def async_setup_ble_scanner(hass: HomeAssistant) -> bool:
     # Explicitly passing connectable=False disables that filter, so
     # local-radio and every proxy-relayed advertisement reach us; the history
     # replay HA performs on registration now covers all sources as well.
+    #
+    # Every entry setup calls this function. Registering a second callback
+    # would process each advertisement twice and orphan the first handle;
+    # skipping the registration would deny the new entry the history replay.
+    # So an existing callback is replaced: unregister it, then register again.
+    # No await lies between reading the handle above and storing the new one
+    # below, so concurrent setups cannot leave two callbacks registered.
+    if callable(existing_unsub):
+        domain_bucket.pop(DATA_BLE_SCANNER_UNSUB, None)
+        try:
+            existing_unsub()
+        except ValueError:
+            # HA removes the matcher from a list; a handle that was already
+            # removed raises ValueError there (bluetooth/match.py).
+            _LOGGER.debug("Previous FMDN BLE scanner handle was already removed")
+
     unsub: CALLBACK_TYPE = async_register_callback(
         hass,
         _fmdn_advertisement_callback,
@@ -207,6 +227,11 @@ async def async_setup_ble_scanner(hass: HomeAssistant) -> bool:
     )
 
     domain_bucket[DATA_BLE_SCANNER_UNSUB] = unsub
+    if callable(existing_unsub):
+        _LOGGER.debug(
+            "FMDN BLE scanner re-registered to replay the advertisement history"
+        )
+        return True
     _LOGGER.info(
         "FMDN BLE scanner registered — collecting MAC addresses "
         "and frame types from FMDN advertisements"
