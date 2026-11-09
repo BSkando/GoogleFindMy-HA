@@ -20,6 +20,8 @@ sensor module uses.
 from __future__ import annotations
 
 import logging
+import time
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
@@ -58,6 +60,20 @@ def clock(monkeypatch: pytest.MonkeyPatch) -> _Clock:
     fake = _Clock(NOW)
     monkeypatch.setattr(sensor_module.time, "time", fake)
     return fake
+
+
+@pytest.fixture
+def non_utc_local_time(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Run with a local time zone away from UTC; CI runners default to UTC.
+
+    Without it a naive timestamp read as local time equals UTC and a test of
+    the UTC fallback passes whether the fallback exists or not.
+    """
+    monkeypatch.setenv("TZ", "America/New_York")
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
 
 
 class _ResolverStub:
@@ -204,6 +220,7 @@ async def test_restore_legacy_attribute_fresh(clock: _Clock) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("non_utc_local_time")
 async def test_restore_legacy_attribute_naive_is_utc(clock: _Clock) -> None:
     """A legacy timestamp without an offset is read as UTC."""
     entity, _ = _build_sensor()
