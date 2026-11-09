@@ -2096,9 +2096,21 @@ class GoogleFindMyBLEBatterySensor(GoogleFindMyDeviceEntity, RestoreSensor):
 
     @property
     def extra_restore_state_data(self) -> BLEBatteryExtraStoredData:
-        """Return value, unit and the time of the last BLE sighting."""
+        """Return value, unit and the time of the last BLE sighting.
+
+        Value and sighting time always come from the same source: the fresh
+        resolver state if there is one, otherwise the cached value with its
+        own sighting time.
+        """
+        state = self._fresh_resolver_state()
+        if state is not None:
+            return BLEBatteryExtraStoredData(
+                state.battery_pct,
+                self.native_unit_of_measurement,
+                state.observed_at_wall,
+            )
         return BLEBatteryExtraStoredData(
-            self.native_value,
+            self._restored_value_if_fresh(),
             self.native_unit_of_measurement,
             self._last_observation_wall,
         )
@@ -2168,6 +2180,13 @@ class GoogleFindMyBLEBatterySensor(GoogleFindMyDeviceEntity, RestoreSensor):
                 "no BLE sighting time stored",
                 self._device_id,
             )
+            return
+
+        if (
+            self._last_observation_wall is not None
+            and observed_wall <= self._last_observation_wall
+        ):
+            # A coordinator update during setup already cached a newer sighting.
             return
 
         self._attr_native_value = restored_pct

@@ -162,6 +162,11 @@ async def test_restore_extra_fresh(clock: _Clock) -> None:
 
     assert entity.native_value == 25
     assert entity.available is True
+    stored = entity.extra_restore_state_data.as_dict()
+    assert (stored["native_value"], stored["last_observation_wall"]) == (
+        25,
+        NOW - DAY_S,
+    )
 
 
 @pytest.mark.asyncio
@@ -333,3 +338,40 @@ def test_extra_data_roundtrip(clock: _Clock, invalid: Any) -> None:
     assert broken.last_observation_wall is None
 
     assert type(stored).from_dict({"last_observation_wall": NOW}) is None
+
+
+@pytest.mark.asyncio
+async def test_fresh_resolver_before_restore_keeps_newer_sighting(
+    clock: _Clock,
+) -> None:
+    """A restore must not replace a newer sighting taken from the resolver.
+
+    ``GoogleFindMyEntity.async_added_to_hass`` runs a coordinator update before
+    the restore reads the stored state, so a fresh resolver state is already
+    cached when the older stored pair arrives.
+    """
+    resolver = _ResolverStub()
+    resolver.states[DEV_ID] = _state(100, NOW)
+    entity, _ = _build_sensor(resolver)
+    entity._handle_coordinator_update()
+
+    await _restore(entity, extra=_extra(NOW - 6 * DAY_S))
+
+    stored = entity.extra_restore_state_data.as_dict()
+    assert stored["native_value"] == 100
+    assert stored["last_observation_wall"] == NOW
+    assert getattr(entity, "_last_observation_wall", None) == NOW
+
+
+def test_restore_data_pairs_value_and_date_from_one_source(clock: _Clock) -> None:
+    """Stored value and sighting time come from the same resolver state."""
+    resolver = _ResolverStub()
+    entity, _ = _build_sensor(resolver)
+    resolver.states[DEV_ID] = _state(25, NOW - 2 * DAY_S)
+    entity._handle_coordinator_update()
+
+    # A new sighting arrives before the next coordinator update.
+    resolver.states[DEV_ID] = _state(5, NOW)
+
+    stored = entity.extra_restore_state_data.as_dict()
+    assert (stored["native_value"], stored["last_observation_wall"]) == (5, NOW)
