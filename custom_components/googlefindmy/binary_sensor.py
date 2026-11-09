@@ -458,18 +458,20 @@ async def async_setup_entry(  # noqa: PLR0915
     def _tracker_key_for(subentry: Any | None) -> str:
         """Return the group key of the tracker subentry being set up.
 
-        A bare subentry id is resolved through the entry. When the subentry is
-        not a typed tracker subentry, the first tracker subentry's key applies,
-        as before.
+        When the subentry is not a typed tracker subentry (a bare id or None),
+        the first tracker subentry's key applies, as before. A missing or empty
+        group key falls back to the default key, as in sensor.py.
         """
         tracker_key: str = TRACKER_SUBENTRY_KEY
         subentries = getattr(entry, "subentries", None)
-        own = subentry
-        if isinstance(subentry, str) and isinstance(subentries, Mapping):
-            own = subentries.get(subentry)
-        own_data = getattr(own, "data", None)
-        if _subentry_type(own) == "tracker" and isinstance(own_data, Mapping):
-            return str(own_data.get("group_key", TRACKER_SUBENTRY_KEY))
+        own_data = getattr(subentry, "data", None)
+        if _subentry_type(subentry) == "tracker" and isinstance(own_data, Mapping):
+            own_key = own_data.get("group_key")
+            return (
+                own_key
+                if isinstance(own_key, str) and own_key
+                else TRACKER_SUBENTRY_KEY
+            )
         if isinstance(subentries, Mapping):
             for sub in subentries.values():
                 if _subentry_type(sub) == "tracker":
