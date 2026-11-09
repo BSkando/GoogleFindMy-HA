@@ -530,17 +530,21 @@ async def test_waiting_refresh_gives_up_at_the_wait_limit(
 
     holder = asyncio.ensure_future(resolver.async_refresh())
     await _until(lambda: log == ["refresh_start"])
-    async with asyncio.timeout(2):
-        await resolver.async_refresh(wait=True)
+    try:
+        async with asyncio.timeout(2):
+            await resolver.async_refresh(wait=True)
+        # Snapshot while the holder still runs; assert after it finished, so
+        # a failing assertion does not leave the holder pending.
+        at_return = (list(log), resolver._refresh_lock.locked())
+        pending_at_return = resolver._pending_refresh
+    finally:
+        release.set()
+        async with asyncio.timeout(2):
+            await holder
 
-    assert log == ["refresh_start"]
-    assert resolver._refresh_lock.locked()
-    assert resolver._pending_refresh is True  # still queued for the holder
+    assert at_return == (["refresh_start"], True)
+    assert pending_at_return is True  # still queued for the holder
     assert "EID refresh still running at the wait limit" in caplog.text
-
-    release.set()
-    async with asyncio.timeout(2):
-        await holder
     assert log == ["refresh_start", "refresh_end", "refresh_start", "refresh_end"]
 
 

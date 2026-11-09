@@ -947,6 +947,25 @@ async def test_parent_unload_success_stops_resolver_when_last_entry() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resolver_stub_accepts_the_setup_refresh_call() -> None:
+    """The double keeps the real ``async_refresh`` signature (``wait`` keyword).
+
+    Entry setup reuses a resolver from the bucket and calls
+    ``async_refresh(wait=True)``; a double with a narrower signature would
+    fail there with TypeError instead of standing in for the real class.
+    """
+
+    resolver = _resolver_stub()
+    bucket: dict[str, Any] = {DATA_EID_RESOLVER: resolver}
+
+    hass = FakeHass(config_entries=FakeConfigEntriesManager())
+    await gfm._async_ensure_shared_eid_resolver(hass, bucket)  # type: ignore[arg-type]
+
+    assert bucket[DATA_EID_RESOLVER] is resolver
+    assert resolver.refresh_called is True  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
 async def test_parent_unload_success_refreshes_resolver_when_entries_remain() -> None:
     """Resolver should refresh only after a successful unload when others remain."""
 
