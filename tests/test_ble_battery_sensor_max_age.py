@@ -375,3 +375,35 @@ def test_restore_data_pairs_value_and_date_from_one_source(clock: _Clock) -> Non
 
     stored = entity.extra_restore_state_data.as_dict()
     assert (stored["native_value"], stored["last_observation_wall"]) == (5, NOW)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("ahead_s", "expected"),
+    [(60, 25), (3600, None)],
+    ids=["within_tolerance", "far_future"],
+)
+async def test_restore_future_sighting_time(
+    clock: _Clock, ahead_s: int, expected: int | None
+) -> None:
+    """A sighting time far in the future is invalid; slight clock skew is not."""
+    entity, _ = _build_sensor()
+    await _restore(entity, extra=_extra(NOW + ahead_s))
+
+    assert entity.native_value == expected
+
+
+@pytest.mark.parametrize(
+    ("ahead_s", "expected"),
+    [(60, 100), (3600, None)],
+    ids=["within_tolerance", "far_future"],
+)
+def test_resolver_future_sighting_time(
+    clock: _Clock, ahead_s: int, expected: int | None
+) -> None:
+    """Resolver data with a sighting time far in the future counts as no data."""
+    resolver = _ResolverStub()
+    resolver.states[DEV_ID] = _state(100, NOW + ahead_s)
+    entity, _ = _build_sensor(resolver)
+
+    assert entity.native_value == expected

@@ -167,6 +167,17 @@ BLE_BATTERY_DESCRIPTION = SensorEntityDescription(
 # clock seconds, the unit of ``BLEBatteryState.observed_at_wall``.
 BLE_BATTERY_RESTORE_MAX_AGE_S = 7 * 24 * 3600
 
+# A sighting time may lie this far in the future (clock skew between the BLE
+# scanner and Home Assistant); anything later is invalid, otherwise a stored
+# future date would keep a value beyond the 7-day limit.
+BLE_BATTERY_FUTURE_TOLERANCE_S = 300
+
+
+def _sighting_within_limit(observed_wall: float) -> bool:
+    """Return True if a sighting time is neither too old nor in the future."""
+    age = time.time() - observed_wall
+    return -BLE_BATTERY_FUTURE_TOLERANCE_S <= age <= BLE_BATTERY_RESTORE_MAX_AGE_S
+
 
 def _coerce_observation_wall(raw: Any) -> float | None:
     """Return ``raw`` as a finite wall-clock timestamp, or ``None``."""
@@ -1968,7 +1979,8 @@ class GoogleFindMyBLEBatterySensor(GoogleFindMyDeviceEntity, RestoreSensor):
     - Shows a value only while the last BLE sighting is at most 7 days old
       (``BLE_BATTERY_RESTORE_MAX_AGE_S``), for a restored value as well as for
       resolver data, at restore time and while running. A restored value
-      without a sighting time is discarded.
+      without a sighting time is discarded, and a sighting time more than
+      ``BLE_BATTERY_FUTURE_TOLERANCE_S`` in the future counts as invalid.
     - Available while the coordinator considers the device present; while it
       is absent, only as long as a value within the age limit is known.
     - Reads battery state directly from the EID resolver (no coordinator proxy).
@@ -2031,10 +2043,7 @@ class GoogleFindMyBLEBatterySensor(GoogleFindMyDeviceEntity, RestoreSensor):
         if resolver is None or self._device_id is None:
             return None
         state = resolver.get_ble_battery_state(self._device_id)
-        if (
-            state is None
-            or time.time() - state.observed_at_wall > BLE_BATTERY_RESTORE_MAX_AGE_S
-        ):
+        if state is None or not _sighting_within_limit(state.observed_at_wall):
             return None
         return state
 
@@ -2044,7 +2053,7 @@ class GoogleFindMyBLEBatterySensor(GoogleFindMyDeviceEntity, RestoreSensor):
         if (
             self._attr_native_value is None
             or wall is None
-            or time.time() - wall > BLE_BATTERY_RESTORE_MAX_AGE_S
+            or not _sighting_within_limit(wall)
         ):
             return None
         return self._attr_native_value
