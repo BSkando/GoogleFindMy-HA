@@ -1436,7 +1436,7 @@ class TestBLEBatterySensor:
 
     def test_native_value_from_resolver(self) -> None:
         """native_value returns battery_pct from resolver."""
-        state = SimpleNamespace(battery_pct=75)
+        state = SimpleNamespace(battery_pct=75, observed_at_wall=time.time())
         resolver = SimpleNamespace(get_ble_battery_state=lambda dev_id: state)
         sensor = self._make_ble_battery_sensor(resolver=resolver)
         assert sensor.native_value == 75
@@ -1444,6 +1444,7 @@ class TestBLEBatterySensor:
     def test_native_value_no_resolver_uses_cached(self) -> None:
         """native_value falls back to cached value when no resolver."""
         sensor = self._make_ble_battery_sensor(has_resolver=False, native_value=50)
+        sensor._last_observation_wall = time.time()  # fresh sighting
         sensor.hass.data = {}
         assert sensor.native_value == 50
 
@@ -1451,6 +1452,7 @@ class TestBLEBatterySensor:
         """native_value falls back to cached when resolver has no state."""
         resolver = SimpleNamespace(get_ble_battery_state=lambda dev_id: None)
         sensor = self._make_ble_battery_sensor(resolver=resolver, native_value=25)
+        sensor._last_observation_wall = time.time()  # fresh sighting
         assert sensor.native_value == 25
 
     def test_extra_state_attributes_with_state(self) -> None:
@@ -1484,7 +1486,7 @@ class TestBLEBatterySensor:
 
     def test_handle_coordinator_update_with_device(self) -> None:
         """_handle_coordinator_update syncs value from resolver."""
-        state = SimpleNamespace(battery_pct=100)
+        state = SimpleNamespace(battery_pct=100, observed_at_wall=time.time())
         resolver = SimpleNamespace(get_ble_battery_state=lambda dev_id: state)
         sensor = self._make_ble_battery_sensor(resolver=resolver)
         sensor._handle_coordinator_update()
@@ -1655,6 +1657,7 @@ class TestBLEBatteryAvailableFunctional:
     def test_available_absent_with_value(self) -> None:
         """Device absent but has cached value → True."""
         sensor = self._make_sensor(is_present=False, native_value=75)
+        sensor._last_observation_wall = time.time()  # fresh sighting
         assert sensor.available is True
 
     def test_available_absent_no_value(self) -> None:
@@ -1670,6 +1673,7 @@ class TestBLEBatteryAvailableFunctional:
     def test_available_no_presence_method_with_value(self) -> None:
         """No is_device_present, has value → True."""
         sensor = self._make_sensor(is_present=None, native_value=50)
+        sensor._last_observation_wall = time.time()  # fresh sighting
         assert sensor.available is True
 
     def test_available_no_presence_method_no_value(self) -> None:
