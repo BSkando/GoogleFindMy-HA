@@ -455,6 +455,30 @@ async def async_setup_entry(  # noqa: PLR0915
 
     seen_subentries: set[str | None] = set()
 
+    def _tracker_key_for(subentry: Any | None) -> str:
+        """Return the group key of the tracker subentry being set up.
+
+        A bare subentry id is resolved through the entry. When the subentry is
+        not a typed tracker subentry, the first tracker subentry's key applies,
+        as before.
+        """
+        tracker_key: str = TRACKER_SUBENTRY_KEY
+        subentries = getattr(entry, "subentries", None)
+        own = subentry
+        if isinstance(subentry, str) and isinstance(subentries, Mapping):
+            own = subentries.get(subentry)
+        own_data = getattr(own, "data", None)
+        if _subentry_type(own) == "tracker" and isinstance(own_data, Mapping):
+            return str(own_data.get("group_key", TRACKER_SUBENTRY_KEY))
+        if isinstance(subentries, Mapping):
+            for sub in subentries.values():
+                if _subentry_type(sub) == "tracker":
+                    data = getattr(sub, "data", None)
+                    if isinstance(data, Mapping):
+                        tracker_key = data.get("group_key", TRACKER_SUBENTRY_KEY)
+                    break
+        return tracker_key
+
     @callback
     def async_add_subentry(subentry: Any | None = None) -> None:
         subentry_identifier = None
@@ -486,25 +510,7 @@ async def async_setup_entry(  # noqa: PLR0915
 
         # Per-device UWT sensors for tracker subentries (or untyped).
         if subentry_type in (None, "tracker"):
-            tracker_key = TRACKER_SUBENTRY_KEY
-            subentries = getattr(entry, "subentries", None)
-            # Read the group key of the subentry being set up; a bare id is
-            # resolved through the entry. Only an untyped call falls back to
-            # the first tracker subentry.
-            own = subentry
-            if isinstance(subentry, str) and isinstance(subentries, Mapping):
-                own = subentries.get(subentry)
-            own_data = getattr(own, "data", None)
-            if _subentry_type(own) == "tracker" and isinstance(own_data, Mapping):
-                tracker_key = own_data.get("group_key", TRACKER_SUBENTRY_KEY)
-            elif isinstance(subentries, Mapping):
-                for sub in subentries.values():
-                    if _subentry_type(sub) == "tracker":
-                        data = getattr(sub, "data", None)
-                        if isinstance(data, Mapping):
-                            tracker_key = data.get("group_key", TRACKER_SUBENTRY_KEY)
-                        break
-            _add_tracker_scope(tracker_key, subentry_identifier)
+            _add_tracker_scope(_tracker_key_for(subentry), subentry_identifier)
 
     runtime_data = getattr(entry, "runtime_data", None)
 
