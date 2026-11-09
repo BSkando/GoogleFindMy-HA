@@ -1407,14 +1407,11 @@ class RegistryOperations(_MixinBase):
             if not unique_id:
                 return None
 
-            try:
-                entity_id = ent_reg.async_get_entity_id(
-                    DEVICE_TRACKER_DOMAIN,
-                    DOMAIN,
-                    unique_id,
-                )
-            except TypeError:
-                entity_id = None
+            entity_id = ent_reg.async_get_entity_id(
+                DEVICE_TRACKER_DOMAIN,
+                DOMAIN,
+                unique_id,
+            )
 
             if not entity_id:
                 return None
