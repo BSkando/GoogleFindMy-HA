@@ -34,7 +34,7 @@ CONFIG_ENTRY_VERSION: int = 2
 # NOTE: no ": str" annotation on purpose -- semantic-release's version_variables
 # regex only matches `NAME = "x"`, not `NAME: str = "x"`. Re-adding the annotation
 # would silently skip this file on the automated version bump.
-INTEGRATION_VERSION = "1.15.35"
+INTEGRATION_VERSION = "1.15.36"
 
 # --------------------------------------------------------------------------------------
 # Sound dispatch outcome (API -> coordinator boundary)
