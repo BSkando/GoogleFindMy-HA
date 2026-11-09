@@ -1743,10 +1743,25 @@ class GoogleFindMyEIDResolver:
             self._schedule_lock_save()
             _LOGGER.debug("Purged %d stale EID locks: %s", len(removed), removed)
 
-    async def async_refresh(self) -> None:
-        """Trigger a cache refresh immediately."""
+    async def async_refresh(self, *, wait: bool = False) -> None:
+        """Trigger a cache refresh immediately.
+
+        While a refresh is running, the call only requests another pass
+        (``_pending_refresh``) and returns at once. With ``wait=True`` it
+        instead returns after the running refresh, including the requested
+        pass, has finished: the holder releases the lock only once its loop
+        has drained ``_pending_refresh``, and ``asyncio.Lock`` wakes waiters
+        in FIFO order. A caller that needs a filled lookup table (an entry
+        setup before it registers the BLE scanner) uses ``wait=True``.
+
+        Never call this with ``wait=True`` from inside ``_refresh_cache``:
+        the lock is held there, and the call would wait for itself.
+        """
         if self._refresh_lock.locked():
             self._pending_refresh = True
+            if wait:
+                async with self._refresh_lock:
+                    pass
             return
 
         async with self._refresh_lock:

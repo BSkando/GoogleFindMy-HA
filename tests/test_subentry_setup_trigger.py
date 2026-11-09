@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.exceptions import ConfigEntryNotReady
 
 from custom_components.googlefindmy import (
@@ -946,6 +947,8 @@ async def test_parent_unload_success_refreshes_resolver_when_entries_remain() ->
 
     parent_entry = FakeConfigEntry(entry_id="parent-entry")
     other_entry = FakeConfigEntry(entry_id="other-entry")
+    # The resolver stays only while another entry is LOADED.
+    other_entry.state = ConfigEntryState.LOADED
     runtime_data = _attach_runtime(parent_entry)
     _attach_runtime(other_entry)
     config_entries = FakeConfigEntriesManager([parent_entry, other_entry])

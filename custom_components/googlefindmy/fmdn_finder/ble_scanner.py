@@ -91,6 +91,17 @@ async def async_setup_ble_scanner(hass: HomeAssistant) -> bool:
         _LOGGER.debug("Domain bucket not ready — skipping BLE scanner setup")
         return False
 
+    # One callback serves every config entry of the domain: it reads the
+    # shared resolver on each advertisement. Every entry setup calls this
+    # function, so a second registration would process each advertisement
+    # twice and orphan the first handle. No await lies between this check
+    # and storing the handle below, so concurrent setups cannot both pass.
+    if callable(domain_bucket.get(DATA_BLE_SCANNER_UNSUB)):
+        _LOGGER.debug(
+            "FMDN BLE scanner already registered; skipping duplicate registration"
+        )
+        return True
+
     # Track last log time for unresolved EIDs (keyed by 4-byte prefix).
     unresolved_log_at: dict[str, float] = {}
 
