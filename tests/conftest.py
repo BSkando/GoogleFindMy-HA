@@ -2211,7 +2211,11 @@ def _stub_homeassistant() -> None:
             )
 
         async def async_get_last_sensor_data(self):
-            return None
+            """Derive value and unit from the extra data, as HA does."""
+            extra = await self.async_get_last_extra_data()
+            if extra is None:
+                return None
+            return SensorExtraStoredData.from_dict(extra.as_dict())
 
         async def async_get_last_extra_data(self):
             return None

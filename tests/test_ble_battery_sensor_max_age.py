@@ -136,14 +136,19 @@ async def _restore(
     extra: dict[str, Any] | None = None,
     attributes: dict[str, Any] | None = None,
 ) -> None:
-    """Run ``async_added_to_hass`` against the given stored data."""
-    entity.async_get_last_sensor_data = AsyncMock(
-        return_value=SimpleNamespace(native_value=value)
+    """Run ``async_added_to_hass`` against the given stored data.
+
+    Only the extra data and the legacy state are patched; the ``conftest``
+    stub derives ``async_get_last_sensor_data`` from the extra data as Home
+    Assistant does. Without ``extra`` the record carries value and unit only.
+    """
+    stored = (
+        dict(extra)
+        if extra is not None
+        else {"native_value": value, "native_unit_of_measurement": "%"}
     )
     entity.async_get_last_extra_data = AsyncMock(
-        return_value=None
-        if extra is None
-        else SimpleNamespace(as_dict=lambda: dict(extra))
+        return_value=SimpleNamespace(as_dict=lambda: dict(stored))
     )
     entity.async_get_last_state = AsyncMock(
         return_value=None

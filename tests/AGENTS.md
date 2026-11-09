@@ -442,8 +442,14 @@ are installed. **Review this checklist on every single change under
     (`_attr_native_unit_of_measurement`, then the entity description, then
     `None`), and the stub `RestoreSensor` exposes `extra_restore_state_data`,
     `async_get_last_sensor_data`, `async_get_last_extra_data` and
-    `async_get_last_state` (the three getters return `None`; tests patch them
-    per entity). The date and `Decimal` encoding of the core's
+    `async_get_last_state`. As in the core, `async_get_last_sensor_data`
+    derives value and unit from `async_get_last_extra_data`
+    (`SensorExtraStoredData.from_dict(extra.as_dict())`); the other two
+    getters return `None`. Tests patch `async_get_last_extra_data` (and
+    `async_get_last_state` for legacy attributes), not
+    `async_get_last_sensor_data`, so value and sighting time come from one
+    stored record as in Home Assistant; patching `async_get_last_sensor_data`
+    stays for its own error paths. The date and `Decimal` encoding of the core's
     `SensorExtraStoredData` is not modelled. When the core changes any of
     these signatures, update the stubs together with
     `tests/test_ble_battery_sensor_max_age.py`.

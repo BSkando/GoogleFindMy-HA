@@ -1533,7 +1533,6 @@ class TestBLEBatterySensorRestore:
         sensor.async_write_ha_state = MagicMock()
 
         last_data = SimpleNamespace(native_value="25")
-        sensor.async_get_last_sensor_data = AsyncMock(return_value=last_data)
         sensor.async_get_last_extra_data = AsyncMock(
             return_value=SimpleNamespace(
                 as_dict=lambda: {
@@ -1562,7 +1561,6 @@ class TestBLEBatterySensorRestore:
         sensor.async_write_ha_state = MagicMock()
 
         last_data = SimpleNamespace(native_value="99.7")
-        sensor.async_get_last_sensor_data = AsyncMock(return_value=last_data)
         sensor.async_get_last_extra_data = AsyncMock(
             return_value=SimpleNamespace(
                 as_dict=lambda: {
@@ -1590,7 +1588,14 @@ class TestBLEBatterySensorRestore:
         sensor.async_write_ha_state = MagicMock()
 
         last_data = SimpleNamespace(native_value=None)
-        sensor.async_get_last_sensor_data = AsyncMock(return_value=last_data)
+        sensor.async_get_last_extra_data = AsyncMock(
+            return_value=SimpleNamespace(
+                as_dict=lambda: {
+                    "native_value": last_data.native_value,
+                    "native_unit_of_measurement": "%",
+                }
+            )
+        )
 
         with patch.object(
             GoogleFindMyBLEBatterySensor.__bases__[1],
@@ -1609,7 +1614,14 @@ class TestBLEBatterySensorRestore:
         sensor.async_write_ha_state = MagicMock()
 
         last_data = SimpleNamespace(native_value="unknown")
-        sensor.async_get_last_sensor_data = AsyncMock(return_value=last_data)
+        sensor.async_get_last_extra_data = AsyncMock(
+            return_value=SimpleNamespace(
+                as_dict=lambda: {
+                    "native_value": last_data.native_value,
+                    "native_unit_of_measurement": "%",
+                }
+            )
+        )
 
         with patch.object(
             GoogleFindMyBLEBatterySensor.__bases__[1],
@@ -1628,7 +1640,14 @@ class TestBLEBatterySensorRestore:
         sensor.async_write_ha_state = MagicMock()
 
         last_data = SimpleNamespace(native_value="unavailable")
-        sensor.async_get_last_sensor_data = AsyncMock(return_value=last_data)
+        sensor.async_get_last_extra_data = AsyncMock(
+            return_value=SimpleNamespace(
+                as_dict=lambda: {
+                    "native_value": last_data.native_value,
+                    "native_unit_of_measurement": "%",
+                }
+            )
+        )
 
         with patch.object(
             GoogleFindMyBLEBatterySensor.__bases__[1],
@@ -1647,7 +1666,14 @@ class TestBLEBatterySensorRestore:
         sensor.async_write_ha_state = MagicMock()
 
         last_data = SimpleNamespace(native_value="not-a-number")
-        sensor.async_get_last_sensor_data = AsyncMock(return_value=last_data)
+        sensor.async_get_last_extra_data = AsyncMock(
+            return_value=SimpleNamespace(
+                as_dict=lambda: {
+                    "native_value": last_data.native_value,
+                    "native_unit_of_measurement": "%",
+                }
+            )
+        )
 
         with patch.object(
             GoogleFindMyBLEBatterySensor.__bases__[1],
@@ -1665,7 +1691,7 @@ class TestBLEBatterySensorRestore:
         sensor = _build_battery_sensor(device_id="dev-1", resolver=resolver)
         sensor.async_write_ha_state = MagicMock()
 
-        sensor.async_get_last_sensor_data = AsyncMock(return_value=None)
+        sensor.async_get_last_extra_data = AsyncMock(return_value=None)
 
         with patch.object(
             GoogleFindMyBLEBatterySensor.__bases__[1],
