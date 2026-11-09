@@ -10031,6 +10031,14 @@ def _another_entry_loaded(hass: HomeAssistant, entry_id: str) -> bool:
     )
 
 
+def _another_entry_setting_up(hass: HomeAssistant, entry_id: str) -> bool:
+    """Return True if another entry of the domain is in ``SETUP_IN_PROGRESS``."""
+    return any(
+        other.entry_id != entry_id and other.state == ConfigEntryState.SETUP_IN_PROGRESS
+        for other in hass.config_entries.async_entries(DOMAIN)
+    )
+
+
 async def _async_ensure_shared_eid_resolver(
     hass: HomeAssistant, domain_bucket: GoogleFindMyDomainData
 ) -> None:
@@ -10056,48 +10064,95 @@ async def _async_ensure_shared_eid_resolver(
     await resolver.async_refresh(wait=True)
 
 
+def _bluetooth_loaded(hass: HomeAssistant) -> bool:
+    """Return True once Home Assistant's bluetooth integration is set up.
+
+    ``bluetooth.async_setup`` sets the habluetooth manager before it returns,
+    and Home Assistant adds the domain to ``hass.config.components`` only after
+    ``async_setup`` returned True (``homeassistant/setup.py``). Registering a
+    callback before that raises RuntimeError in ``habluetooth.get_manager``.
+    The beacon service checks the same way. Test stubs without ``config``
+    count as not loaded.
+    """
+    config = getattr(hass, "config", None)
+    return "bluetooth" in getattr(config, "components", ())
+
+
 async def _async_setup_shared_ble_scanner(
     hass: HomeAssistant, *, replace_existing: bool = True
 ) -> None:
     """Register the domain-wide FMDN BLE callback (see ``async_setup_ble_scanner``)."""
+    if not _bluetooth_loaded(hass):
+        _LOGGER.debug("BLE scanner setup skipped: bluetooth integration not loaded")
+        return
     try:
         from .fmdn_finder.ble_scanner import async_setup_ble_scanner  # noqa: PLC0415
-
-        await async_setup_ble_scanner(hass, replace_existing=replace_existing)
     except ImportError:
         _LOGGER.debug("BLE scanner module not available (optional)")
-    except RuntimeError:
-        # habluetooth.get_manager() raises RuntimeError while the bluetooth
-        # integration is installed but its manager is not set up.
-        _LOGGER.debug("BLE scanner setup skipped: bluetooth manager not ready")
+        return
+    await async_setup_ble_scanner(hass, replace_existing=replace_existing)
 
 
 _SHARED_SINGLETON_RESTORE_ATTEMPTS = 3
 """Restore rounds at the end of an entry setup before giving up (a setting)."""
 
 
+def _missing_shared_singletons(
+    hass: HomeAssistant, domain_bucket: GoogleFindMyDomainData
+) -> set[str]:
+    """Name the shared singletons a finished entry setup expects but lacks.
+
+    Each one has its own witness: the timer flags, the resolver instance and,
+    while the bluetooth integration is loaded, a callable BLE scanner handle.
+    """
+    missing: set[str] = set()
+    if not (
+        domain_bucket.get("restart_check_registered") is True
+        and domain_bucket.get("url_refresh_registered") is True
+    ):
+        missing.add("timers")
+    if not isinstance(domain_bucket.get(DATA_EID_RESOLVER), GoogleFindMyEIDResolver):
+        missing.add("resolver")
+    if _bluetooth_loaded(hass):
+        try:
+            from .fmdn_finder.ble_scanner import (  # noqa: PLC0415
+                DATA_BLE_SCANNER_UNSUB,
+            )
+        except ImportError:
+            return missing
+        if not callable(domain_bucket.get(DATA_BLE_SCANNER_UNSUB)):
+            missing.add("scanner")
+    return missing
+
+
 async def _async_restore_shared_singletons(
     hass: HomeAssistant, domain_bucket: GoogleFindMyDomainData
 ) -> None:
-    """Recreate the shared singletons when another entry released them meanwhile.
+    """Recreate shared singletons that are missing at the end of an entry setup.
 
     ``_async_release_shared_singletons_if_last`` releases resolver, BLE
     scanner and the global timers together without yielding, and it counts
     only LOADED entries. An entry still in ``SETUP_IN_PROGRESS`` therefore
     loses all of them when another entry unloads after this setup created
-    them. The resolver is the witness: it is present after every completed
-    setup and gone only after such a release. The final check is not followed
-    by an await, and Home Assistant sets LOADED without yielding once
+    them. A concurrent setup may also have recreated only some of them (its
+    resolver is in the bucket before its first await, and its refresh or
+    scanner setup may still fail). So every singleton is checked on its own
+    witness and only the missing ones are recreated. The final check is not
+    followed by an await, and Home Assistant sets LOADED without yielding once
     ``async_setup_entry`` returns, so no release can slip in afterwards.
     """
     for _ in range(_SHARED_SINGLETON_RESTORE_ATTEMPTS):
-        if isinstance(domain_bucket.get(DATA_EID_RESOLVER), GoogleFindMyEIDResolver):
+        missing = _missing_shared_singletons(hass, domain_bucket)
+        if not missing:
             return
-        _LOGGER.debug("Shared BLE singletons were released during setup; restoring")
-        await _async_ensure_restart_required_check(hass, domain_bucket)
-        await _async_ensure_shared_eid_resolver(hass, domain_bucket)
-        await _async_setup_shared_ble_scanner(hass, replace_existing=False)
-    if not isinstance(domain_bucket.get(DATA_EID_RESOLVER), GoogleFindMyEIDResolver):
+        _LOGGER.debug("Shared BLE singletons missing at the end of setup; restoring")
+        if "timers" in missing:
+            await _async_ensure_restart_required_check(hass, domain_bucket)
+        if "resolver" in missing:
+            await _async_ensure_shared_eid_resolver(hass, domain_bucket)
+        if "scanner" in missing:
+            await _async_setup_shared_ble_scanner(hass, replace_existing=False)
+    if _missing_shared_singletons(hass, domain_bucket):
         _LOGGER.debug("Shared BLE singletons still missing after restore attempts")
 
 
@@ -10111,7 +10166,8 @@ async def _async_release_shared_singletons_if_last(
     between the predicate and the last release (the scanner unload runs last
     and does not suspend), so a setup that checks the resolver afterwards
     sees either all of them or none. Returns True when they were released;
-    the caller then closes the shared SPOT transport as well. While another
+    the caller then closes the shared SPOT transport as well, unless another
+    entry is still setting up. While another
     entry stays loaded, the resolver refreshes to drop this entry's devices.
     """
     resolver = bucket.get(DATA_EID_RESOLVER)
@@ -10136,8 +10192,10 @@ async def _async_release_shared_singletons_if_last(
     except ImportError:
         pass
     except ValueError:
-        # HA removes the matcher from a list; a handle removed before (for
-        # example by a bluetooth reload) raises ValueError (bluetooth/match.py).
+        # HA contract, not a fallback: the handle runs list.remove on the
+        # matcher (BluetoothCallbackMatcherIndex.remove_callback_matcher in
+        # homeassistant/components/bluetooth/match.py), so a handle removed
+        # before (for example by a bluetooth reload) raises ValueError.
         _LOGGER.debug("BLE scanner handle was already removed")
     return True
 
@@ -10468,7 +10526,10 @@ async def _async_unload_parent_entry(hass: HomeAssistant, entry: MyConfigEntry) 
         except Exception as err:
             _LOGGER.debug("Owner-index cleanup failed: %s", err)
 
-        if shared_released:
+        # The SPOT channel is lazy and an entry still setting up may already
+        # use it, so it stays open while such an entry exists. An entry in
+        # SETUP_RETRY does not keep it (its next attempt reopens it).
+        if shared_released and not _another_entry_setting_up(hass, entry.entry_id):
             try:
                 await SPOT_GRPC_TRANSPORT.async_close()
             except Exception as err:  # pragma: no cover - defensive

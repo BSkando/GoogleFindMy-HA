@@ -72,11 +72,12 @@ async def async_setup_ble_scanner(
 
     One callback serves every config entry of the domain: it reads the shared
     resolver on each advertisement. When a callback is already registered,
-    the default replaces it (unregister, then register again, with no await
-    in between), so exactly one stays active and Home Assistant replays the
-    advertisement history for the entry that just loaded; HA replays it only
-    inside ``async_register_callback``. With ``replace_existing=False`` an
-    existing registration is kept as it is.
+    the default replaces it (register the new one, then unregister the old
+    one, with no await in between), so exactly one stays active and Home
+    Assistant replays the advertisement history for the entry that just
+    loaded; HA replays it only inside ``async_register_callback``. If that
+    registration raises, the old callback stays registered. With
+    ``replace_existing=False`` an existing registration is kept as it is.
 
     Returns True if the scanner is registered, False if the bluetooth
     integration is not available (non-fatal).
@@ -207,18 +208,11 @@ async def async_setup_ble_scanner(
     # Every entry setup calls this function. Registering a second callback
     # would process each advertisement twice and orphan the first handle;
     # skipping the registration would deny the new entry the history replay.
-    # So an existing callback is replaced: unregister it, then register again.
-    # No await lies between reading the handle above and storing the new one
-    # below, so concurrent setups cannot leave two callbacks registered.
-    if callable(existing_unsub):
-        domain_bucket.pop(DATA_BLE_SCANNER_UNSUB, None)
-        try:
-            existing_unsub()
-        except ValueError:
-            # HA removes the matcher from a list; a handle that was already
-            # removed raises ValueError there (bluetooth/match.py).
-            _LOGGER.debug("Previous FMDN BLE scanner handle was already removed")
-
+    # So an existing callback is replaced: register the new one first, then
+    # unregister the old one, so a failing registration leaves the old one in
+    # place. No await lies between reading the handle above and storing the
+    # new one below, so concurrent setups cannot leave two callbacks
+    # registered, and no advertisement reaches both callbacks in between.
     unsub: CALLBACK_TYPE = async_register_callback(
         hass,
         _fmdn_advertisement_callback,
@@ -228,6 +222,12 @@ async def async_setup_ble_scanner(
 
     domain_bucket[DATA_BLE_SCANNER_UNSUB] = unsub
     if callable(existing_unsub):
+        try:
+            existing_unsub()
+        except ValueError:
+            # HA removes the matcher from a list; a handle that was already
+            # removed raises ValueError there (bluetooth/match.py).
+            _LOGGER.debug("Previous FMDN BLE scanner handle was already removed")
         _LOGGER.debug(
             "FMDN BLE scanner re-registered to replay the advertisement history"
         )

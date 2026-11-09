@@ -1762,8 +1762,10 @@ class GoogleFindMyEIDResolver:
         in FIFO order, so the waiter finds the table rebuilt including its own
         request. When the holder raised instead, the waiter runs the pass
         itself (and may raise in turn). When the limit is reached, the call
-        returns without a finished refresh; the request stays queued for the
-        holder. A caller that needs a filled lookup table (an entry setup
+        returns without a finished refresh; the holder runs the queued request
+        if its passes succeed, and drops it with the failure if one raises (a
+        stale request would keep the resolve path from scheduling a refresh).
+        A caller that needs a filled lookup table (an entry setup
         before it registers the BLE scanner) uses ``wait=True``.
 
         Never call this with ``wait=True`` from inside ``_refresh_cache``:
