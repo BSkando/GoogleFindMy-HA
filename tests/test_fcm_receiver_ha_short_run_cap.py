@@ -59,10 +59,12 @@ class _SupervisorPushClientStub:
     correctly:
 
     * ``jump_on_start`` advances the clock inside ``start()`` BEFORE the
-      supervisor takes the ``entry_start`` snapshot (Z. 960). It models
+      supervisor takes the ``entry_start = time.monotonic()`` snapshot in
+      ``_start_supervisor_for_entry``. It models
       pre-monitor elapsed time and does NOT influence ``run_duration``.
     * ``jump_on_run_state_read`` advances the clock on the first
-      ``pc.run_state`` access INSIDE the monitor loop (Z. 964), which is
+      ``pc.run_state`` access INSIDE the monitor loop
+      (``getattr(pc, "run_state", None)``), which is
       AFTER the ``entry_start`` snapshot. It is the only correct way to
       inject elapsed-run time that ``run_duration = time.monotonic() -
       entry_start`` actually observes. Use this for boundary math.
@@ -344,8 +346,8 @@ async def test_long_run_resets_closure_counter(
     clock = _MonoClock(step=0.001)
     # Build 19 clients: short, short, ..., LONG at index 9, short, short, ...
     # The LONG run must use ``jump_on_run_state_read`` (not ``jump_on_start``)
-    # so the 60s elapse AFTER the supervisor captures ``entry_start`` at
-    # Z. 960; otherwise the jump is consumed by the snapshot itself and
+    # so the 60s elapse AFTER the supervisor captures ``entry_start``
+    # (``entry_start = time.monotonic()``); otherwise the jump is consumed by the snapshot itself and
     # ``run_duration`` collapses to ~0, making this run count as short.
     clients = []
     for idx in range(19):
@@ -430,7 +432,7 @@ async def test_per_entry_supervisors_independent(
     ]
     # Entry B: 5 healthy long runs (well above threshold).
     # ``jump_on_run_state_read`` (not ``jump_on_start``) is required so the
-    # 60s elapse AFTER ``entry_start`` snapshot at Z. 960 and actually mark
+    # 60s elapse AFTER ``entry_start`` snapshot (``entry_start = time.monotonic()``) and actually mark
     # each run as a long run; otherwise the test passes only by accident
     # because 5 short runs also stay below the cap of 10.
     clients_b = [
@@ -735,8 +737,9 @@ async def test_cap_latch_survives_registration_success_path(
     assert entry_id in receiver._short_run_cap_latched
     pre_message = receiver._fatal_errors[entry_id]
 
-    # Simulate ``_register_for_fcm_entry`` success path (Z. 1260) and the
-    # credential-update path (Z. 2069). Neither must release the latch.
+    # Simulate the ``_register_for_fcm_entry`` success path and the
+    # credential-update path (``_on_credentials_updated_for_entry``).
+    # Neither must release the latch.
     receiver._clear_fatal_error_for_entry(entry_id, reason="Registration succeeded")
     receiver._clear_fatal_error_for_entry(
         entry_id, reason="Credentials updated for entry"
@@ -1048,15 +1051,16 @@ async def test_long_run_boundary_exactly_30s_does_not_count_as_short(
     # Frozen clock (``step=0.0``): every ``time.monotonic()`` call returns
     # the same value unless ``.jump(seconds)`` is invoked. This is the only
     # way to drive ``run_duration`` to *exactly* 30.0 — any auto-increment
-    # would push the read at Z. 1008 past the boundary by a few ``step``s
+    # would push the ``run_duration = time.monotonic() - entry_start`` read past the boundary by a few ``step``s
     # and let an off-by-one bug (`<=` instead of `<`) hide inside the noise.
     clock = _MonoClock(step=0.0)
 
     # Critical ordering (Codex Iter-5 finding):
     # ``jump_on_start`` would fire BEFORE the supervisor records
-    # ``entry_start = time.monotonic()`` (Z. 960), so the jump is baked
+    # ``entry_start = time.monotonic()``, so the jump is baked
     # into the snapshot and ``run_duration`` ends up ~0s. Instead, hook
-    # the jump on the first ``pc.run_state`` read (Z. 964), which is the
+    # the jump on the first ``pc.run_state`` read
+    # (``getattr(pc, "run_state", None)``), which is the
     # first clock-observable event INSIDE the monitor loop, AFTER the
     # snapshot. Then ``time.monotonic() - entry_start == 30.0`` exactly.
     stub = _SupervisorPushClientStub(clock=clock, jump_on_run_state_read=30.0)

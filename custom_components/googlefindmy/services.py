@@ -16,19 +16,38 @@ Compatibility
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from typing import Any
 
+import voluptuous as vol
+from homeassistant.auth.permissions.const import POLICY_CONTROL
 from homeassistant.components.device_tracker import DOMAIN as DEVICE_TRACKER_DOMAIN
-from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
+from homeassistant.exceptions import (
+    HomeAssistantError,
+    ServiceValidationError,
+    Unauthorized,
+    UnknownUser,
+)
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.network import NoURLAvailableError, get_url
+from homeassistant.helpers.service import async_register_admin_service
 
+from .Auth.log_safety import describe_exception
+from .beacon_actions import (
+    DERIVATION_WINDOWS_MAX,
+    EID_SEARCH_MAX_SECONDS,
+    BeaconKeys,
+    IdentityForm,
+    async_probe_tracker,
+)
 from .const import (
+    DATA_EID_RESOLVER,
     DEFAULT_MAP_VIEW_TOKEN_EXPIRATION,
     DOMAIN,
     LEGACY_SERVICE_IDENTIFIER,
@@ -44,6 +63,7 @@ from .const import (
     TRACKER_SUBENTRY_KEY,
     PlaySoundOutcome,
     StopSoundOutcome,
+    StopSoundUncorrelatedReason,
     map_token_hex_digest,
     map_token_secret_seed,
     service_device_identifier,
@@ -58,9 +78,33 @@ from .coordinator.helpers.registry import (
     read_device_ownership,
     resolve_device_by_identifiers,
 )
+from .eid_resolver import _normalize_encrypted_blob
 from .map_view import _is_map_view_enabled_for_entry
 
 _LOGGER = logging.getLogger(__name__)
+
+# K10: one message per reason a stop is UNCORRELATED. English fallback text and
+# translation key; the translated texts live in strings.json / translations.
+_STOP_UNCORRELATED_MESSAGES: dict[
+    StopSoundUncorrelatedReason | None, tuple[str, str]
+] = {
+    StopSoundUncorrelatedReason.NO_KEY: (
+        "Stop sound for '{device_id}' was submitted, but this instance holds no "
+        "key for a ring on this device; it may keep playing.",
+        "stop_sound_no_cancel_key",
+    ),
+    StopSoundUncorrelatedReason.AGED_KEY: (
+        "Stop sound for '{device_id}' was submitted with a key older than 30 "
+        "minutes; it may keep playing.",
+        "stop_sound_cancel_key_aged",
+    ),
+    StopSoundUncorrelatedReason.FOREIGN_KEY: (
+        "Stop sound for '{device_id}' was submitted with a request UUID that "
+        "does not belong to a ring started by this instance; it may keep "
+        "playing.",
+        "stop_sound_cancel_key_foreign",
+    ),
+}
 
 # Service field name of ``rebuild_registry`` (see ``services.yaml``); Home
 # Assistant core has no ``ATTR_ENTRY_ID`` constant in ``homeassistant.const``.
@@ -93,6 +137,34 @@ def _service_validation_error(
 
 
 SERVICE_REBUILD_DEVICE_REGISTRY: str = "rebuild_device_registry"
+SERVICE_READ_BEACON_STATE: str = "read_beacon_state"
+
+_BLE_ADDRESS_PATTERN = re.compile(r"^(?:[0-9A-F]{2}:){5}[0-9A-F]{2}$")
+_EID_HEX_PATTERN = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+_READ_BEACON_STATE_SCHEMA = vol.Schema(
+    {
+        vol.Required("device_id"): str,
+        vol.Optional("address"): str,
+        vol.Optional("timeout", default=45): vol.All(
+            vol.Coerce(float), vol.Range(min=5, max=120)
+        ),
+        vol.Optional("include_raw_response", default=False): bool,
+        vol.Optional("search_seconds", default=0): vol.All(
+            vol.Coerce(float),
+            vol.Range(min=0, max=EID_SEARCH_MAX_SECONDS),
+            vol.Coerce(int),
+        ),
+        vol.Optional("search_eid"): str,
+        vol.Optional("identity_form", default=IdentityForm.ANY.value): vol.In(
+            [form.value for form in IdentityForm if form is not IdentityForm.OTHER]
+        ),
+        vol.Optional("derivation_windows", default=0): vol.All(
+            vol.Coerce(float),
+            vol.Range(min=0, max=DERIVATION_WINDOWS_MAX),
+            vol.Coerce(int),
+        ),
+    }
+)
 
 
 async def async_rebuild_device_registry(hass: HomeAssistant, call: ServiceCall) -> None:
@@ -700,6 +772,205 @@ async def async_rebuild_device_registry(hass: HomeAssistant, call: ServiceCall) 
     )
 
 
+# Home Assistant's admin helper validates with an empty schema that rejects
+# every field unless told otherwise. ``services.yaml`` only describes the
+# fields for the UI and does not validate at runtime; the maintenance handlers
+# check their fields themselves, so this schema accepts any field and passes
+# the data through unchanged.
+_ADMIN_PASSTHROUGH_SCHEMA = vol.Schema({}, extra=vol.ALLOW_EXTRA)
+
+
+def _control_entity_ids_for_target(
+    hass: HomeAssistant, raw_device_id: object, ctx: Mapping[str, Any]
+) -> set[str]:
+    """Return the entity ids a caller needs ``control`` on to act on a target.
+
+    The target is the value of the ``device_id`` field: a device registry id,
+    an entity id of this integration or a canonical tracker id. The result is
+    the union of the enabled entities of this integration on the device the
+    value names directly (or the device of the named entity) and on every
+    device of this integration whose canonical id equals the one the value
+    resolves to. The second group is needed because the action falls back to
+    the first coordinator that knows the canonical id, which can belong to
+    another account than the named device.
+
+    A value that names a device, directly or through one of its entities,
+    whose entities of this integration are all disabled yields an empty set,
+    even when another account holds the same tracker with enabled entities.
+    Disabling every entity of a device therefore keeps non-admins off that
+    device; the tracker stays reachable through its canonical id.
+
+    Membership in the integration comes from the entity registry
+    (``platform == DOMAIN``) only; device entries are not inspected for their
+    config entries. An empty set means "no entity to check against" and is
+    rejected by the caller.
+
+    Limit: a device with the same canonical id but without an enabled entity of
+    this integration (or known only to a coordinator) adds nothing to the set,
+    although the fallback may still run against it. It is the same physical
+    tracker, so the caller already holds ``control`` on that tracker elsewhere.
+    """
+
+    if not isinstance(raw_device_id, str) or not raw_device_id:
+        return set()
+
+    ent_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+    entities_by_device: dict[str, set[str]] = {}
+    for entity in ent_reg.entities.values():
+        if entity.platform != DOMAIN or not entity.device_id or entity.disabled:
+            continue
+        entities_by_device.setdefault(entity.device_id, set()).add(entity.entity_id)
+
+    resolve = ctx["resolve_canonical"]
+    try:
+        canonical_id = resolve(hass, raw_device_id)[0]
+    except HomeAssistantError:
+        return set()
+
+    target_devices: set[str] = set()
+    device = dev_reg.async_get(raw_device_id)
+    if device is not None:
+        target_devices.add(device.id)
+    else:
+        entity_entry = ent_reg.async_get(raw_device_id)
+        if (
+            entity_entry is not None
+            and entity_entry.platform == DOMAIN
+            and entity_entry.device_id
+        ):
+            target_devices.add(entity_entry.device_id)
+
+    if any(named not in entities_by_device for named in target_devices):
+        return set()
+
+    for candidate_device_id in entities_by_device:
+        if candidate_device_id in target_devices:
+            continue
+        try:
+            candidate_canonical = resolve(hass, candidate_device_id)[0]
+        except HomeAssistantError:
+            continue
+        if candidate_canonical == canonical_id:
+            target_devices.add(candidate_device_id)
+
+    result: set[str] = set()
+    for target_device_id in target_devices:
+        result.update(entities_by_device.get(target_device_id, set()))
+    return result
+
+
+async def _async_authorize_device_call(
+    hass: HomeAssistant,
+    call: ServiceCall,
+    raw_device_id: object,
+    ctx: Mapping[str, Any],
+) -> None:
+    """Reject a user call that lacks ``control`` on the target's entities.
+
+    Calls without a user (automations, scripts not started by a user) and calls
+    by admins pass. For every other user, all entities returned by
+    ``_control_entity_ids_for_target`` must grant ``control``; an empty set is
+    rejected. The rejection is the same for an unknown device and for a missing
+    permission and names neither the device nor an entity.
+
+    Invariant: between building the target set here and the coordinator call
+    after ``_resolve_runtime_for_device_id`` there is no await that yields to
+    the event loop, so the check and the resolution see the same registry
+    state. Do not add one.
+    """
+
+    user_id = call.context.user_id
+    if not user_id:
+        return
+    user = await hass.auth.async_get_user(user_id)
+    if user is None:
+        raise UnknownUser(context=call.context, permission=POLICY_CONTROL)
+    if user.is_admin:
+        return
+
+    entity_ids = _control_entity_ids_for_target(hass, raw_device_id, ctx)
+    if not entity_ids or not all(
+        user.permissions.check_entity(entity_id, POLICY_CONTROL)
+        for entity_id in entity_ids
+    ):
+        _LOGGER.warning(
+            "Rejected %s.%s: caller lacks control permission on the target",
+            call.domain,
+            call.service,
+        )
+        raise Unauthorized(context=call.context, permission=POLICY_CONTROL)
+
+
+def _decrypt_account_key(owner_key: bytes, blob: bytes) -> bytes:
+    """Decrypt an account key; the crypto import and the work stay off the loop."""
+    from .KeyBackup.cloud_key_decryptor import decrypt_account_key  # noqa: PLC0415
+
+    return bytes(decrypt_account_key(owner_key, blob))
+
+
+async def _async_beacon_keys(
+    hass: HomeAssistant, runtime: Any, canonical_id: str, timeout: float = 45.0
+) -> BeaconKeys:
+    """Return the tracker's account key and EIK, or raise a translated error.
+
+    Uses the resolver's own key path, so a key mismatch found by the diagnostic is
+    about the key the resolver works with. Keys stay out of every error text.
+    """
+    unavailable = _service_validation_error(
+        "No key material is available for this device.",
+        translation_key="beacon_keys_unavailable",
+    )
+    coordinator = getattr(runtime, "coordinator", None)
+    resolver = hass.data.get(DOMAIN, {}).get(DATA_EID_RESOLVER)
+    if coordinator is None or resolver is None:
+        raise unavailable
+    identity = next(
+        (
+            item
+            for item in coordinator.get_active_device_identities()
+            if str(item.canonical_id).rsplit(":", 1)[-1]
+            == canonical_id.rsplit(":", 1)[-1]
+        ),
+        None,
+    )
+    if identity is None:
+        raise unavailable
+
+    cache = getattr(coordinator, "cache", None)
+    eik: bytes | None = None
+    account_key: bytes | None = None
+    # A wrong owner key is the very case this diagnostic exists to expose, so a key
+    # that cannot be obtained leaves the other one usable. Whatever the crypto or
+    # network layer raises stays out of the response; only its class is logged.
+    try:
+        async with asyncio.timeout(timeout):
+            normalized = await resolver._normalize_identities([identity], cache=cache)
+        if normalized:
+            eik = _normalize_encrypted_blob(normalized[0].identity_key)
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.debug("EIK not usable: %s", type(err).__name__)
+    blob = _normalize_encrypted_blob(identity.encrypted_account_key)
+    if blob is not None:
+        try:
+            async with asyncio.timeout(timeout):
+                owner = await resolver._resolve_owner_key(identity, cache=cache)
+            if owner is not None:
+                account_key = await hass.async_add_executor_job(
+                    _decrypt_account_key, owner.key, blob
+                )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("Account key not usable: %s", type(err).__name__)
+
+    keys = BeaconKeys(
+        account_key=account_key if account_key and len(account_key) == 16 else None,
+        eik=eik if eik and len(eik) == 32 else None,
+    )
+    if keys.account_key is None and keys.eik is None:
+        raise unavailable
+    return keys
+
+
 async def async_register_services(hass: HomeAssistant, ctx: dict[str, Any]) -> None:
     """Register integration-wide services, using services.yaml for metadata.
 
@@ -721,8 +992,20 @@ async def async_register_services(hass: HomeAssistant, ctx: dict[str, Any]) -> N
         - "migrate_unique_ids": Callable[[HomeAssistant, Any], Any]
         - "relink_button_devices": Callable[[HomeAssistant, Any], Any]
         - "relink_subentry_entities": Callable[[HomeAssistant, Any], Any]
+        - "purge_entry_registrations": Callable[[HomeAssistant, ConfigEntry], Awaitable[tuple[int, int]]]
+          # rebuild mode, between unload and setup
         - "coalesce_account_entries": Callable[[HomeAssistant, ConfigEntry], Awaitable[ConfigEntry]]
         - "extract_normalized_email": Callable[[ConfigEntry], str | None]
+
+    Permissions
+    -----------
+    ``locate_device``, ``locate_external``, ``play_sound`` and ``stop_sound``
+    check, as their first statement, that a calling user holds ``control`` on
+    every enabled entity of this integration at the target device
+    (``_async_authorize_device_call``); calls without a user and calls by
+    admins pass. ``refresh_device_urls``, ``rebuild_device_registry`` and
+    ``rebuild_registry`` are registered with ``async_register_admin_service``
+    and reject non-admin users.
     """
 
     # ---- Small local helpers (no circular imports) ---------------------------
@@ -807,22 +1090,17 @@ async def async_register_services(hass: HomeAssistant, ctx: dict[str, Any]) -> N
                     active_count = sum(
                         1 for entry in configured_entries if is_active(entry)
                     )
-                entry_titles = [
-                    entry.title or entry.entry_id for entry in configured_entries
-                ]
-                entries_placeholder = ", ".join(entry_titles) or "—"
-            else:
-                entries_placeholder = "—"
 
+            # Entry titles are usually the account e-mail, and Home Assistant
+            # logs the fallback message of a failed call for every caller, so
+            # neither the placeholders nor the message name an entry.
             placeholders = {
-                "entries": entries_placeholder,
                 "active_count": str(active_count),
                 "total_count": str(total_count),
             }
             raise _service_validation_error(
-                (
-                    "No active Google Find My entries (active {active_count}/{total_count};"
-                    " entries: {entries}).".format(**placeholders)
+                "No active Google Find My entries (active {active_count}/{total_count}).".format(
+                    **placeholders
                 ),
                 translation_key="no_active_entry",
                 translation_placeholders=placeholders,
@@ -894,6 +1172,7 @@ async def async_register_services(hass: HomeAssistant, ctx: dict[str, Any]) -> N
 
     async def async_locate_device_service(call: ServiceCall) -> None:
         """Handle locate device service call (metadata in services.yaml)."""
+        await _async_authorize_device_call(hass, call, call.data.get("device_id"), ctx)
         raw_device_id = call.data.get("device_id")
         if not isinstance(raw_device_id, str) or not raw_device_id:
             placeholders = {"device_id": str(raw_device_id)}
@@ -920,6 +1199,7 @@ async def async_register_services(hass: HomeAssistant, ctx: dict[str, Any]) -> N
 
     async def async_play_sound_service(call: ServiceCall) -> None:
         """Handle play sound service call."""
+        await _async_authorize_device_call(hass, call, call.data.get("device_id"), ctx)
         raw_device_id = call.data.get("device_id")
         if not isinstance(raw_device_id, str) or not raw_device_id:
             placeholders = {"device_id": str(raw_device_id)}
@@ -989,6 +1269,7 @@ async def async_register_services(hass: HomeAssistant, ctx: dict[str, Any]) -> N
 
     async def async_stop_sound_service(call: ServiceCall) -> None:
         """Handle stop sound service call."""
+        await _async_authorize_device_call(hass, call, call.data.get("device_id"), ctx)
         raw_device_id = call.data.get("device_id")
         if not isinstance(raw_device_id, str) or not raw_device_id:
             placeholders = {"device_id": str(raw_device_id)}
@@ -1021,6 +1302,12 @@ async def async_register_services(hass: HomeAssistant, ctx: dict[str, Any]) -> N
         request_uuid: str | None = request_uuid_raw
         try:
             runtime, canonical_id = await _resolve_runtime_for_device_id(raw_device_id)
+            # Read the case BEFORE the stop and with nothing awaited in
+            # between, so it describes the same cache state the stop decides
+            # on. Only used if the outcome is UNCORRELATED (K10).
+            uncorrelated_reason = runtime.coordinator.classify_stop_correlation(
+                canonical_id, request_uuid
+            )
             outcome = await runtime.coordinator.async_stop_sound(
                 canonical_id, request_uuid
             )
@@ -1050,11 +1337,21 @@ async def async_register_services(hass: HomeAssistant, ctx: dict[str, Any]) -> N
                 )
             if outcome is StopSoundOutcome.UNCORRELATED:
                 # Submitted, but nothing proves an effect: reporting plain
-                # success here would be misinformation (BSkando#195).
+                # success here would be misinformation (BSkando#195). It stays
+                # an error in every case; only the text says which case it is,
+                # because each one has a different remedy (K10). A reason the
+                # table does not know falls back to the generic text.
+                message, translation_key = _STOP_UNCORRELATED_MESSAGES.get(
+                    uncorrelated_reason,
+                    (
+                        "Stop sound for '{device_id}' could not be matched to a "
+                        "running ring; it may keep playing.",
+                        "stop_sound_uncorrelated",
+                    ),
+                )
                 raise _service_validation_error(
-                    "Stop sound for '{device_id}' could not be matched to a "
-                    "running ring; it may keep playing.".format(**placeholders),
-                    translation_key="stop_sound_uncorrelated",
+                    message.format(**placeholders),
+                    translation_key=translation_key,
                     translation_placeholders=placeholders,
                 )
             if outcome is not StopSoundOutcome.CANCELLED:
@@ -1089,6 +1386,7 @@ async def async_register_services(hass: HomeAssistant, ctx: dict[str, Any]) -> N
 
     async def async_locate_external_service(call: ServiceCall) -> None:
         """External locate device service (delegates to locate)."""
+        await _async_authorize_device_call(hass, call, call.data.get("device_id"), ctx)
         raw_device_id = call.data.get("device_id")
         if not isinstance(raw_device_id, str) or not raw_device_id:
             placeholders = {"device_id": str(raw_device_id)}
@@ -1502,14 +1800,121 @@ async def async_register_services(hass: HomeAssistant, ctx: dict[str, Any]) -> N
         )
 
         _LOGGER.info(reload_log_context)
+
+        # The rebuild mode removes entities and devices before the setup
+        # (services.yaml). Unloading keeps registry entries, so the purge runs
+        # here, between unload and setup, as a reload would order them.
+        purge_entry = ctx.get("purge_entry_registrations")
+        if mode == "rebuild" and not callable(purge_entry):
+            _LOGGER.warning(
+                "Registry purge unavailable; reloading without removing entities"
+            )
+
+        async def _rebuild_entry(
+            entry_id: str,
+            purge: Callable[[HomeAssistant, Any], Awaitable[tuple[int, int]]],
+        ) -> None:
+            if not await hass.config_entries.async_unload(entry_id):
+                _LOGGER.error(
+                    "Config entry %s could not be unloaded; registry entries kept",
+                    entry_id,
+                )
+                return
+            entry = hass.config_entries.async_get_entry(entry_id)
+            if entry is None:
+                return
+            try:
+                removed_entities, removed_devices = await purge(hass, entry)
+            except Exception as err:  # noqa: BLE001 - the entry is unloaded already
+                # The unload has happened, so an active entry is set up again
+                # whatever the purge did; otherwise it stays unloaded until a
+                # manual reload or a restart. Class only (AGENTS.md section 5).
+                _LOGGER.error(
+                    "Removing the registry entries of config entry %s failed (%s); "
+                    "setting it up again",
+                    entry_id,
+                    type(err).__name__,
+                )
+                _LOGGER.debug(
+                    "Purge error detail for config entry %s: %s",
+                    entry_id,
+                    describe_exception(err),
+                )
+            else:
+                _LOGGER.info(
+                    "Removed %d entities and %d devices of config entry %s",
+                    removed_entities,
+                    removed_devices,
+                    entry_id,
+                )
+            if getattr(entry, "disabled_by", None):
+                return
+            await hass.config_entries.async_setup(entry_id)
+
         for entry_id in target_entry_ids:
             try:
-                await hass.config_entries.async_reload(entry_id)
+                if mode == "rebuild" and callable(purge_entry):
+                    await _rebuild_entry(entry_id, purge_entry)
+                else:
+                    await hass.config_entries.async_reload(entry_id)
             except Exception as err:
                 _LOGGER.error("Error reloading config entry %s: %s", entry_id, err)
 
+    beacon_lock = asyncio.Lock()
+
+    async def async_read_beacon_state_service(call: ServiceCall) -> dict[str, Any]:
+        """Read a tracker's FMDN state over GATT and return it to the caller."""
+        await _async_authorize_device_call(hass, call, call.data.get("device_id"), ctx)
+        runtime, canonical_id = await _resolve_runtime_for_device_id(
+            str(call.data["device_id"])
+        )
+        address: str | None = call.data.get("address")
+        if address is not None:
+            address = address.strip().upper()
+            if not _BLE_ADDRESS_PATTERN.fullmatch(address):
+                raise _service_validation_error(
+                    "The address is not a valid Bluetooth address.",
+                    translation_key="beacon_invalid_address",
+                )
+        search_eid: str | None = call.data.get("search_eid")
+        if search_eid is not None:
+            search_eid = search_eid.strip().lower()
+            if not _EID_HEX_PATTERN.fullmatch(search_eid):
+                raise _service_validation_error(
+                    "The EID must be 20 or 32 bytes in hexadecimal.",
+                    translation_key="beacon_invalid_eid",
+                )
+        if "bluetooth" not in hass.config.components:
+            raise _service_validation_error(
+                "The Bluetooth integration is not loaded.",
+                translation_key="beacon_bluetooth_unavailable",
+            )
+        if beacon_lock.locked():
+            raise _service_validation_error(
+                "Another beacon diagnostic is running. Try again when it has finished.",
+                translation_key="beacon_diagnostic_busy",
+            )
+        async with beacon_lock:
+            keys = await _async_beacon_keys(
+                hass, runtime, canonical_id, call.data["timeout"]
+            )
+            return await async_probe_tracker(
+                hass,
+                keys,
+                address=address,
+                timeout=call.data["timeout"],
+                include_raw=call.data["include_raw_response"],
+                search_seconds=call.data["search_seconds"],
+                search_eid=bytes.fromhex(search_eid) if search_eid else None,
+                form=IdentityForm(call.data["identity_form"]),
+                derivation_windows=call.data["derivation_windows"],
+            )
+
     # ---- Actual service registrations (global; visible even without entries) ----
-    # NOTE: We intentionally do NOT pass voluptuous schemas here; services.yaml is our SSoT.
+    # NOTE: Field validation lives in the handlers; services.yaml only
+    # describes the fields for the UI. The maintenance actions pass
+    # _ADMIN_PASSTHROUGH_SCHEMA only because the admin helper would otherwise
+    # reject every field.
     hass.services.async_register(
         DOMAIN, SERVICE_LOCATE_DEVICE, async_locate_device_service
     )
@@ -1518,14 +1923,32 @@ async def async_register_services(hass: HomeAssistant, ctx: dict[str, Any]) -> N
     )
     hass.services.async_register(DOMAIN, SERVICE_PLAY_SOUND, async_play_sound_service)
     hass.services.async_register(DOMAIN, SERVICE_STOP_SOUND, async_stop_sound_service)
-    hass.services.async_register(
-        DOMAIN, SERVICE_REFRESH_DEVICE_URLS, async_refresh_device_urls_service
+    async_register_admin_service(
+        hass,
+        DOMAIN,
+        SERVICE_REFRESH_DEVICE_URLS,
+        async_refresh_device_urls_service,
+        _ADMIN_PASSTHROUGH_SCHEMA,
     )
-    hass.services.async_register(
+    async_register_admin_service(
+        hass,
         DOMAIN,
         SERVICE_REBUILD_DEVICE_REGISTRY,
         async_rebuild_device_registry_service,
+        _ADMIN_PASSTHROUGH_SCHEMA,
     )
-    hass.services.async_register(
-        DOMAIN, SERVICE_REBUILD_REGISTRY, async_rebuild_registry_service
+    async_register_admin_service(
+        hass,
+        DOMAIN,
+        SERVICE_REBUILD_REGISTRY,
+        async_rebuild_registry_service,
+        _ADMIN_PASSTHROUGH_SCHEMA,
+    )
+    async_register_admin_service(
+        hass,
+        DOMAIN,
+        SERVICE_READ_BEACON_STATE,
+        async_read_beacon_state_service,
+        _READ_BEACON_STATE_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
     )

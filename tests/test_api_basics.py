@@ -12,7 +12,10 @@ Class naming uses the ``Basics`` suffix (CA-F6: disjoint from existing
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import pathlib
+import string
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
@@ -39,6 +42,7 @@ from custom_components.googlefindmy.const import (
     CONTRIBUTOR_MODE_HIGH_TRAFFIC,
     CONTRIBUTOR_MODE_IN_ALL_AREAS,
     DEFAULT_CONTRIBUTOR_MODE,
+    DOMAIN,
     SoundDispatchOutcome,
 )
 from custom_components.googlefindmy.exceptions import MissingTokenCacheError
@@ -1042,6 +1046,109 @@ class TestAsyncBasicDeviceListErrorMapping:
         api = _make_api_with_session()
         with pytest.raises(UpdateFailed):
             run_coro(api.async_get_basic_device_list())
+
+    @staticmethod
+    def _template_placeholders(translation_key: str) -> set[str]:
+        strings_path = pathlib.Path(api_module.__file__).parent / "strings.json"
+        message = json.loads(strings_path.read_text(encoding="utf-8"))["exceptions"][
+            translation_key
+        ]["message"]
+        return {field for _, field, _, _ in string.Formatter().parse(message) if field}
+
+    @pytest.mark.parametrize(
+        ("exc", "translation_key", "placeholders", "text"),
+        [
+            pytest.param(
+                NovaRateLimitError("rate"),
+                "device_list_rate_limited",
+                None,
+                "Rate limited by upstream API: rate",
+                id="rate_limited",
+            ),
+            pytest.param(
+                NovaHTTPError(500, "server"),
+                "device_list_server_error",
+                {"status": "500"},
+                "HTTP Server Error 500: server",
+                id="server_error",
+            ),
+            pytest.param(
+                NovaAuthError(404, "gone"),
+                "device_list_rejected",
+                {"status": "404"},
+                "HTTP Client Error 404: gone",
+                id="rejected",
+            ),
+            pytest.param(
+                NovaProtobufDecodeError("decode"),
+                "device_list_decode_failed",
+                None,
+                "Failed to decode Google Protobuf response: decode",
+                id="decode_failed",
+            ),
+            pytest.param(
+                NovaLogicError(message="logic", code=1),
+                "device_list_logic_error",
+                None,
+                "Nova API Logic Error: Code 1 - logic",
+                id="logic_error",
+            ),
+            pytest.param(
+                RuntimeError("Multiple config entries active here"),
+                "multi_entry_guard",
+                None,
+                "Multiple config entries active here",
+                id="multi_entry_guard",
+            ),
+            pytest.param(
+                RuntimeError("other transient"),
+                "device_list_failed",
+                None,
+                "other transient",
+                id="runtime_value",
+            ),
+            pytest.param(
+                ClientError("net"),
+                "device_list_network_error",
+                None,
+                "Network error fetching device list: net",
+                id="network_error",
+            ),
+            pytest.param(
+                Exception("boom"),
+                "device_list_unexpected_error",
+                None,
+                "Unexpected error fetching device list: boom",
+                id="unexpected_error",
+            ),
+        ],
+    )
+    def test_update_failed_carries_translation_and_keeps_text(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        exc: BaseException,
+        translation_key: str,
+        placeholders: dict[str, str] | None,
+        text: str,
+    ) -> None:
+        """Every device-list UpdateFailed is translatable and keeps its text.
+
+        Home Assistant copies ``translation_key`` of the cause into the
+        setup-retry reason of the integration card. The message itself must
+        stay word for word: logs read it, and the config flow recognises the
+        multi-entry guard by its content.
+        """
+
+        self._patch_request(monkeypatch, exc)
+        api = _make_api_with_session()
+        with pytest.raises(UpdateFailed) as excinfo:
+            run_coro(api.async_get_basic_device_list())
+        err = excinfo.value
+        assert err.translation_domain == DOMAIN
+        assert err.translation_key == translation_key
+        assert err.translation_placeholders == placeholders
+        assert set(placeholders or {}) == self._template_placeholders(translation_key)
+        assert str(err) == text
 
     def test_a_non_credential_4xx_on_the_device_list_is_not_a_reauth(
         self, monkeypatch: pytest.MonkeyPatch

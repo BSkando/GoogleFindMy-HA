@@ -271,3 +271,79 @@ def test_entry_scoped_reset_isolates_counts() -> None:
 
     assert decoder.get_canonicless_counts("entry-A")["total"] == 0
     assert decoder.get_canonicless_counts("entry-B")["total"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Dropped names for the stale-device removal (S-R3d)
+# ---------------------------------------------------------------------------
+
+
+def test_names_of_every_drop_are_recorded_per_poll() -> None:
+    """S-R3d: every canonicless drop leaves its name, benign class included.
+
+    The stale-device removal must not take a device that Google still lists,
+    only without a canonical id, for one that left the account. The class
+    tally cannot tell: a phone that was a tracker device before drops as
+    ``benign``. Its name is the only trace, and each main poll replaces it.
+    """
+    cache = SimpleNamespace(entry_id="entry-A")
+    first = SimpleNamespace(
+        deviceMetadata=[
+            _make_phone_device(name="Phone"),
+            _make_buds_device(name="Buds"),
+            _make_tracker_device(name="Tracker A"),
+            _make_phone_device(
+                name="Visible", canonic_ids=[SimpleNamespace(id="cid-v")]
+            ),
+            _make_buds_device(name="Buds"),
+        ]
+    )
+    decoder.get_devices_with_location(
+        first, cache=cache, emit_canonicless_diagnostics=True
+    )
+    # Two devices share the name ``Buds``: both drops count (R2-6). Each drop
+    # carries the class of its device, so a role swap of two same-named
+    # devices of different classes shows (R3-5).
+    assert decoder.get_canonicless_name_counts("entry-A") == {
+        ("Phone", "android"): 1,
+        ("Buds", "no_information"): 2,
+        ("Tracker A", "tracker"): 1,
+    }
+
+    second = SimpleNamespace(deviceMetadata=[_make_buds_device(name="Buds")])
+    decoder.get_devices_with_location(
+        second, cache=cache, emit_canonicless_diagnostics=True
+    )
+    buds = ("Buds", "no_information")
+    assert decoder.get_canonicless_name_counts("entry-A") == {buds: 1}
+    copy = decoder.get_canonicless_name_counts("entry-A")
+    copy[buds] = 9
+    assert decoder.get_canonicless_name_counts("entry-A") == {buds: 1}
+
+
+def test_names_follow_the_probe_rule_and_the_resets() -> None:
+    """S-R3d: the probe writes no names; both reset forms clear them."""
+    device_list = SimpleNamespace(deviceMetadata=[_make_buds_device(name="Buds")])
+    assert decoder.get_canonicless_name_counts("entry-A") == {}
+
+    decoder.get_devices_with_location(
+        device_list,
+        cache=SimpleNamespace(entry_id="entry-A"),
+        emit_canonicless_diagnostics=False,
+    )
+    assert decoder.get_canonicless_name_counts("entry-A") == {}
+
+    for entry_id in ("entry-A", "entry-B"):
+        decoder.get_devices_with_location(
+            device_list,
+            cache=SimpleNamespace(entry_id=entry_id),
+            emit_canonicless_diagnostics=True,
+        )
+    decoder._reset_canonicless_warning_state("entry-A")
+    assert decoder.get_canonicless_name_counts("entry-A") == {}
+    assert decoder.get_canonicless_name_counts("entry-B") == {
+        ("Buds", "no_information"): 1
+    }
+
+    decoder._reset_canonicless_warning_state()
+    assert decoder.get_canonicless_name_counts("entry-B") == {}

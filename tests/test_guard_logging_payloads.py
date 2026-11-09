@@ -33,7 +33,8 @@ Eight shapes are recognised inside a log call's arguments:
   (E) an unsliced argument whose own name is a whole body (`hex_response`,
       `response_hex`, `result_hex`, `hex_string`, `response_bytes`,
       `raw_data`, `raw_bytes`, `raw_response`, `payload`, `body`, `blob`,
-      `merged_device_data`, `gcm_data`, `fcm_data`), passed whole to `%s`.
+      `merged_device_data`, `gcm_data`, `fcm_data`), passed whole to `%s`
+      or as an argument of a call that is not in `_SAFE_WRAPPERS`.
       The list is exact names, not the substring pattern of (B):
       `payload_len`, `raw_prefix` or `status_raw` carry a length, a prefix
       or a status, and a substring rule over them reported 31 sites of
@@ -63,9 +64,12 @@ bytes, rotating) and is excused by (path, leaf, format-string prefix), so the
 exception covers that one call and not every `payload` line of the module.
 
 Blind spot, stated on purpose: the guard sees only shapes (A) to (I). Shape
-(E) knows an exact list of names: a whole payload under any other name,
-or wrapped (`str(payload)`, `repr(payload)`, `payload.decode()`, an
-f-string), is not reported. Shape (D) follows assignments inside one
+(E) knows an exact list of names: a whole payload under any other name is
+not reported, and neither is one reached as the receiver of a method
+(`payload.decode()`) or inside an f-string. Passed to any call that is not
+in `_SAFE_WRAPPERS` (`summarize(hex_response)`, `str(payload)`), it is
+reported, because a helper not known to be log-safe renders what it is
+given. Shape (D) follows assignments inside one
 function, not across calls: a helper that returns the body it was given
 under a new name is trusted unless the name it is bound to is used in a log
 call of the same function. Shape (F) sees the dict display in the call
@@ -85,8 +89,11 @@ this package (`except Exception as exc`, bare `except`, `except
 (OSError, ssl.SSLError) as err`), a log call that carries the exception by name, wrapped
 (`_clip(exc)`, `str(exc)`, an f-string) or through an attribute other
 than a code (`errno`, `error_kind`, `status`, `status_code`, `code`,
-`__class__`); `describe_exception`,
-`type` and `isinstance` clear their own arguments. A traceback is a sink of
+`__class__`), and an exception constructor of shape (H) that does
+(`raise Own(str(exc)) from exc`: an own exception constructed from a foreign one
+carries the producer's text one hop later); `describe_exception`,
+`type`, `isinstance`, `len` and `_describe_aas_error_text` clear their own
+arguments. A traceback is a sink of
 its own, because its last rendered line is `str(exc)` and a chained cause is
 rendered too: under `Auth/` every `exc_info=` value other than `False` or
 `None` (a name, `True`, an alias bound outside the handler, a tuple,
@@ -109,6 +116,14 @@ assigned, annotated or not, from `task.exception()` (the done callback of
 `_track_task`), so a callee that
 logs a caught exception it did not catch itself is a sink too (found in
 `fcm_receiver_ha._classify_registration_exception`, 2026-09-18), and so does
+a parameter of a module-local helper that a call of the same module passes a
+bound name or its text to (`describe(err)`, `describe(cause=err)`,
+`self.classify(entry_id, err)`; positional-only, keyword-only, `*args` and
+`**kwargs` included, whatever the parameter's annotation; a bare name reaches
+a function, `self.` or `cls.` a method of that name in any class; followed
+over any number of hops, recursion and cycles to a module-wide fixpoint, and
+past 64 rounds every parameter of every module-local callee is bound,
+fail-closed), and so does
 a name the function derives from one of those by data flow inside the
 same function, followed to a fixpoint: an alias, attribute or subscript
 target (`detail = exc`, `self.last = err`, `self.errs["k"] = err`), its
@@ -134,11 +149,26 @@ read as the task method or `sys.exc_info()`, `_LOGGER.exception(...)`
 included (fail-closed).
 A module bound by `from` (`from cryptography import exceptions as ce`)
 resolves `ce.InvalidTag` like `import` does. Not seen: `except
-builtins.Exception`, a helper's return value (`exc = _pick(task)`, `kind =
-_classify(err)`: a call's result is not knowable from the name), a lambda
-bound to a name and called (`g = lambda: str(err); log(g())`), a local
-annotation with a foreign type whose value is a helper's result (`last:
-str | ClientError | None = _pick(task)`) and a handler name aliased out
+builtins.Exception`, the result of a function this file does not define
+(`exc = _pick(task)`, `kind = _classify(err)`: one file does not show what
+it returns; binding every logged result would report 210 sites in `Auth/`,
+measured on 2026-10-22, none of them a producer's text; a module-local
+helper whose `return` carries a bound exception, or another such helper's
+result (`return pick(task)`), is followed only as far as `_returning_calls`
+and `_returned_exception_leaves` reach: assigned whole to a name (`e =
+pick(task)`, also behind `await`) and inside the arguments of a log call or
+of a raised constructor (`_LOGGER.error("%s", pick(task))`, `raise
+OwnError(str(pick(task)))`, also in `str()`, an
+f-string or `.args`); every other derivation of that result is not
+followed, measured on 2026-10-24: `e = pick(task) or 'none'`, a
+conditional, a tuple (`e, n = pick(task), 0`), `d.get(k, pick(task))`,
+`msg += str(pick(task))`, a text wrapper into a name (`msg =
+str(pick(task))`), `errs.append(pick(task))`, `for e in [pick(task)]`, and
+the result passed on to another helper that logs it (`show(pick(task))`)),
+a lambda bound to a name and called (`g = lambda:
+str(err); log(g())`), a local annotation with a foreign type whose value is
+the result of such a function (`last: str | ClientError | None =
+_pick(task)`) and a handler name aliased out
 of its handler (`except Exception as exc: last_error = exc`): the package
 narrows such a name before each of its three log calls (`fcmregister.py`:
 one by `isinstance`, two by a `str` assignment in the same branch) and a
@@ -151,11 +181,24 @@ name; measured on 2026-09-20, the package has no such site, and the three
 `.put(` calls it does have sit in `eid_resolver.py`, outside this guard's
 scope), a binding
 in one method read in another (`self.last = err` in `m`, logged in `n`:
-the flow stays inside one function), `with cm as err` (what `__enter__`
-returns is the manager's business, not the name's),
-a value forwarded to a helper whose parameter is unannotated
-(`describe(err)`, `describe(cause=err)`: a parameter binds through its
-annotation only, the caller is not followed into the callee), an alias
+the flow stays inside one function), a `with … as err` whose manager
+this file does not define (what `__enter__` returns is the manager's
+business, not the name's; binding every such target would bind 10 targets
+in `Auth/`, measured on 2026-10-24: six HTTP responses of `async with
+self._session.post(...) as resp`, one `ThreadPoolExecutor` and three files
+from `open`; a module-local generator whose `yield` carries a bound
+exception is followed as the manager of a `with`, see `_yielding_calls`,
+but not when iterated (`for e in gen(task)`), not a class this file
+defines with its own `__enter__`, a manager bound to a name before the
+`with` (`cm = held(err)`, then `with cm as e`), a manager entered by hand
+(`stack.enter_context(held(task))`, `held(task).__enter__()`), or a
+`yield from`),
+a helper reached otherwise than by its bare name or through `self.`/`cls.`
+(another receiver `self._client.h(err)`, an imported helper: this guard
+parses one file, `functools.partial`, an alias of a function `g = h; g(err)`,
+a lambda, a `getattr` dispatch, a hand-off to a callback or an executor:
+`hass.async_add_executor_job(h, err)`, `loop.run_in_executor(None, h,
+err)`), an alias
 resolved to a symbol without a suffix in a module that cannot be imported
 (`from mylib import Result as ClientError`: the symbol's name decides, not
 the alias's, and `mylib` cannot be asked),
@@ -165,7 +208,8 @@ not a type), a type alias bound in *another* module (`from ._typing import
 Failure`, then `err: Failure`: this guard parses one file, and a name bound
 from a relative import counts as this package's own anyway), an alias whose
 value is the result of a call (`type Made = NewType("Made", ClientError)`,
-`cast(...)`: the same promise as for a helper's return value), the annotation
+`cast(...)`: the same promise as for the result of a function this file does
+not define), the annotation
 of a *local* assignment (`def f(): err: A = make()` does not bind `A`; reading
 it as a binding would report three sites in `fcmregister.py` today and would
 contradict what `_flow_bound_names` promises), and a bare `type` or `Callable`
@@ -191,7 +235,14 @@ that declares them (nested scopes included) or for the alias that uses them,
 never for another `T` of the same module, and there they shadow a module alias
 of the same name. A conditional alias value
 (`X = A if c else B`) is not collected either, `traceback.format_exc()`,
-an own exception built from a foreign one, and every module outside `Auth/`
+an own exception that subclasses a foreign one (an instance carries the
+text it is built with, and that is read at its constructor; the 27
+constructions of such classes in the package carry none, measured on
+2026-10-22), an own exception built from a foreign one that is neither
+raised nor bound to a name that is raised (`return Own(str(err))`,
+`fut.set_exception(Own(str(err)))`: the constructor sink is the one of
+shape (H)), a note added to an exception (`err.add_note(str(other))`), and
+every module outside `Auth/`
 (119 such sites counted on 2026-09-17). Reported although harmless, on purpose:
 a rebinding to a harmless value (`err = "safe"; log(err)`), a
 nested function whose own parameter shadows a bound name (`def inner(err:
@@ -208,9 +259,10 @@ body name too and would be reported if logged; fail-closed, no instance
 today. A raw value under a neutral name that was not read from a
 response in the same function (`data`, `msg`), a slice whose whole chain is
 neutrally named (`page.read()[:16]`), a wrapping call whose arguments hide
-the name (`str(response)[:16]`, `bytes(payload)[:16]`: the chain follows the
-callee, not the arguments), `binascii.hexlify()`, `base64.b64encode()` or
-`repr(bytes)` are not reported; nor is a message passed whole to `%s`
+a name outside the exact list of shape (E) (`str(response)[:16]`: the chain
+follows the callee, not the arguments; `bytes(payload)[:16]` is reported
+through shape (E)), `binascii.hexlify()`, `base64.b64encode()` or
+`repr(bytes)` over such a name are not reported; nor is a message passed whole to `%s`
 (`str(message)` is its text format). Arguments of a logging wrapper that is
 not itself a log call are unchecked, whatever they carry; the two wrappers
 the package has, `_log_verbose` and `_log_warn_with_limit`, are treated as
@@ -232,7 +284,7 @@ import builtins
 import importlib
 import re
 import types
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 
 import pytest
@@ -265,7 +317,16 @@ _ROTATING_LEAVES: frozenset[str] = frozenset({"eid", "eid_hex", "truncated_eid_h
 # `missing_key` in `fcm_refresh_install_token` is `KeyError.args[0]` from
 # four literal lookups on the package's own credentials dict (`"fcm"`,
 # `"installation"`, `"refresh_token"`, `"fid"`): the key the code asked
-# for, not text a producer wrote (shape (I), 2026-09-18). The prefix keys
+# for, not text a producer wrote (shape (I), 2026-09-18). `_err` in
+# `Auth/auth_flow.py` is the `ImportError` of the optional selenium import
+# at module level; `missing_browser_dependency` quotes it after the install
+# hint (`browser_deps.py`). Its text comes from the import system and names
+# a module (`No module named 'selenium'`) or, for a broken installation, a
+# path inside it; not a server or a user, and the install hint needs it (shape (I) constructor, 2026-10-23).
+# `gcm_data` in `fcmregister.py` and `merged_device_data` in
+# `coordinator/identity.py` go through `sorted(...)`, which iterates a mapping
+# and yields its key names, not its values (shape (E) through a helper,
+# 2026-11-08). The prefix keys
 # the exception to that one call; `test_each_reviewed_site_matches_
 # exactly_one_log_call` fails when the site disappears or is copied.
 _REVIEWED: frozenset[tuple[str, str, str]] = frozenset(
@@ -276,6 +337,13 @@ _REVIEWED: frozenset[tuple[str, str, str]] = frozenset(
             "missing_key",
             "Cannot refresh FCM token: missing credentials key",
         ),
+        ("Auth/auth_flow.py", "_err", "raise"),
+        (
+            "Auth/firebase_messaging/fcmregister.py",
+            "gcm_data",
+            "GCM subscription: fields=%s",
+        ),
+        ("coordinator/identity.py", "merged_device_data", "Building Identity for %s"),
     }
 )
 
@@ -553,13 +621,48 @@ def _body_leaves(argument: ast.AST, bodies: frozenset[str]) -> list[tuple[str, s
     return found
 
 
-def _whole_body_leaves(argument: ast.AST) -> list[tuple[str, str]]:
-    """(shape, name) when the argument itself is a whole-body name (shape (E))."""
-    if isinstance(argument, (ast.Name, ast.Attribute)):
-        chain = _chain(argument)
+def _whole_body_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Starred):
+        node = node.value
+    if isinstance(node, (ast.Name, ast.Attribute)):
+        chain = _chain(node)
         if chain and chain[0] in _WHOLE_BODY_NAMES:
-            return [("whole", chain[0])]
-    return []
+            return chain[0]
+    return None
+
+
+def _whole_body_leaves(argument: ast.AST) -> list[tuple[str, str]]:
+    """(shape, name) for a whole-body name in one argument (shape (E)).
+
+    The argument itself, or an argument of any call inside it whose name is
+    not in `_SAFE_WRAPPERS` (`summarize(hex_response)`, `str(payload)`): a
+    helper that is not known to be log-safe renders what it is given. The walk
+    stops at a log-safe wrapper, as in shape (D).
+    """
+    found: list[tuple[str, str]] = []
+    name = _whole_body_name(argument)
+    if name is not None:
+        found.append(("whole", name))
+
+    def walk(node: ast.AST) -> None:
+        if isinstance(node, ast.Call):
+            func = node.func
+            called = (
+                func.attr
+                if isinstance(func, ast.Attribute)
+                else getattr(func, "id", "")
+            )
+            if called in _SAFE_WRAPPERS:
+                return
+            for inner in [*node.args, *(kw.value for kw in node.keywords)]:
+                inner_name = _whole_body_name(inner)
+                if inner_name is not None:
+                    found.append(("whole", inner_name))
+        for child in ast.iter_child_nodes(node):
+            walk(child)
+
+    walk(argument)
+    return found
 
 
 def _expansion_leaves(argument: ast.AST) -> list[tuple[str, str]]:
@@ -836,9 +939,20 @@ _BUILTIN_EXCEPTIONS = frozenset(
 # (its 40 sites were rewritten, no file is excused).
 _SHAPE_I_ROOT = "Auth/"
 _BROAD_EXCEPTIONS = frozenset({"Exception", "BaseException"})
-# Wrappers that reduce an exception to a type, a kind or a count.
+# Wrappers that reduce an exception to a type, a kind or a count. `len` gives a
+# count; `_describe_aas_error_text` (`Auth/token_retrieval.py`) names the
+# markers of a gpsoauth error text and its length, never the text; both stand
+# in exception constructors there (measured on 2026-10-22, AP4 of
+# PLAN_GFMY_WAECHTER_LOGGING_LUECKEN: three sites, all harmless).
 _SAFE_EXCEPTION_WRAPPERS = frozenset(
-    {"describe_exception", "exception_origin", "type", "isinstance"}
+    {
+        "describe_exception",
+        "exception_origin",
+        "type",
+        "isinstance",
+        "len",
+        "_describe_aas_error_text",
+    }
 )
 # Calls whose result renders the exception text: binding their result binds
 # the name (`shown = str(err)`, `text = ", ".join(str(e) for e in errors)`);
@@ -1840,8 +1954,10 @@ def _carries_exception(value: ast.AST, bound: frozenset[str]) -> bool:
     element carries, a starred or awaited value. Not followed, on purpose:
     any other function that takes the name as an argument (`kind =
     _classify(entry_id, err)`, `len(errors)`: a function's result is not
-    knowable from the name, and a helper's return value is a stated blind
-    spot); binding such a target would report every logged result. Any
+    knowable from the name, and the result of a function this file does not
+    define is a stated blind spot; a module-local helper whose `return`
+    carries is followed through `returning`); binding such a target would
+    report every logged result. Any
     call named `exception()` or `exc_info()` is read as the task method or
     `sys.exc_info()`, `_LOGGER.exception(...)` included: fail-closed, one
     review line. `operator.setitem(d, k, err)` and the like are functions,
@@ -1976,6 +2092,8 @@ def _flow_bound_names(
     imported: frozenset[str],
     modules: dict[str, str],
     local: dict[str, tuple[ast.AST, ...]],
+    returning: frozenset[int] = frozenset(),
+    yielding: frozenset[int] = frozenset(),
 ) -> tuple[str, ...]:
     """Fourth binding: names that receive a bound exception inside one function.
 
@@ -2006,7 +2124,14 @@ def _flow_bound_names(
     after it: the package narrows such a name before each of its three
     log calls (`fcmregister.py`: one by `isinstance`, two by a `str`
     assignment in the same branch), and a flow-insensitive binding would
-    report all three.
+    report all three. An assignment, annotated assignment or walrus whose
+    value (behind `await`) is a call in `returning` binds its target as a
+    whole: the call reaches a module-local helper whose `return` carries a
+    bound exception (`_returning_calls`); a value that only contains such a
+    call (`pick(task) or 'none'`) binds nothing. A `with` or `async with` item
+    whose manager is a call in `yielding` binds its `as`
+    target the same way: the manager is a module-local generator whose
+    `yield` carries a bound exception (`_yielding_calls`).
     """
     bound = set(seed)
     while True:
@@ -2018,8 +2143,18 @@ def _flow_bound_names(
                 targets = (
                     node.targets if isinstance(node, ast.Assign) else [node.target]
                 )
+                value = node.value
+                if isinstance(value, ast.Await):
+                    value = value.value
                 for target in targets:
                     bound.update(_unpacked_names(target, node.value, frozen))
+                    if id(value) in returning:
+                        bound.update(_target_names(target))
+            elif isinstance(node, (ast.With, ast.AsyncWith)):
+                for item in node.items:
+                    manager = item.context_expr
+                    if item.optional_vars is not None and id(manager) in yielding:
+                        bound.update(_target_names(item.optional_vars))
             elif isinstance(node, ast.AugAssign):
                 if _carries_exception(node.value, frozen):
                     bound.update(_target_names(node.target))
@@ -2076,23 +2211,180 @@ def _flow_bound_names(
             return tuple(sorted(bound - set(seed)))
 
 
-def _exception_names_by_call(tree: ast.AST) -> dict[int, tuple[str, ...]]:
+# Rounds of the module-wide fixpoint over helper calls; past it every parameter
+# of every module-local callee is bound (fail-closed). A chain needs one round
+# per hop plus one to confirm; measured on 2026-10-24, with helper results
+# and manager yields in the fixpoint, every `Auth/` module settles within
+# three rounds (two of the nineteen scanned modules need the third).
+_FORWARD_ROUND_LIMIT = 64
+_RECEIVERS = frozenset({"self", "cls"})
+
+
+def _module_local_callees(
+    tree: ast.AST,
+) -> dict[str, list[tuple[ast.AST, int]]]:
+    """Every `def` of the module by name, with the receiver slots it skips.
+
+    A method (a `def` directly in a class body) skips its first parameter when
+    called through `self.` or `cls.`, a `@staticmethod` skips none; a function
+    defined anywhere else, nested ones included, is a callee by its bare name.
+    The skip is `-1` for a function: a bare name never reaches a method.
+    """
+    methods: dict[int, int] = {}
+    for klass in ast.walk(tree):
+        if isinstance(klass, ast.ClassDef):
+            for item in klass.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    static = any(
+                        _chain(d) == ["staticmethod"] for d in item.decorator_list
+                    )
+                    methods[id(item)] = 0 if static else 1
+    callees: dict[str, list[tuple[ast.AST, int]]] = {}
+    for function in ast.walk(tree):
+        if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            callees.setdefault(function.name, []).append(
+                (function, methods.get(id(function), -1))
+            )
+    return callees
+
+
+def _resolved_callees(
+    call: ast.Call, callees: dict[str, list[tuple[ast.AST, int]]]
+) -> list[tuple[ast.AST, int]]:
+    """The module-local `def`s a call may reach, with the receiver slots to skip.
+
+    `h(err)` reaches every function named `h` that is not a method;
+    `self.h(err)` and `cls.h(err)` reach every method named `h` in any class of
+    the module (two classes with the same method name: both, fail-closed).
+    Not followed: another receiver (`self._client.h(err)`), an imported
+    helper, `functools.partial`, an alias of a function (`g = h; g(err)`), a
+    lambda and a dispatch through `getattr`.
+    """
+    func = call.func
+    if isinstance(func, ast.Name):
+        return [(f, 0) for f, skip in callees.get(func.id, []) if skip < 0]
+    if (
+        isinstance(func, ast.Attribute)
+        and isinstance(func.value, ast.Name)
+        and func.value.id in _RECEIVERS
+    ):
+        return [(f, skip) for f, skip in callees.get(func.attr, []) if skip >= 0]
+    return []
+
+
+def _forwarded_parameter_seeds(
+    tree: ast.AST,
+    names: dict[int, tuple[str, ...]],
+    callees: dict[str, list[tuple[ast.AST, int]]],
+) -> dict[int, tuple[str, ...]]:
+    """Parameters of module-local helpers that receive a bound exception.
+
+    Every call whose argument carries a name bound at the call
+    (`_carries_exception`: `describe(err)`, `describe(cause=err)`,
+    `h(str(err))`, `h(*errors)`, `h(**{"cause": err})`; not
+    `h(describe_exception(err))`) binds the parameter the argument lands in:
+    by position (positional-only and normal parameters, the rest in
+    `*args`), by keyword (normal and keyword-only parameters, the rest in
+    `**kwargs`). A starred argument binds its slot and every positional slot
+    after it, `**mapping` every parameter that takes a keyword; which slot
+    the value reaches is not knowable from the call. Every parameter counts,
+    whatever its annotation (`v: object`, `v: str`): the caller decides what
+    it holds (decision V-4, 2026-10-22).
+    """
+    seeds: dict[int, set[str]] = {}
+    for call in ast.walk(tree):
+        if not isinstance(call, ast.Call):
+            continue
+        targets = _resolved_callees(call, callees)
+        if not targets:
+            continue
+        bound = frozenset(names.get(id(call), ()))
+        for callee, skip in targets:
+            args = callee.args
+            positional = [*args.posonlyargs, *args.args][skip:]
+            variadic = [args.vararg.arg] if args.vararg else []
+            # The receiver may be positional-only (`def h(self, /, v)`):
+            # skip it in the joint list, not in `args.args`.
+            keyword = {p.arg for p in [*positional, *args.kwonlyargs]}
+            keyword -= {p.arg for p in args.posonlyargs}
+            # A starred argument may unpack to nothing, so every argument
+            # from the first one on may land in its slot (`h(*(), err)`).
+            first_star: int | None = None
+            hit: set[str] = set()
+            for index, argument in enumerate(call.args):
+                if first_star is None and isinstance(argument, ast.Starred):
+                    first_star = index
+                if not _carries_exception(argument, bound):
+                    continue
+                if first_star is not None:
+                    hit.update(p.arg for p in positional[first_star:])
+                    hit.update(variadic)
+                elif index < len(positional):
+                    hit.add(positional[index].arg)
+                else:
+                    hit.update(variadic)
+            for kw in call.keywords:
+                if not _carries_exception(kw.value, bound):
+                    continue
+                if kw.arg is None:
+                    hit.update(keyword)
+                    hit.update([args.kwarg.arg] if args.kwarg else [])
+                elif kw.arg in keyword:
+                    hit.add(kw.arg)
+                elif args.kwarg:
+                    hit.add(args.kwarg.arg)
+            if hit:
+                seeds.setdefault(id(callee), set()).update(hit)
+    return {key: tuple(sorted(value)) for key, value in seeds.items()}
+
+
+def _all_callee_parameters(
+    tree: ast.AST, callees: dict[str, list[tuple[ast.AST, int]]]
+) -> dict[int, tuple[str, ...]]:
+    """Every parameter of every module-local `def` some call of the module reaches."""
+    seeds: dict[int, tuple[str, ...]] = {}
+    for call in ast.walk(tree):
+        if isinstance(call, ast.Call):
+            for callee, _skip in _resolved_callees(call, callees):
+                args = callee.args
+                seeds[id(callee)] = tuple(
+                    p.arg
+                    for p in [
+                        *args.posonlyargs,
+                        *args.args,
+                        *args.kwonlyargs,
+                        *([args.vararg] if args.vararg else []),
+                        *([args.kwarg] if args.kwarg else []),
+                    ]
+                )
+    return seeds
+
+
+def _exception_names_by_call(
+    tree: ast.AST, carrying: set[int]
+) -> dict[int, tuple[str, ...]]:
     """Map each call to every foreign exception name in scope, `()` if none.
 
-    Four bindings, accumulated rather than replaced: every parameter annotated
+    Five bindings, accumulated rather than replaced: every parameter annotated
     with a foreign exception type (whole function body, all of them, not the
     first: `def f(first: BaseException, second: OSError)` logs `second`), a
-    name that receives such a parameter or `<task>.exception()` through data
-    flow (`_flow_bound_names`: assignment, unpacking, `for`, `match`, whole
+    parameter of a module-local helper that a call passes a bound name to
+    (`_forwarded_parameter_seeds`, followed to a module-wide fixpoint over
+    any number of hops, recursion and cycles included), a name that receives
+    such a parameter or `<task>.exception()` through data flow
+    (`_flow_bound_names`: assignment, unpacking, `for`, `match`, whole
     function body), and a foreign `except … as NAME` handler (handler body,
     with the same data flow bounded to that body).
     A call inside a foreign handler without `as` keeps the names the
     enclosing function bound (`def f(err: BaseException): … except
     Exception: log(err)` keeps `err`); the implicit traceback of such a
     handler (`logger.exception`, `exc_info=True`) is reported positionally,
-    not through this map.
+    not through this map. Past `_FORWARD_ROUND_LIMIT` rounds every parameter
+    of every module-local callee is bound (fail-closed).
+    `carrying` receives the calls of module-local helpers whose
+    `return` carries at the fixpoint (fail-closed: every such call that returns
+    a value); `_returned_exception_leaves` reads them where no name binds them.
     """
-    names: dict[int, tuple[str, ...]] = {}
     own = _own_type_names(tree)
     aliases = _import_aliases(tree)
     # One pass per file, before any annotation is classified: an alias may be
@@ -2101,6 +2393,227 @@ def _exception_names_by_call(tree: ast.AST) -> dict[int, tuple[str, ...]]:
     scopes = _type_param_scopes(tree, local)
     imported = _imported_exception_types(tree)
     modules = _module_bindings(tree)
+    callees = _module_local_callees(tree)
+    context = (own, aliases, local, scopes, imported, modules)
+    forwarded: dict[int, tuple[str, ...]] = {}
+    returning: frozenset[int] = frozenset()
+    yielding: frozenset[int] = frozenset()
+    for _round in range(_FORWARD_ROUND_LIMIT):
+        by_scope: dict[int, tuple[str, ...]] = {}
+        names = _names_for_seeds(
+            tree, forwarded, context, returning, by_scope, yielding
+        )
+        seeds = _forwarded_parameter_seeds(tree, names, callees)
+        calls = _returning_calls(tree, by_scope, callees, returning)
+        managers = _yielding_calls(tree, by_scope, callees, returning)
+        if managers != yielding:
+            yielding = managers
+            forwarded, returning = seeds, calls
+            continue
+        if seeds == forwarded and calls == returning:
+            carrying.update(returning)
+            return names
+        forwarded, returning = seeds, calls
+    every_returning = _all_returning_calls(tree, callees)
+    carrying.update(every_returning)
+    # The fallback round is the last one: nothing reads its scope names.
+    return _names_for_seeds(
+        tree,
+        _all_callee_parameters(tree, callees),
+        context,
+        every_returning,
+        {},
+        _all_yielding_calls(tree, callees),
+    )
+
+
+def _scope_returns(
+    node: ast.AST, handlers: tuple[int, ...] = ()
+) -> Iterator[tuple[ast.Return, tuple[int, ...]]]:
+    """The `return` statements of one function, with the handlers around each.
+
+    A nested `def` or class is its own scope and not entered: its `return`
+    does not make the enclosing function return anything. Only statements,
+    handlers and `case` blocks are entered, iteratively: a `return` stands
+    nowhere else, and an expression may nest deeper than the recursion limit
+    (a long `|` chain in a type alias).
+    """
+    stack = [(child, handlers) for child in ast.iter_child_nodes(node)]
+    while stack:
+        child, around = stack.pop()
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        if not isinstance(child, (ast.stmt, ast.excepthandler, ast.match_case)):
+            continue
+        if isinstance(child, ast.Return):
+            yield child, around
+            continue
+        inner = (*around, id(child)) if isinstance(child, ast.ExceptHandler) else around
+        stack.extend((grand, inner) for grand in ast.iter_child_nodes(child))
+
+
+def _returning_calls(
+    tree: ast.AST,
+    by_scope: dict[int, tuple[str, ...]],
+    callees: dict[str, list[tuple[ast.AST, int]]],
+    returning: frozenset[int],
+) -> frozenset[int]:
+    """Calls that reach a module-local helper whose `return` carries an exception.
+
+    A helper returns an exception when one of its own `return` statements
+    carries a name bound in the helper (`_carries_exception` over its
+    parameters, forwarded parameters and data flow, plus the name of a
+    foreign handler around the `return`: `except ClientError as caught:
+    return caught`) or returns, behind `await`, a call that already is such
+    a call (`return pick(task)`, one more hop per round). A helper named
+    like a safe wrapper (`describe_exception`) is not one; neither is a
+    function the module does not define (`_classify(err)`, an imported
+    helper): one file does not show what it returns.
+    """
+    returners: set[int] = set()
+    for function in ast.walk(tree):
+        if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if function.name in _SAFE_EXCEPTION_WRAPPERS:
+            continue
+        own = by_scope.get(id(function), ())
+        for node, handlers in _scope_returns(function):
+            if node.value is None:
+                continue
+            value = (
+                node.value.value if isinstance(node.value, ast.Await) else node.value
+            )
+            bound = frozenset(
+                [*own, *(n for h in handlers for n in by_scope.get(h, ()))]
+            )
+            if id(value) in returning or _carries_exception(value, bound):
+                returners.add(id(function))
+                break
+    return frozenset(
+        id(call)
+        for call in ast.walk(tree)
+        if isinstance(call, ast.Call)
+        and any(id(f) in returners for f, _ in _resolved_callees(call, callees))
+    )
+
+
+def _scope_yields(
+    node: ast.AST,
+) -> Iterator[tuple[ast.Yield, tuple[int, ...]]]:
+    """The `yield` expressions of one function, with the handlers around each.
+
+    Like `_scope_returns`, but a `yield` is an expression and may stand
+    inside one (`sent = yield err`), so expressions are entered too, still
+    iteratively; a nested `def` or class is its own scope.
+    """
+    stack = [(child, ()) for child in ast.iter_child_nodes(node)]
+    while stack:
+        child, around = stack.pop()
+        if isinstance(child, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if isinstance(child, ast.Yield):
+            yield child, around
+        inner = (*around, id(child)) if isinstance(child, ast.ExceptHandler) else around
+        stack.extend((grand, inner) for grand in ast.iter_child_nodes(child))
+
+
+def _yielding_calls(
+    tree: ast.AST,
+    by_scope: dict[int, tuple[str, ...]],
+    callees: dict[str, list[tuple[ast.AST, int]]],
+    returning: frozenset[int],
+) -> frozenset[int]:
+    """Calls that reach a module-local generator whose `yield` carries an exception.
+
+    Such a generator, wrapped by `contextlib.contextmanager` or
+    `asynccontextmanager`, hands what it yields to `with … as NAME`. Read
+    like `_returning_calls`: a `yield` carries a name bound in the generator,
+    the name of a foreign handler around it, or a call that returns an
+    exception (`yield pick(task)`, behind `await`). The decorator is not checked
+    (fail-closed: an undecorated generator in a `with` fails at runtime).
+    A manager the module does not define (a parameter `cm`, `async with
+    session.post(...) as resp`) is not one: one file does not show what its
+    `__enter__` returns.
+    """
+    yielders: set[int] = set()
+    for generator in ast.walk(tree):
+        if not isinstance(generator, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        names = by_scope.get(id(generator), ())
+        for node, handlers in _scope_yields(generator):
+            if node.value is None:
+                continue
+            yielded = node.value
+            if isinstance(yielded, ast.Await):
+                yielded = yielded.value
+            carried = frozenset(
+                [*names, *(n for h in handlers for n in by_scope.get(h, ()))]
+            )
+            if id(yielded) in returning or _carries_exception(yielded, carried):
+                yielders.add(id(generator))
+                break
+    return frozenset(
+        id(call)
+        for call in ast.walk(tree)
+        if isinstance(call, ast.Call)
+        and any(id(f) in yielders for f, _ in _resolved_callees(call, callees))
+    )
+
+
+def _all_yielding_calls(
+    tree: ast.AST, callees: dict[str, list[tuple[ast.AST, int]]]
+) -> frozenset[int]:
+    """Every call of a module-local generator that yields a value (fail-closed)."""
+    yielders = {
+        id(function)
+        for function in ast.walk(tree)
+        if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and any(node.value is not None for node, _ in _scope_yields(function))
+    }
+    return frozenset(
+        id(call)
+        for call in ast.walk(tree)
+        if isinstance(call, ast.Call)
+        and any(id(f) in yielders for f, _ in _resolved_callees(call, callees))
+    )
+
+
+def _all_returning_calls(
+    tree: ast.AST, callees: dict[str, list[tuple[ast.AST, int]]]
+) -> frozenset[int]:
+    """Every call of a module-local helper that returns a value (fail-closed)."""
+    returners = {
+        id(function)
+        for function in ast.walk(tree)
+        if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and function.name not in _SAFE_EXCEPTION_WRAPPERS
+        and any(node.value is not None for node, _ in _scope_returns(function))
+    }
+    return frozenset(
+        id(call)
+        for call in ast.walk(tree)
+        if isinstance(call, ast.Call)
+        and any(id(f) in returners for f, _ in _resolved_callees(call, callees))
+    )
+
+
+def _names_for_seeds(
+    tree: ast.AST,
+    forwarded: dict[int, tuple[str, ...]],
+    context: tuple,
+    returning: frozenset[int],
+    by_scope: dict[int, tuple[str, ...]],
+    yielding: frozenset[int] = frozenset(),
+) -> dict[int, tuple[str, ...]]:
+    """One round of `_exception_names_by_call` for the given forwarded parameters.
+
+    `returning` are the calls whose result binds (`_returning_calls`),
+    `yielding` the managers whose `with … as` target binds (`_yielding_calls`);
+    `by_scope` receives the names bound in each function and
+    each foreign handler, keyed by the node's `id`.
+    """
+    own, aliases, local, scopes, imported, modules = context
+    names: dict[int, tuple[str, ...]] = {}
     for function in ast.walk(tree):
         if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
@@ -2119,11 +2632,15 @@ def _exception_names_by_call(tree: ast.AST) -> dict[int, tuple[str, ...]]:
                 p.annotation, own, aliases, imported, modules, local=scoped
             )
         )
+        bound += tuple(
+            name for name in forwarded.get(id(function), ()) if name not in bound
+        )
         # The data flow reads the table for `match` class patterns only, where
         # a type parameter cannot stand (`case T():` raises at runtime).
         bound += _flow_bound_names(
-            function, bound, own, aliases, imported, modules, local
+            function, bound, own, aliases, imported, modules, local, returning, yielding
         )
+        by_scope[id(function)] = bound
         if not bound:
             continue
         for inner in ast.walk(function):
@@ -2142,8 +2659,17 @@ def _exception_names_by_call(tree: ast.AST) -> dict[int, tuple[str, ...]]:
         bound = (handler.name,) if handler.name else ()
         if handler.name:
             bound += _flow_bound_names(
-                handler, bound, own, aliases, imported, modules, local
+                handler,
+                bound,
+                own,
+                aliases,
+                imported,
+                modules,
+                local,
+                returning,
+                yielding,
             )
+        by_scope[id(handler)] = bound
         for inner in ast.walk(handler):
             if isinstance(inner, ast.Call):
                 names[id(inner)] = names.get(id(inner), ()) + bound
@@ -2214,6 +2740,39 @@ def _retrieved_exception_leaves(argument: ast.AST) -> list[tuple[str, str]]:
     return []
 
 
+def _returned_exception_leaves(
+    argument: ast.AST, carrying: set[int], bound: tuple[str, ...]
+) -> list[tuple[str, str]]:
+    """Shape (I): the result of a module-local helper whose `return` carries, used in place.
+
+    `_LOGGER.error("%s", pick(task))` has no name to bind; like
+    `task.exception()` passed directly, the call is the leaf, wherever it
+    sits in the argument (`str(pick(task))`, `f"{pick(task)}"`,
+    `pick(task).args`, `pick(task) or None`). Not reported: the call inside a
+    safe wrapper, under a code attribute (`pick(task).errno`), and a call
+    whose own arguments carry a bound name (the name is the leaf already).
+    """
+    cleared: set[int] = set()
+    for node in ast.walk(argument):
+        if isinstance(node, ast.Call):
+            chain = _chain(node.func)
+            if chain and chain[0] in _SAFE_EXCEPTION_WRAPPERS:
+                for inner in node.args:
+                    cleared.update(id(n) for n in ast.walk(inner))
+        elif isinstance(node, ast.Attribute) and node.attr in _SAFE_EXCEPTION_ATTRS:
+            cleared.add(id(node.value))
+    names = frozenset(bound)
+    for node in ast.walk(argument):
+        if (
+            isinstance(node, ast.Call)
+            and id(node) in carrying
+            and id(node) not in cleared
+            and not _mentions_exception(node, names)
+        ):
+            return [("I", f"{ast.unparse(node.func)}()")]
+    return []
+
+
 def _is_exception_constructor(
     value: ast.AST, targets: list[ast.expr], raised_names: set[str]
 ) -> bool:
@@ -2265,7 +2824,8 @@ def _scan_tree(
                             aliases_by_call.get(id(inner), frozenset()) | aliases
                         )
     in_scope_for_i = relative.startswith(_SHAPE_I_ROOT)
-    exception_names = _exception_names_by_call(tree) if in_scope_for_i else {}
+    carrying: set[int] = set()
+    exception_names = _exception_names_by_call(tree, carrying) if in_scope_for_i else {}
     raised_names = {
         node.exc.id
         for node in ast.walk(tree)
@@ -2304,7 +2864,10 @@ def _scan_tree(
         scanned += 1
         bodies = bodies_by_call.get(id(call), frozenset())
         messages = messages_by_call.get(id(call), frozenset())
-        bound_names = exception_names.get(id(call), ()) if fmt != "raise" else ()
+        # Shape (I) reads an exception constructor like a log call: an own
+        # exception built from a foreign one (`raise Own(str(err)) from err`,
+        # `wrapped = Own(err)`) carries the producer's text one hop later.
+        bound_names = exception_names.get(id(call), ())
         arguments: list[ast.AST] = [*call.args, *(kw.value for kw in call.keywords)]
         # Shape (I) treats a traceback as a sink of its own: the last line of
         # a rendered traceback is `str(exc)`. `exc_info=<name>`, `exc_info=True`
@@ -2350,6 +2913,11 @@ def _scan_tree(
                 ),
                 *(
                     _retrieved_exception_leaves(argument)
+                    if in_scope_for_i and id(argument) not in traceback_args
+                    else []
+                ),
+                *(
+                    _returned_exception_leaves(argument, carrying, bound_names)
                     if in_scope_for_i and id(argument) not in traceback_args
                     else []
                 ),
@@ -2441,6 +3009,39 @@ async def fetch(self, resp, first):
         (10, "content"),
         (14, "key"),
         (14, "code"),
+    ]
+
+
+def test_shape_e_reports_a_whole_body_passed_to_a_helper() -> None:
+    """A whole-body name as argument of a call outside `_SAFE_WRAPPERS` leaks.
+
+    Fixture in the shape of the locate callback: the summary helper is looked
+    up through `getattr` and bound to a neutral name, so neither the helper's
+    name nor a body read is visible. The helper renders whatever it is given,
+    so `summarize(hex_response)` puts the hex dump into the record; `len` and
+    the other log-safe wrappers stay silent, and a message name (`device_update`)
+    is a matter of shape (G), not of this rule.
+    """
+    source = """
+def on_location(hex_response, payload):
+    summarize = cast(Any, getattr(decoder_module, "_unknown_field_summary", None))
+    device_update = parse_device_update_protobuf(hex_response)
+    _LOGGER.debug("a: %s", summarize(device_update) or "none")
+    _LOGGER.debug("b: %s", summarize(hex_response))
+    _LOGGER.debug("c: %s", _unknown_field_summary(hex_response))
+    _LOGGER.debug("d: %s", len(hex_response))
+    _LOGGER.debug("e: %s", str(payload))
+    _LOGGER.debug("f: %s", _describe_body(raw_response=payload))
+    _LOGGER.debug("g: %s", render(*payload))
+"""
+    offenders, scanned = _scan_tree(ast.parse(source), "fixture.py")
+
+    assert scanned == 7
+    assert [(line, leaf) for _p, line, leaf, _f in offenders] == [
+        (6, "hex_response"),
+        (7, "hex_response"),
+        (9, "payload"),
+        (11, "payload"),
     ]
 
 
@@ -4343,10 +4944,11 @@ def test_shape_i_follows_bound_exceptions_by_data_flow() -> None:
     `extendleft` fills a `deque`, and `str(queue)` renders what is inside
     it; the Codex review of 2026-09-20 on `6ae6af90`, which found the queue
     added as a rendering carrier while its insertion methods were missing
-    from the mutator set). Not reported: a tuple target fed by a
-    helper's result (line 34, `_pick` is not followed), a code attribute and
-    a classifier's result (line 57, `code` and `kind`), a local annotation
-    whose value is a helper's result and a lambda that is called (line 116:
+    from the mutator set). Not reported: a tuple target fed by the result
+    of a function this file does not define (line 34, `_pick`), a code
+    attribute and a classifier's result (line 57, `code` and `kind`), a
+    local annotation whose value is such a result and a lambda that is
+    called (line 116:
     the package narrows such a name before logging, and a lambda's result
     is a call's), and four harmless derivations (line 136: a method on a
     safe wrapper's result, a method on a code attribute, `len()`, and
@@ -4515,6 +5117,1027 @@ def test_import_helpers_survive_a_hostile_module_getattr(
     tree = ast.parse("from hostile import sub\nfrom hostile import Boom as Error\n")
     assert _module_bindings(tree) == {}
     assert _imported_exception_types(tree) == frozenset()
+
+
+_SHAPE_I_FORWARD_FIXTURE = """
+import logging
+from aiohttp import ClientError
+from .helpers import imported_helper
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def describe(value) -> None:
+    _LOGGER.error("x %s", value)
+
+
+def f01(err: ClientError) -> None:
+    describe(err)
+
+
+def f02(err: ClientError) -> None:
+    describe_kw(cause=err)
+
+
+def describe_kw(cause) -> None:
+    _LOGGER.error("x %s", cause)
+
+
+def f03(err: ClientError) -> None:
+    posonly(1, err)
+
+
+def posonly(n, v, /) -> None:
+    _LOGGER.error("x %s %s", n, v)
+
+
+def f04(err: ClientError) -> None:
+    kwonly(1, cause=err)
+
+
+def kwonly(n, *, cause) -> None:
+    _LOGGER.error("x %s %s", n, cause)
+
+
+def f05(err: ClientError) -> None:
+    star_args(1, err)
+
+
+def star_args(*args) -> None:
+    _LOGGER.error("x %s", args)
+
+
+def f06(err: ClientError) -> None:
+    star_kw(cause=err)
+
+
+def star_kw(**kw) -> None:
+    _LOGGER.error("x %s", kw["cause"])
+
+
+def f07(err: ClientError) -> None:
+    def inner(v) -> None:
+        _LOGGER.error("x %s", v)
+
+    inner(err)
+
+
+class Holder:
+    def f08(self, err: ClientError) -> None:
+        self.held(err)
+        self.static_held(err)
+
+    def held(self, value) -> None:
+        _LOGGER.error("x %s", value)
+
+    @staticmethod
+    def static_held(value) -> None:
+        _LOGGER.error("x %s", value)
+
+
+def f09(err: ClientError) -> None:
+    g = lambda v: lambda_sink(v)
+    g(err)
+
+
+class Receiver:
+    async def f10(
+        self, entry_id: str, err: ClientError, generation: int | None = None
+    ) -> None:
+        await self.classify(entry_id, err, generation)
+
+    async def classify(self, entry_id, err, generation=None) -> None:
+        _LOGGER.warning("classify %s: %s", entry_id, err)
+
+    async def f11(self, entry_id) -> None:
+        try:
+            await self.connect()
+        except Exception as err:
+            await self.classify_handler(entry_id, err)
+
+    async def classify_handler(self, entry_id, problem) -> None:
+        _LOGGER.warning("x %s %s", entry_id, problem)
+
+
+def f12(err: ClientError) -> None:
+    text_helper(str(err))
+
+
+def text_helper(text) -> None:
+    _LOGGER.error("x %s", text)
+
+
+def f13(err: ClientError) -> None:
+    safe_helper(describe_exception(err))
+
+
+def safe_helper(text) -> None:
+    _LOGGER.error("x %s", text)
+
+
+def f14(errors: list[ClientError]) -> None:
+    many(*errors)
+
+
+def many(first, *rest) -> None:
+    _LOGGER.error("x %s", first)
+
+
+def f15(err: ClientError) -> None:
+    dict_kw(**{"cause": err})
+
+
+def dict_kw(cause=None) -> None:
+    _LOGGER.error("x %s", cause)
+
+
+def f16(err: ClientError) -> None:
+    hop1(err)
+
+
+def hop1(a) -> None:
+    hop2(a)
+
+
+def hop2(b) -> None:
+    _LOGGER.error("x %s", b)
+
+
+def f17(err: ClientError) -> None:
+    recurse(err, 3)
+    ping(err)
+
+
+def recurse(v, depth=0) -> None:
+    if depth:
+        recurse(v, depth - 1)
+    _LOGGER.error("x %s", v)
+
+
+def ping(v) -> None:
+    pong(v)
+
+
+def pong(w) -> None:
+    ping(w)
+    _LOGGER.error("x %s", w)
+
+
+def f18(err: ClientError) -> None:
+    with_default(1, cause=err)
+
+
+def with_default(x, cause=None) -> None:
+    _LOGGER.error("x %s %s", x, cause)
+
+
+def f19(err: ClientError) -> None:
+    quiet(err)
+
+
+def quiet(v) -> int:
+    return len(str(v))
+
+
+def f20(err: ClientError) -> None:
+    later(err)
+
+
+class First:
+    def f21(self, err: ClientError) -> None:
+        self.same(err)
+
+    def same(self, v) -> None:
+        _LOGGER.error("x %s", v)
+
+
+class Second:
+    def same(self, v) -> None:
+        _LOGGER.error("x %s", v)
+
+
+class Client:
+    def f22(self, err: ClientError) -> None:
+        self._client.remote(err)
+
+    def remote(self, v) -> None:
+        _LOGGER.error("x %s", v)
+
+
+def f23(err: ClientError) -> None:
+    imported_helper(err)
+
+
+def f24(err: ClientError) -> None:
+    as_object(err)
+    as_text(str(err))
+
+
+def as_object(v: object) -> None:
+    _LOGGER.error("x %s", v)
+
+
+def as_text(v: str) -> None:
+    _LOGGER.error("x %s", v)
+
+
+def later(v) -> None:
+    _LOGGER.error("x %s", v)
+
+
+def lambda_sink(v) -> None:
+    _LOGGER.error("x %s", v)
+
+
+def f13b(err: ClientError) -> None:
+    kind_helper(_classify(err))
+
+
+def kind_helper(kind) -> None:
+    _LOGGER.error("x %s", kind)
+
+
+def spread_sink(a, b, c) -> None:
+    _LOGGER.error("x %s", c)
+
+
+def f14(err: ClientError) -> None:
+    spread_sink(1, *[err])
+
+
+class Box:
+    def method_sink(self, value) -> None:
+        _LOGGER.error("x %s", value)
+
+
+def f15(err: ClientError) -> None:
+    method_sink(1, err)
+
+
+class Slash:
+    def slash_sink(self, /, v) -> None:
+        _LOGGER.error("x %s", v)
+
+    def f16(self, err: ClientError) -> None:
+        self.slash_sink(v=err)
+
+
+def posonly_kw_sink(a, /, **kw) -> None:
+    _LOGGER.error("x %s", kw)
+
+
+def f17(err: ClientError) -> None:
+    posonly_kw_sink(1, a=err)
+
+
+def empty_star_sink(a, b=None) -> None:
+    _LOGGER.error("x %s", a)
+
+
+def f18(err: ClientError) -> None:
+    empty_star_sink(*(), err)
+"""
+
+
+def test_shape_i_follows_exceptions_into_module_local_helpers() -> None:
+    """A bound exception passed to a helper of the same module binds its parameter.
+
+    `_classify_registration_exception(self, entry_id, err, generation)` in
+    `fcm_receiver_ha.py` logged a producer's text it received from its
+    caller; with the annotation removed, only the caller knows (line 89, the
+    historical shape before `97015e1f`). Reported, each in its own helper:
+    a positional argument (line 10, the helper defined before its caller)
+    and the same helper defined after it (line 224), a keyword argument
+    (line 22), a positional-only (line 30) and a keyword-only parameter
+    (line 38, not the unrelated `n`), `*args` (line 46) and `**kwargs`
+    (line 54), a nested function (line 59), a method called through `self`,
+    with the receiver skipped (line 70), and a static method, without (line
+    74), a handler name passed on (line 98), the text of the exception (line
+    106), a starred list (line 122), a dict unpacked into keywords (line
+    130), two hops (line 142), self-recursion and a cycle, both terminating
+    (lines 153 and 162), a default parameter given by keyword (line 170),
+    a method name shared by two classes, both reported fail-closed (lines
+    190 and 195), and parameters annotated `object` or `str` (lines 216 and
+    220: the caller decides what they hold, decision V-4). Not reported: a
+    helper reached through a lambda (line 79 calls `lambda_sink`, line 228
+    stays silent; a lambda that holds the log call itself is a log alias and
+    reported at its call, shape (D)), a safe wrapper (line 114), a helper that does not log
+    (`quiet`), another receiver (line 203, `self._client.remote` is not
+    `Client.remote`), a helper given another function's result (line 236,
+    `_classify(err)`: a result is not knowable from the name) and an imported
+    helper (`imported_helper`, this guard
+    reads one file). A starred argument in the middle of a call binds its
+    slot and every positional slot after it (line 240), and a bare name never
+    reaches a method of the same name (line 249 stays silent). A receiver
+    declared positional-only (`def slash_sink(self, /, v)`) leaves `v`
+    reachable by keyword (line 258), and a keyword named like a
+    positional-only parameter lands in `**kw` (line 265), and an argument
+    after an empty starred one may land in the starred slot (line 273,
+    `empty_star_sink(*(), err)`). The same
+    fixture outside `Auth/` reports nothing.
+    """
+    tree = ast.parse(_SHAPE_I_FORWARD_FIXTURE)
+    offenders, _ = _scan_tree(tree, "Auth/fixture.py")
+    by_line = sorted((line, leaf) for _, line, leaf, _ in offenders)
+    assert by_line == [
+        (10, "value"),
+        (22, "cause"),
+        (30, "v"),
+        (38, "cause"),
+        (46, "args"),
+        (54, "kw"),
+        (59, "v"),
+        (70, "value"),
+        (74, "value"),
+        (89, "err"),
+        (98, "problem"),
+        (106, "text"),
+        (122, "first"),
+        (130, "cause"),
+        (142, "b"),
+        (153, "v"),
+        (162, "w"),
+        (170, "cause"),
+        (190, "v"),
+        (195, "v"),
+        (216, "v"),
+        (220, "v"),
+        (224, "v"),
+        (240, "c"),
+        (258, "v"),
+        (265, "kw"),
+        (273, "a"),
+    ]
+    outside, _ = _scan_tree(tree, "coordinator/fixture.py")
+    assert outside == []
+
+
+_SHAPE_I_FORWARD_LIMIT_FIXTURE = """
+from aiohttp import ClientError
+
+
+def start(err: ClientError) -> None:
+    one(err)
+
+
+def one(a) -> None:
+    two(a)
+
+
+def two(b) -> None:
+    three(b)
+
+
+def three(c) -> None:
+    _LOGGER.error("x %s", c)
+"""
+
+
+def test_shape_i_forwarding_stops_fail_closed_at_the_round_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Past the round limit every parameter of every module-local callee is bound.
+
+    Three hops need three rounds; with the limit at two the last helper is
+    not reached by the fixpoint, and the fail-closed branch still reports it.
+    """
+    monkeypatch.setitem(globals(), "_FORWARD_ROUND_LIMIT", 2)
+    tree = ast.parse(_SHAPE_I_FORWARD_LIMIT_FIXTURE)
+    offenders, _ = _scan_tree(tree, "Auth/fixture.py")
+    assert sorted((line, leaf) for _, line, leaf, _ in offenders) == [(18, "c")]
+
+
+_SHAPE_I_UNMATCHED_KEYWORD_FIXTURE = """
+import logging
+from aiohttp import ClientError
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def keyword_sink(value) -> None:
+    _LOGGER.error("x %s", value)
+
+
+def unmatched(err: ClientError) -> None:
+    keyword_sink(1, extra=err)
+
+
+def matched(err: ClientError) -> None:
+    keyword_sink(value=err)
+"""
+
+
+def test_shape_i_unmatched_keyword_without_var_keyword_binds_nothing() -> None:
+    """A keyword no parameter takes binds nothing in a helper without `**kwargs`.
+
+    `keyword_sink(1, extra=err)` passes the exception under a name that
+    `keyword_sink(value)` does not declare, and the helper has no `**kwargs`
+    to collect it; the call cannot bind `value` to the exception, so line 9
+    is not reported for it. The same helper given the exception as
+    `value=err` is reported at line 9, which shows that the fixture reaches
+    the sink.
+    """
+    tree = ast.parse(_SHAPE_I_UNMATCHED_KEYWORD_FIXTURE)
+    seeds = _forwarded_parameter_seeds(
+        tree,
+        _exception_names_by_call(tree, set()),
+        _module_local_callees(tree),
+    )
+    assert sorted(seeds.values()) == [("value",)]
+    offenders, _ = _scan_tree(tree, "Auth/fixture.py")
+    assert sorted((line, leaf) for _, line, leaf, _ in offenders) == [(9, "value")]
+    without_match = ast.parse(
+        _SHAPE_I_UNMATCHED_KEYWORD_FIXTURE.partition("\n\n\ndef matched")[0]
+    )
+    offenders, _ = _scan_tree(without_match, "Auth/fixture.py")
+    assert offenders == []
+
+
+_SHAPE_I_RESULT_FIXTURE = """
+import logging
+from aiohttp import ClientError
+from .helpers import imported_pick
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def pick(task):
+    return task.exception()
+
+
+def f01(task) -> None:
+    err = pick(task)
+    _LOGGER.error("x %s", err)
+
+
+def ident(value):
+    return value
+
+
+def f02(e: ClientError) -> None:
+    err = ident(e)
+    _LOGGER.error("x %s", err)
+
+
+async def apick(task):
+    return task.exception()
+
+
+async def f03(task) -> None:
+    err = await apick(task)
+    _LOGGER.error("x %s", err)
+
+
+def f04(task) -> None:
+    if (err := pick(task)) is not None:
+        _LOGGER.error("x %s", err)
+
+
+def f05(task) -> None:
+    err: BaseException | None = pick(task)
+    _LOGGER.error("x %s", err)
+
+
+class Client:
+    def _pick(self, task):
+        return task.exception()
+
+    def run(self, task) -> None:
+        err = self._pick(task)
+        _LOGGER.error("x %s", err)
+
+
+def catch():
+    try:
+        work()
+    except ClientError as caught:
+        return caught
+    return None
+
+
+def f07() -> None:
+    err = catch()
+    _LOGGER.error("x %s", err)
+
+
+def outer(task):
+    return pick(task)
+
+
+def f08(task) -> None:
+    err = outer(task)
+    _LOGGER.error("x %s", err)
+
+
+def kept(task):
+    found = task.exception()
+    return found
+
+
+def f09(task) -> None:
+    err = kept(task)
+    _LOGGER.error("x %s", err)
+
+
+def tell(task):
+    return "fixed"
+
+
+def f10(task) -> None:
+    text = tell(task)
+    _LOGGER.error("x %s", text)
+
+
+def wrapper(task):
+    def inner():
+        return task.exception()
+
+    inner()
+    return "done"
+
+
+def f11(task) -> None:
+    status = wrapper(task)
+    _LOGGER.error("x %s", status)
+
+
+def f12(err: ClientError) -> None:
+    kind = _classify(err)
+    _LOGGER.error("x %s", kind)
+
+
+def f13(task) -> None:
+    err = imported_pick(task)
+    _LOGGER.error("x %s", err)
+
+
+def describe_exception(task):
+    return task.exception()
+
+
+def f14(task) -> None:
+    kind = describe_exception(task)
+    _LOGGER.error("x %s", kind)
+
+
+def relay(task):
+    found = pick(task)
+    return found
+
+
+def f15(task) -> None:
+    err = relay(task)
+    _LOGGER.error("x %s", err)
+"""
+
+
+def test_shape_i_follows_helper_results() -> None:
+    """A module-local helper whose `return` carries a bound exception binds its result.
+
+    `err = pick(task)` hides a producer's text behind a call; this guard reads
+    one file, so it follows a result where that file proves it: a helper of
+    the same module that returns `<task>.exception()` (line 15), a bound
+    parameter (line 24, the parameter bound by forwarding), through `await`
+    (line 33), a walrus (line 38), an annotated assignment (line 43), a method
+    called through `self` (line 52), a foreign handler name (line 65), the
+    result of another such helper (line 74, two hops), a name bound inside
+    the helper (line 84) and a name bound inside the helper from such a
+    result (line 135, one more round of the fixpoint). Not reported: a helper that returns a constant
+    (`tell`), a helper whose only carrying `return` sits in a nested function
+    (`wrapper`), a function the module does not define (`_classify`,
+    `imported_pick`: their result is not knowable from one file, EB-09 stays
+    declared for them) and a local function named like a safe wrapper
+    (`describe_exception`). The same fixture outside `Auth/` reports nothing.
+    """
+    tree = ast.parse(_SHAPE_I_RESULT_FIXTURE)
+    offenders, _ = _scan_tree(tree, "Auth/fixture.py")
+    assert sorted((line, leaf) for _, line, leaf, _ in offenders) == [
+        (15, "err"),
+        (24, "err"),
+        (33, "err"),
+        (38, "err"),
+        (43, "err"),
+        (52, "err"),
+        (65, "err"),
+        (74, "err"),
+        (84, "err"),
+        (135, "err"),
+    ]
+    outside, _ = _scan_tree(tree, "coordinator/fixture.py")
+    assert outside == []
+
+
+_SHAPE_I_RESULT_LIMIT_FIXTURE = """
+def first(task):
+    return task.exception()
+
+
+def second(task):
+    return first(task)
+
+
+def start(task) -> None:
+    err = second(task)
+    _LOGGER.error("x %s", err)
+    _LOGGER.error("x %s", second(task))
+
+
+def describe_exception(task):
+    return task.exception()
+
+
+def quiet(task) -> None:
+    kind = describe_exception(task)
+    _LOGGER.error("x %s", kind)
+    _LOGGER.error("x %s", describe_exception(task))
+"""
+
+
+def test_shape_i_helper_results_stop_fail_closed_at_the_round_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Past the round limit every helper that returns a value binds its result.
+
+    `second` returns a result only once `first` is known to, one round later;
+    with the limit at one the fixpoint stops before, and the fail-closed
+    branch still reports line 12 and the result used in place (line 13). A
+    local function named like a safe wrapper (`describe_exception`) stays
+    out of the fail-closed branch too.
+    """
+    monkeypatch.setitem(globals(), "_FORWARD_ROUND_LIMIT", 1)
+    tree = ast.parse(_SHAPE_I_RESULT_LIMIT_FIXTURE)
+    offenders, _ = _scan_tree(tree, "Auth/fixture.py")
+    assert sorted((line, leaf) for _, line, leaf, _ in offenders) == [
+        (12, "err"),
+        (13, "second()"),
+    ]
+
+
+_SHAPE_I_RESULT_INPLACE_FIXTURE = """
+import logging
+from aiohttp import ClientError
+from .helpers import imported_pick
+
+_LOGGER = logging.getLogger(__name__)
+
+
+class OwnError(Exception):
+    pass
+
+
+def pick(task):
+    return task.exception()
+
+
+async def apick(task):
+    return task.exception()
+
+
+def tell(task):
+    return "fixed"
+
+
+def f01(task) -> None:
+    _LOGGER.error("x %s", pick(task))
+
+
+def f02(task) -> None:
+    _LOGGER.error("x %s", str(pick(task)))
+
+
+def f03(task) -> None:
+    _LOGGER.error(f"x {pick(task)}")
+
+
+def f04(task) -> None:
+    _LOGGER.error("x %s", pick(task).args)
+
+
+async def f05(task) -> None:
+    _LOGGER.error("x %s", await apick(task))
+
+
+def f06(task) -> None:
+    raise OwnError(str(pick(task)))
+
+
+class Holder:
+    def pick(self, task):
+        return task.exception()
+
+    def f07(self, task) -> None:
+        _LOGGER.error("x %s", self.pick(task))
+
+
+def f08(task) -> None:
+    _LOGGER.error("x %s", pick(task) or None, pick(task)[0])
+
+
+def f09(task) -> None:
+    _LOGGER.error("x %s", pick(task).errno)
+
+
+def f10(task) -> None:
+    _LOGGER.error("x %s", describe_exception(pick(task)))
+
+
+def f11(task) -> None:
+    _LOGGER.error("x %s", tell(task))
+
+
+def f12(task) -> None:
+    _LOGGER.error("x %s", imported_pick(task))
+
+
+def f13(err: ClientError) -> None:
+    _LOGGER.error("x %s", pick(err))
+"""
+
+
+def test_shape_i_reports_helper_results_used_in_place() -> None:
+    """A module-local helper whose `return` carries is reported where its result is used.
+
+    `_LOGGER.error("%s", pick(task))` has no name to bind; the call itself is
+    the leaf, like `task.exception()` passed directly. Reported: the bare
+    result (line 26), `str()` around it (line 30), an f-string (line
+    34), `.args` (line 38), behind `await` (line 42), in the constructor of an
+    own exception (line 46), a method called through `self` (line 54), and `or`
+    or a subscript around it (line 58, one leaf per line). Not reported: a code
+    attribute (`.errno`, line 62), the result inside a safe wrapper (line
+    66), a helper that returns a constant (line 70), and a function this
+    file does not define (line 74). A call whose own argument is a bound name
+    reports the name, not the call a second time (line 78). The same fixture
+    outside `Auth/` reports nothing.
+    """
+    tree = ast.parse(_SHAPE_I_RESULT_INPLACE_FIXTURE)
+    offenders, _ = _scan_tree(tree, "Auth/fixture.py")
+    assert sorted((line, leaf) for _, line, leaf, _ in offenders) == [
+        (26, "pick()"),
+        (30, "pick()"),
+        (34, "pick()"),
+        (38, "pick()"),
+        (42, "apick()"),
+        (46, "pick()"),
+        (54, "self.pick()"),
+        (58, "pick()"),
+        (78, "err"),
+    ]
+    outside, _ = _scan_tree(tree, "coordinator/fixture.py")
+    assert outside == []
+
+
+_SHAPE_I_CONSTRUCTOR_FIXTURE = """
+import logging
+from aiohttp import ClientError
+from .browser_deps import missing_dependency
+
+_LOGGER = logging.getLogger(__name__)
+
+
+class OwnError(Exception):
+    pass
+
+
+def f01(err: ClientError) -> None:
+    raise OwnError(str(err)) from err
+
+
+def f02(err: ClientError) -> None:
+    raise OwnError(f"login failed: {err}")
+
+
+def f03(err: ClientError) -> None:
+    wrapped = OwnError(err)
+    raise wrapped
+
+
+def f04() -> None:
+    try:
+        run()
+    except ImportError as _err:
+        raise missing_dependency(_err) from _err
+
+
+def f05(err: ClientError) -> None:
+    raise OwnError(describe_exception(err)) from err
+
+
+def f06(err: ClientError) -> None:
+    message = str(err)
+    raise OwnError(f"failed ({len(message)} chars)") from err
+
+
+def f07(err: ClientError) -> None:
+    raise OwnError("login failed") from err
+
+
+def f08(err: ClientError) -> None:
+    raise OwnError(_describe_aas_error_text(str(err))) from err
+"""
+
+
+def test_shape_i_reads_own_exceptions_built_from_foreign_ones() -> None:
+    """The arguments of an exception's constructor are read like a log call's.
+
+    An own exception built from a foreign one carries the producer's text
+    one hop later (`97015e1f` lists the form next to the alias and
+    `traceback.format_exc()`); `auth_flow.py` raises
+    `missing_browser_dependency(_err)`, whose message quotes `_err`
+    (`browser_deps.py`). Reported, under the format marker `raise`: the
+    text of the exception (line 14), an f-string (line 18), the two-step
+    form `wrapped = OwnError(err)` (line 22) and a function the module does
+    not define, given a handler name (line 30). Not reported: a safe
+    wrapper (`describe_exception`), the length of a bound text (`len`), a
+    fixed message with the foreign cause chained (`from err` renders the
+    cause only where a traceback is logged, which shape (I) reports at the
+    log call) and the package's own description of a gpsoauth error text
+    (`_describe_aas_error_text`: markers and length). The same fixture
+    outside `Auth/` reports nothing.
+    """
+    tree = ast.parse(_SHAPE_I_CONSTRUCTOR_FIXTURE)
+    offenders, _ = _scan_tree(tree, "Auth/fixture.py")
+    assert sorted((line, leaf, fmt) for _, line, leaf, fmt in offenders) == [
+        (14, "err", "raise"),
+        (18, "err", "raise"),
+        (22, "err", "raise"),
+        (30, "_err", "raise"),
+    ]
+    outside, _ = _scan_tree(tree, "coordinator/fixture.py")
+    assert outside == []
+
+
+_SHAPE_I_MANAGER_FIXTURE = """
+import contextlib
+import logging
+from aiohttp import ClientError
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def pick(task):
+    return task.exception()
+
+
+@contextlib.contextmanager
+def caught(task):
+    yield task.exception()
+
+
+@contextlib.contextmanager
+def relay(value):
+    yield value
+
+
+@contextlib.asynccontextmanager
+async def acaught(task):
+    yield task.exception()
+
+
+@contextlib.contextmanager
+def via(task):
+    yield pick(task)
+
+
+@contextlib.contextmanager
+def guarded():
+    try:
+        yield None
+    except ClientError as caught_err:
+        yield caught_err
+
+
+@contextlib.contextmanager
+def harmless(err: ClientError):
+    yield describe_exception(err)
+
+
+@contextlib.contextmanager
+def outer_cm(err: ClientError):
+    def inner():
+        yield err
+
+    yield "fixed"
+
+
+def f01(task) -> None:
+    with caught(task) as err:
+        _LOGGER.error("failed: %s", err)
+
+
+def f02(err: ClientError) -> None:
+    with relay(err) as again:
+        _LOGGER.error("failed: %s", again)
+
+
+async def f03(task) -> None:
+    async with acaught(task) as err:
+        _LOGGER.error("failed: %s", err)
+
+
+def f04(task) -> None:
+    with via(task) as err:
+        _LOGGER.error("failed: %s", err)
+
+
+def f05() -> None:
+    with guarded() as err:
+        _LOGGER.error("failed: %s", err)
+
+
+def f06(err: ClientError) -> None:
+    with harmless(err) as kind:
+        _LOGGER.error("failed: %s", kind)
+
+
+def f07(err: ClientError) -> None:
+    with outer_cm(err) as text:
+        _LOGGER.error("failed: %s", text)
+
+
+def f08(cm) -> None:
+    with cm as err:
+        _LOGGER.error("failed: %s", err)
+
+
+def f09(path) -> None:
+    with open(path) as fh, caught(path) as err:
+        _LOGGER.error("failed: %s %s", fh, err)
+
+
+async def fetch(task):
+    return task.exception()
+
+
+@contextlib.asynccontextmanager
+async def awaited(task):
+    yield await fetch(task)
+
+
+async def f10(task) -> None:
+    async with awaited(task) as err:
+        _LOGGER.error("failed: %s", err)
+"""
+
+
+def test_shape_i_follows_exceptions_yielded_by_local_context_managers() -> None:
+    """A `with … as` target binds when a module-local manager yields an exception.
+
+    `contextlib.contextmanager` hands what the generator yields to the `as`
+    target; when the generator is defined in this file, its `yield` is read
+    like a helper's `return` (`_yielding_calls`). Reported: a yielded
+    `task.exception()` (line 56), a forwarded parameter yielded back
+    (line 61), `async with` (line 66), a yielded helper result (line 71), a
+    foreign handler name yielded inside the handler (line 76), the second
+    item of a two-item `with` (line 96) and an awaited helper result
+    yielded by an async manager (line 110). Not reported: a safe wrapper
+    yielded (`describe_exception`, line 81), a `yield` in a nested function
+    (line 86), a manager the file does not define (the parameter `cm`,
+    line 91) and `open(path)` (line 96, `fh`). The same fixture outside
+    `Auth/` reports nothing.
+    """
+    tree = ast.parse(_SHAPE_I_MANAGER_FIXTURE)
+    offenders, _ = _scan_tree(tree, "Auth/fixture.py")
+    assert sorted((line, leaf) for _, line, leaf, _ in offenders) == [
+        (56, "err"),
+        (61, "again"),
+        (66, "err"),
+        (71, "err"),
+        (76, "err"),
+        (96, "err"),
+        (110, "err"),
+    ]
+    outside, _ = _scan_tree(tree, "coordinator/fixture.py")
+    assert outside == []
+
+
+_SHAPE_I_MANAGER_LIMIT_FIXTURE = """
+def first(task):
+    return task.exception()
+
+
+def manager(task):
+    yield first(task)
+
+
+def start(task) -> None:
+    with manager(task) as err:
+        _LOGGER.error("x %s", err)
+"""
+
+
+def test_shape_i_manager_yields_stop_fail_closed_at_the_round_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Past the round limit every module-local generator that yields binds.
+
+    `manager` yields an exception only once `first` is known to return one,
+    one round later; with the limit at one the fixpoint stops before, and
+    the fail-closed branch still reports line 12.
+    """
+    monkeypatch.setitem(globals(), "_FORWARD_ROUND_LIMIT", 1)
+    tree = ast.parse(_SHAPE_I_MANAGER_LIMIT_FIXTURE)
+    offenders, _ = _scan_tree(tree, "Auth/fixture.py")
+    assert sorted((line, leaf) for _, line, leaf, _ in offenders) == [(12, "err")]
 
 
 def test_shape_i_reports_producer_exceptions_in_broad_auth_handlers() -> None:

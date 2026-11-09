@@ -289,10 +289,13 @@ transport as passable. Two limits keep the exception honest:
   when none is running.
 
 `_stop_would_be_correlated()` is the single definition of "correlated" behind
-both this gate and the decision to spend the cached key
-(IRR-CA-POP-ON-CORRELATED-CANCEL-ONLY); a second inline derivation at either
-site is the drift the extraction exists to prevent, and
-`tests/test_coordinator_locate_basics.py` pins both sites to it.
+this gate, the `CANCELLED` outcome and the stop delay
+(IRR-CA-STOP-NOT-INTO-RING-START); a second inline derivation at any site is
+the drift the extraction exists to prevent, and
+`tests/test_coordinator_locate_basics.py` pins the sites to it. It used to
+decide whether an accepted stop may spend the cached key
+(IRR-CA-POP-ON-CORRELATED-CANCEL-ONLY); that rule is superseded by
+IRR-CA-STOP-KEEPS-CANCEL-KEY.
 
 The exception is not free, and the price is a changed outcome class rather than
 a changed guarantee: a stop that used to end as `SUPPRESSED` now reaches the
@@ -301,6 +304,35 @@ translation key (`stop_sound_rejected` instead of `stop_sound_suppressed`). It
 also removes, for the duration of a window, the only rate brake that sat in
 front of the stop dispatch -- outside a window there never was one, and a
 `REJECTED_RATE_LIMIT` answer deliberately arms no cooldown.
+
+**IRR-CA-STOP-KEEPS-CANCEL-KEY (a stop spends no key).** A correlated stop
+used to pop the cached key once Nova answered HTTP 200. HTTP 200 means Nova
+took the stop, not that the tracker executed it, so a second press then went
+out without any key and was reported as "could not be matched" -- for a ring
+this integration had started itself. The key is now kept. It leaves the cache
+the way every key does: a newer accepted play replaces it, it ages past
+`SOUND_UUID_MAX_AGE_S` and the reload filter drops it, or the device is
+removed. A repeated stop carries the same key and is `CANCELLED` again; the
+cooldown exception applies to it unchanged and still cannot extend a running
+window.
+
+**IRR-CA-STOP-NOT-INTO-RING-START (hold a stop back until the ring has
+started).** Measured on a moto tag 2 (2026-10-17/18, ten rings): a stop that
+reached the tracker around the moment its ring was about to start left the
+tracker silent -- no BLE advertisements until a long press on its button -- in
+two of two runs (stops 11.8 s and 9.4 s after Nova accepted the play). Stops
+11.6 s or later after acceptance, with the ring already audible, went through
+in four of four. Where the ring was heard it started 5.6 to 10.3 s after
+acceptance. `async_stop_sound` therefore holds a stop back until
+`STOP_SOUND_MIN_DELAY_AFTER_PLAY_S` (12 s) after the acceptance of the play it
+cancels, and logs the wait on INFO. Only our own accepted play arms the delay,
+and only for its own key: a stop without a key, with an aged or foreign key, or
+after an ambiguous play is sent at once, because nothing tells us when that
+ring began. A stop the readiness gate declines is declined at once rather than
+after the wait. Limits: six runs on one tracker model; in one failed run the
+ring had still not started 11.8 s after acceptance, so 12 s is a boundary, not
+a guarantee. Waiting for a confirmed start would be the stronger rule (see the
+measurement below); no such signal is decoded yet.
 
 #### Follow-up (not in this change)
 
@@ -314,10 +346,38 @@ with its own tests.
 Closing the boundary on the cloud path means wiring **Path B**: registering an
 FCM callback for sound events and matching the incoming
 `ExecuteActionRequestMetadata.requestUuid` against the key held by the
-coordinator. That is tracked separately and carries its own risks: the sound
-push may not carry a `DeviceUpdate` payload at all, an unmatched push
-currently falls through to the location decoder, and a callback that never
-fires would need a timeout policy of its own rather than an indefinite wait.
+coordinator. That is tracked separately and carries its own risks: an
+unmatched push currently falls through to the location decoder, and a
+callback that never fires would need a timeout policy of its own rather than
+an indefinite wait.
+
+*Measured (2026-10-17/18, live diagnostic logging on one installation, 19
+play and stop actions).* The sound push **does** carry a `DeviceUpdate`: every
+action produced three pushes, each with `fcmMetadata.requestUuid` set to the
+key that was sent (empty after a stop sent without a key). The pushes carry the
+device's secrets bundle (`encryptedUserSecrets`) and a
+`deviceMetadata.information.locationInformation` without any reports; it is
+this shape that makes the location decoder log `No locations found`. The
+third push of each group carries a field outside the schema under
+`locationInformation` -- field 1 after a start, field 2 after a stop -- whose
+**length** separated the outcomes without exception in this series: 5 after a
+ring that was heard, 6 after a start that was cancelled or failed, 2 after a
+stop that was executed, 6 roughly 20 s after a stop that failed. The values
+inside the field are not decoded, and the series covers one tracker model, so
+the lengths are an observation, not a protocol contract; nothing in the code
+relies on them.
+
+Two consequences are wired in. The receiver recognises such a push as a Play/Stop
+Sound acknowledgement when its `requestUuid` is one of the coordinator's own
+Play Sound keys (`is_own_sound_request_uuid`); a set `requestUuid` alone is not
+the criterion, because locate requests set one too. The push still runs through
+the decryptor, since its secrets bundle feeds the device cache as a
+metadata-only record; only `No locations found` drops from INFO to DEBUG, next
+to a DEBUG line naming the acknowledgement. An empty locate answer keeps its
+INFO line. And an uncorrelated stop now names its case to the user
+(`StopSoundUncorrelatedReason`: no key, aged key, foreign key) instead of one
+message listing every cause; the outcome itself stays `UNCORRELATED` and stays
+an error for the caller (BSkando#195).
 
 Closing it on the local path means speaking GATT directly (`0x05` with ring
 operation `0x00`), which additionally yields a stop that is independent of who

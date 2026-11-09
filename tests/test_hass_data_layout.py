@@ -69,6 +69,7 @@ from tests.helpers.homeassistant import (
     FakeEntityRegistry,
     resolve_config_entry_lookup,
 )
+from tests.helpers.service_doubles import FakeServiceCall, FakeServiceRegistry
 
 if TYPE_CHECKING:
     from custom_components.googlefindmy import RuntimeData
@@ -369,16 +370,7 @@ class _StubConfigEntries:
                 break
 
 
-class _StubServices:
-    """Capture service registrations and expose them to tests."""
-
-    def __init__(self) -> None:
-        self.registered: dict[tuple[str, str], Callable[..., Any]] = {}
-
-    def async_register(
-        self, domain: str, service: str, handler: Callable[..., Any]
-    ) -> None:
-        self.registered[(domain, service)] = handler
+_StubServices = FakeServiceRegistry
 
 
 class _StubHass:
@@ -697,6 +689,41 @@ async def test_async_setup_entry_registers_the_map_tiles_token_view(
     ]
     assert len(token_views) == 1
     assert type(token_views[0]).__name__ == "GoogleFindMyMapTilesTokenView"
+
+
+@pytest.mark.asyncio
+async def test_async_setup_entry_ends_with_restoring_shared_singletons(
+    monkeypatch: pytest.MonkeyPatch,
+    stub_coordinator_factory: Callable[..., type[Any]],
+) -> None:
+    """The last setup step restores singletons another unload released meanwhile.
+
+    An entry still in SETUP_IN_PROGRESS does not count as LOADED, so a
+    concurrent unload may release the shared resolver and BLE callback; the
+    restore step at the end of setup brings them back.
+    """
+
+    loop = asyncio.get_running_loop()
+    harness = _prepare_async_setup_entry_harness(
+        monkeypatch, stub_coordinator_factory, loop
+    )
+    integration = harness.integration
+    hass = harness.hass
+    calls: list[tuple[object, object]] = []
+
+    async def _record_restore(hass_arg: object, bucket: object) -> None:
+        calls.append((hass_arg, bucket))
+
+    monkeypatch.setattr(
+        integration, "_async_restore_shared_singletons", _record_restore
+    )
+
+    assert await integration.async_setup(hass, {}) is True
+    assert await integration.async_setup_entry(hass, harness.entry) is True
+
+    assert len(calls) == 1
+    assert calls[0][0] is hass
+    assert calls[0][1] is hass.data[DOMAIN]
 
 
 @pytest.mark.asyncio
@@ -1821,7 +1848,7 @@ async def test_setup_entry_adopts_watch_path_armed_after_the_manager(
     discovery = importlib.import_module("custom_components.googlefindmy.discovery")
 
     default_path = tmp_path / "defaults" / "secrets.json"
-    extra_path = tmp_path / "reenabled" / "secrets.json"
+    extra_path = tmp_path / "reenabled" / "secrets.json"  # codespell:ignore reenabled
 
     async def _fake_translations(*_args: Any, **_kwargs: Any) -> dict[str, str]:
         return {}
@@ -4048,18 +4075,9 @@ def test_service_no_active_entry_placeholders(
                 assert domain == DOMAIN
                 return list(entries)
 
-        class _ServicesStub:
-            def __init__(self) -> None:
-                self.registered: dict[tuple[str, str], Callable[..., Any]] = {}
-
-            def async_register(
-                self, domain: str, service: str, handler: Callable[..., Any]
-            ) -> None:
-                self.registered[(domain, service)] = handler
-
         hass = SimpleNamespace(
             data={},
-            services=_ServicesStub(),
+            services=FakeServiceRegistry(),
             config_entries=_ConfigEntriesStub(),
         )
 
@@ -4078,7 +4096,7 @@ def test_service_no_active_entry_placeholders(
         loop.run_until_complete(services_module.async_register_services(hass, ctx))
 
         handler = hass.services.registered[(DOMAIN, SERVICE_LOCATE_DEVICE)]
-        call = SimpleNamespace(data={"device_id": "device-1"})
+        call = FakeServiceCall({"device_id": "device-1"})
 
         with pytest.raises(ServiceValidationError) as errinfo:
             loop.run_until_complete(handler(call))
@@ -4087,7 +4105,15 @@ def test_service_no_active_entry_placeholders(
         placeholders = error.translation_placeholders
         assert placeholders["active_count"] == "0"
         assert placeholders["total_count"] == "2"
-        assert "Account One" in placeholders["entries"]
+        # Entry titles are usually account e-mails; Home Assistant logs the
+        # fallback message for every caller, so no title reaches either, and
+        # the error passes no entry list at all.
+        assert "entries" not in placeholders
+        for value in placeholders.values():
+            assert "Account One" not in value
+            assert "Account Two" not in value
+        assert "Account One" not in str(error)
+        assert "Account Two" not in str(error)
 
         translation = json.loads(
             Path("custom_components/googlefindmy/translations/en.json").read_text(
@@ -4097,7 +4123,9 @@ def test_service_no_active_entry_placeholders(
         template = translation["exceptions"]["no_active_entry"]["message"]
         rendered = template.format(**placeholders)
         assert "0/2" in rendered
-        assert "Account One" in rendered
+        assert "(\u2014)" not in rendered
+        assert "()" not in rendered
+        assert "Account One" not in rendered
     finally:
         loop.close()
 

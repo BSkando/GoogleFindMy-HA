@@ -237,9 +237,7 @@ def test_options_flow_rotating_token_clears_cached_aas(
         monkeypatch.setattr(config_flow, "async_pick_working_token", _fake_pick)
 
         new_token = "oauth-token-rotate-123456"
-        result = await flow.async_step_credentials(
-            {"new_oauth_token": new_token, "subentry": TRACKER_SUBENTRY_KEY}
-        )
+        result = await flow.async_step_credentials({"new_oauth_token": new_token})
         if inspect.isawaitable(result):
             result = await result
 
@@ -253,10 +251,9 @@ def test_options_flow_rotating_token_clears_cached_aas(
         assert entry.data[CONF_OAUTH_TOKEN] == new_token
         assert DATA_AAS_TOKEN not in entry.data
         assert await cache.get(DATA_AAS_TOKEN) is None
-        assert hass.config_entries.updated_subentries
-        subentry_id, payload = hass.config_entries.updated_subentries[-1]
-        assert subentry_id in entry.subentries
-        assert payload.get("group_key") == TRACKER_SUBENTRY_KEY
+        # Credentials are account-wide: the update writes ``entry.data`` (above)
+        # and no subentry.
+        assert hass.config_entries.updated_subentries == []
 
         await hass.drain_tasks()
         assert hass.config_entries.reloaded == [entry.entry_id]
@@ -267,7 +264,6 @@ def test_options_flow_rotating_token_clears_cached_aas(
         second = await flow.async_step_credentials(
             {
                 "new_oauth_token": "oauth-token-rotate-654321",
-                "subentry": TRACKER_SUBENTRY_KEY,
             }
         )
         if inspect.isawaitable(second):
@@ -332,9 +328,7 @@ def test_options_flow_gives_the_latch_back_when_the_reload_dies(
         monkeypatch.setattr(config_flow, "async_pick_working_token", _fake_pick)
 
         async def _rotate(token: str) -> None:
-            outcome = await flow.async_step_credentials(
-                {"new_oauth_token": token, "subentry": TRACKER_SUBENTRY_KEY}
-            )
+            outcome = await flow.async_step_credentials({"new_oauth_token": token})
             if inspect.isawaitable(outcome):
                 await outcome
             # The reload task raises; gathering it would re-raise here, and the
@@ -578,7 +572,7 @@ def test_options_flow_secrets_reauth_strips_owner_key_space(
             "username": "  Keep Me  ",
         }
         result = await flow.async_step_credentials(
-            {"new_secrets_json": json.dumps(payload), "subentry": TRACKER_SUBENTRY_KEY}
+            {"new_secrets_json": json.dumps(payload)}
         )
         if inspect.isawaitable(result):
             result = await result
@@ -647,7 +641,7 @@ def test_options_flow_secrets_reauth_guard_error_fallback_normalizes(
             "shared_key": "DDEEFF",
         }
         result = await flow.async_step_credentials(
-            {"new_secrets_json": json.dumps(payload), "subentry": TRACKER_SUBENTRY_KEY}
+            {"new_secrets_json": json.dumps(payload)}
         )
         if inspect.isawaitable(result):
             result = await result
@@ -740,7 +734,6 @@ async def test_options_flow_guard_error_without_a_bundle_reports_instead_of_cras
     result = await flow.async_step_credentials(
         {
             "new_oauth_token": "oauth-token-probe-123456",
-            "subentry": TRACKER_SUBENTRY_KEY,
             **bundle_field,
         }
     )

@@ -56,6 +56,8 @@ from ._typing import (
     OnNotificationCallable,
 )
 from .const import (
+    MCS_CONNECT_TIMEOUT_S,
+    MCS_HAPPY_EYEBALLS_DELAY_S,
     MCS_HOST,
     MCS_PORT,
     MCS_SELECTIVE_ACK_ID,
@@ -310,8 +312,9 @@ class FcmPushClient[NotificationContextT]:  # pylint:disable=too-many-instance-a
         # ``persistent_ids`` and ``_first_data_message_delivered`` resets).
         # Consumers measure "session age since STARTED" from this instead of the
         # supervisor's pre-start timestamp, which is recorded before ``start()``
-        # and can trail the actual STARTED transition by the connection budget
-        # (~15-20s). ``None`` until the client first reaches STARTED.
+        # and can trail the actual STARTED transition by the attempts that fail
+        # first (each limited by ``MCS_CONNECT_TIMEOUT_S`` in ``const.py``).
+        # ``None`` until the client first reaches STARTED.
         self._started_monotonic: float | None = None
         # First-locate reconnect "has delivered" proof, kept *separate* from
         # ``persistent_ids``. ``persistent_ids`` must record every selective-acked
@@ -985,17 +988,35 @@ class FcmPushClient[NotificationContextT]:  # pylint:disable=too-many-instance-a
     async def _open_connection(
         host: str, port: int, ssl_context: ssl.SSLContext
     ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
-        return await asyncio.open_connection(host=host, port=port, ssl=ssl_context)
+        async with asyncio.timeout(MCS_CONNECT_TIMEOUT_S):
+            return await asyncio.open_connection(
+                host=host,
+                port=port,
+                ssl=ssl_context,
+                happy_eyeballs_delay=MCS_HAPPY_EYEBALLS_DELAY_S,
+            )
 
     async def _connect(self) -> bool:
         try:
             loop = asyncio.get_running_loop()
             # create_default_context() blocks the event loop
             ssl_context = await loop.run_in_executor(None, ssl.create_default_context)
+            self.logger.debug(
+                "Connecting to MCS endpoint (%s,%s), limit %.1f s per attempt",
+                MCS_HOST,
+                MCS_PORT,
+                MCS_CONNECT_TIMEOUT_S,
+            )
             self.reader, self.writer = await self._open_connection(
                 host=MCS_HOST, port=MCS_PORT, ssl_context=ssl_context
             )
-            self.logger.debug("Connected to MCS endpoint (%s,%s)", MCS_HOST, MCS_PORT)
+            sock = self.writer.get_extra_info("socket")
+            self.logger.debug(
+                "Connected to MCS endpoint (%s,%s) over %s",
+                MCS_HOST,
+                MCS_PORT,
+                sock.family.name if sock is not None else "unknown",
+            )
             return True
         except OSError as oex:
             # Log at DEBUG level since _connect_with_retry() handles retries

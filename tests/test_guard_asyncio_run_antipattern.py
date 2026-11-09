@@ -13,7 +13,6 @@ import pytest
 LEGACY_ALLOWLIST: set[str] = {
     "tests/test_adm_token_retrieval.py",
     "tests/test_api_fcm_token_scoping.py",
-    "tests/test_cli_entry_selection.py",
     "tests/test_cli_sound_request_entry_selection.py",
     "tests/test_config_flow_discovery.py",
     "tests/test_config_flow_initial_auth.py",
@@ -25,10 +24,7 @@ LEGACY_ALLOWLIST: set[str] = {
     "tests/test_location_recorder.py",
     "tests/test_location_request_cache_isolation.py",
     "tests/test_manual_locate_resolution.py",
-    "tests/test_nova_request.py",
     "tests/test_options_flow_credentials_cache.py",
-    "tests/test_options_flow_registry_updates.py",
-    "tests/test_options_flow_subentries.py",
     "tests/test_reauth_manual_token.py",
     "tests/test_remove_entry_cleanup.py",
     "tests/test_services_forward_compat.py",

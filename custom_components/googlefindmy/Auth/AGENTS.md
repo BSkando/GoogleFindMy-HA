@@ -286,12 +286,15 @@ annotation names the type outright or reaches it
 `X = ClientError`): the alias name carries no information about the type, so
 the guard resolves it before it classifies. Inside a handler the same holds for
 the handler name (`except OSError as exc: text = str(exc)` binds `text`
-there). The guard's module docstring lists the forms it does not follow
-(a helper's return value, a lambda, a handler name aliased out of its
-handler and narrowed before the log call, `with ... as`); those remain a
-review matter, not a guard one.
+there). Which further forms the guard follows and which it does not is
+listed in one place only, the module docstring of
+`tests/test_guard_logging_payloads.py`; this file does not repeat that
+list. A form the docstring names as not followed remains a review matter,
+not a guard one.
 `tests/test_guard_logging_payloads.py` (shape (I)) fails the suite
-on a bare exception in such a record under `Auth/`, and on any `exc_info=`
+on a bare exception in such a record under `Auth/`, on an own exception
+constructed from one (`raise OwnError(str(err)) from err`: its message is
+logged one hop later), and on any `exc_info=`
 value other than `False`/`None` or any `logger.exception(...)` under `Auth/`,
 whatever the handler. A record whose value only looks like exception text
 (the key of a `KeyError` raised by a literal lookup on the package's own

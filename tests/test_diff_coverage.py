@@ -478,6 +478,36 @@ def test_a_non_numeric_line_record_is_a_measurement_error() -> None:
     assert "non-numeric" in str(raised.value)
 
 
+@pytest.mark.parametrize(
+    "doctype",
+    [
+        '<!DOCTYPE coverage [<!ENTITY src "/repo/custom_components/googlefindmy">]>',
+        '<!DOCTYPE coverage [<!ENTITY ext SYSTEM "file:///etc/passwd">]>',
+    ],
+)
+def test_a_report_declaring_entities_is_a_measurement_error(doctype: str) -> None:
+    """The report is parsed with defusedxml: entity declarations are refused.
+
+    The standard library expands internal entities, which is the entry point of
+    the exponential-expansion attack; a coverage report never needs one.
+    """
+
+    declaring = _XML.replace(
+        '<?xml version="1.0" ?>', '<?xml version="1.0" ?>\n' + doctype, 1
+    ).replace(
+        "<source>/repo/custom_components/googlefindmy</source>",
+        "<source>&src;</source>"
+        if "ENTITY src" in doctype
+        else "<source>&ext;</source>",
+        1,
+    )
+
+    with pytest.raises(diff_coverage.MeasurementError) as raised:
+        diff_coverage.parse_coverage_xml(declaring, REPO)
+
+    assert "declares an entity" in str(raised.value)
+
+
 def test_a_content_line_is_not_mistaken_for_a_file_header() -> None:
     """A removed "-- note" and an added "++ note" must not start a file section."""
 

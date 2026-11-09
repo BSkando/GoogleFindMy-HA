@@ -14,16 +14,9 @@ from homeassistant.helpers.network import NoURLAvailableError
 
 from custom_components.googlefindmy import const, services
 from tests.helpers.config_entries_stub import make_config_entry
+from tests.helpers.service_doubles import FakeServiceRegistry
 
-
-class _StubServices:
-    """Capture service registrations for inspection in tests."""
-
-    def __init__(self) -> None:
-        self.registered: dict[tuple[str, str], object] = {}
-
-    def async_register(self, domain: str, service: str, handler: object) -> None:
-        self.registered[(domain, service)] = handler
+_StubServices = FakeServiceRegistry
 
 
 class _StubConfigEntries:

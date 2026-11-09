@@ -1828,6 +1828,10 @@ def test_timeout_report_names_the_device_by_id(
     assert str(surfaced) == "Location request timed out for device dev-slow"
     assert "Slow" not in str(surfaced)
     assert isinstance(surfaced.__cause__, TimeoutError)
+    # The translated reason names the device by id as well (both slots).
+    assert surfaced.translation_domain == DOMAIN
+    assert surfaced.translation_key == "locate_timeout"
+    assert surfaced.translation_placeholders == {"device_id": "dev-slow"}
 
 
 def test_only_the_provisional_rejection_gives_way_not_an_earlier_diagnosis(

@@ -39,7 +39,8 @@ import urllib.error
 import urllib.request
 from http import HTTPStatus
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import urlparse
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -100,16 +101,29 @@ def get_min_version(specifier_str: str) -> Version | None:
         return None
 
 
+def _require_https(url: str) -> None:
+    """Refuse every URL whose scheme is not ``https`` before it is opened.
+
+    ``urllib.request.urlopen`` also opens ``file:`` and ``ftp:`` URLs, and one
+    of the URLs below interpolates the ``--ha-version`` argument.
+    """
+    scheme = urlparse(url).scheme
+    if scheme != "https":
+        raise ValueError(f"refusing to open {url!r}: only https URLs are fetched")
+
+
 def fetch_ha_versions_from_pypi() -> list[str]:
     """Fetch all Home Assistant versions from PyPI.
 
     Returns list of stable versions (YYYY.M.P format) sorted newest to oldest.
     """
     url = "https://pypi.org/pypi/homeassistant/json"
+    _require_https(url)
     req = urllib.request.Request(url, headers={"User-Agent": "ha-compat-check/1.0"})
 
     try:
-        with urllib.request.urlopen(req, timeout=30) as response:
+        # The scheme was checked by _require_https above.
+        with urllib.request.urlopen(req, timeout=30) as response:  # nosec B310
             data = json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, json.JSONDecodeError) as e:
         print(f"{Colors.RED}Error fetching HA versions from PyPI: {e}{Colors.RESET}")
@@ -126,11 +140,13 @@ def fetch_ha_versions_from_pypi() -> list[str]:
 
 def _fetch_url_content(url: str) -> str | None:
     """Fetch content from URL, return None on 404 or error."""
+    _require_https(url)
     headers = {"User-Agent": "ha-compat-check/1.0"}
     req = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=30) as response:
-            return response.read().decode("utf-8")
+        # The scheme was checked by _require_https above.
+        with urllib.request.urlopen(req, timeout=30) as response:  # nosec B310
+            return cast(bytes, response.read()).decode("utf-8")
     except urllib.error.HTTPError as e:
         if e.code == HTTPStatus.NOT_FOUND:
             return None
@@ -177,16 +193,16 @@ def fetch_ha_constraints(
     return _parse_constraints_content(content)
 
 
-def load_manifest(manifest_path: Path) -> dict:
+def load_manifest(manifest_path: Path) -> dict[str, Any]:
     """Load manifest.json."""
     with open(manifest_path) as f:
-        return json.load(f)
+        return cast(dict[str, Any], json.load(f))
 
 
 def load_manifest_requirements(manifest_path: Path) -> list[str]:
     """Load requirements from manifest.json."""
     manifest = load_manifest(manifest_path)
-    return manifest.get("requirements", [])
+    return cast(list[str], manifest.get("requirements", []))
 
 
 def _extract_ha_version_from_pyproject(pyproject_path: Path) -> str | None:

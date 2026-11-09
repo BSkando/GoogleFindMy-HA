@@ -279,6 +279,7 @@ _PERSISTED_METADATA_KEYS: tuple[str, ...] = (
     "manufacturer",
     "model",
     "fast_pair_model_id",
+    "trackable_components",
 )
 
 
@@ -628,6 +629,9 @@ class DeviceIdentity:
             key; surfaced for debugging and potential resolver extensions.
         time_anchors_debug: Optional debug payload with server-provided anchor hints used
             to reason about EID drift; shape may vary and is forwarded best-effort.
+        trackable_components: ``DeviceCapabilities.trackableComponents`` when known. A
+            value above 1 marks a device with per-component EID series (measured on
+            Pixel Buds Pro 2, see ``docs/FMDN.md`` S3.4.1).
     """
 
     registry_id: str
@@ -645,6 +649,7 @@ class DeviceIdentity:
     encrypted_account_key: bytes | None = None
     public_key_address: bytes | None = None
     time_anchors_debug: Any | None = None
+    trackable_components: int | None = None
 
 
 class GoogleFindMyCoordinator(
@@ -797,6 +802,21 @@ class GoogleFindMyCoordinator(
         # Minimal hardening state (empty-list quorum)
         self._last_device_list: list[dict[str, Any]] = []
         self._empty_list_streak: int = 0
+        # Stale-device removal: consecutive fresh lists each tracker device was
+        # missing from, keyed by device registry id. Volatile on purpose: a
+        # restart starts the count again, which only delays a removal.
+        self._stale_device_misses: dict[str, int] = {}
+        # Google ids removed as stale; one of them in a fresh list reloads the
+        # entry once so the platforms set up its entities again (S-R6).
+        self._stale_removed_google_ids: set[str] = set()
+        # Canonicless drop counts per name and kind of the last counting list
+        # that carried each Google id, so a shared name protects only a new
+        # drop (S-R3d, R2-6, R3-5).
+        self._stale_name_baseline: dict[str, Mapping[tuple[str, str], int]] = {}
+        # Refused or failed removals per device registry id, and the devices
+        # given up after STALE_REMOVAL_MAX_ATTEMPTS until the next setup.
+        self._stale_removal_attempts: dict[str, int] = {}
+        self._stale_removal_given_up: set[str] = set()
 
         # Polling state
         self._poll_lock = asyncio.Lock()
@@ -846,6 +866,13 @@ class GoogleFindMyCoordinator(
         self._sound_request_timestamps: dict[
             str, float
         ] = {}  # device_id -> creation timestamp
+        # device_id -> (cancel key, time.monotonic() at which Nova accepted that
+        # play). In memory only: it gates how soon a stop may follow the play
+        # (STOP_SOUND_MIN_DELAY_AFTER_PLAY_S). A restart or a config-entry
+        # reload starts it empty, so a stop within that delay after a reload is
+        # sent at once. Known gap: the stored key does not record whether Nova
+        # accepted the play, so the stamp cannot be rebuilt from it.
+        self._sound_play_accepted_at: dict[str, tuple[str, float]] = {}
 
         # Per-device poll cooldowns after owner/crowdsourced reports.
         self._device_poll_cooldown_until: dict[str, float] = {}
@@ -2556,6 +2583,12 @@ class GoogleFindMyCoordinator(
         self._device_last_good_location.pop(device_id, None)
         # Round-trip anchor shares the same lifecycle as the location caches above.
         self._round_trip_anchors.pop(device_id, None)
+        # The identities of fused reports belong to the cached row they describe: a
+        # device re-added under the same id must fuse its first report, not refuse it
+        # as a repeat. Read defensively because the store is created lazily.
+        fused_reports = getattr(self, "_fused_report_ids", None)
+        if fused_reports is not None:
+            fused_reports.pop(device_id, None)
         # The accuracy gate's coarse fix (#216) is a position too, so it follows the
         # same lifecycle: without this a deleted device would keep leaking its last
         # coarse position through ``coarse_latitude``/``coarse_longitude``, and a
@@ -2613,6 +2646,9 @@ class GoogleFindMyCoordinator(
             request_stamps.pop(device_id, None)
         removed_uuid = self._sound_request_uuids.pop(device_id, None)
         self._sound_request_timestamps.pop(device_id, None)
+        accepted_stamps = getattr(self, "_sound_play_accepted_at", None)
+        if accepted_stamps is not None:
+            accepted_stamps.pop(device_id, None)
         self._device_poll_cooldown_until.pop(device_id, None)
         self._present_device_ids.discard(device_id)
 

@@ -262,11 +262,7 @@
         "title": "Mettre à jour les identifiants (optionnel)",
         "description": "Mettez à jour vos identifiants. Les valeurs existantes ne sont pas affichées pour des raisons de sécurité.\n\nCollez le contenu complet d'un nouveau **secrets.json** (généré en exécutant GoogleFindMyTools).\n\nUne fois soumis, les identifiants sont validés et enregistrés ; l'intégration se recharge sans modifier les noms de vos entités.",
         "data": {
-          "new_secrets_json": "Nouveau secrets.json (contenu complet)",
-          "subentry": "Groupe de fonctionnalités"
-        },
-        "data_description": {
-          "subentry": "Appliquez les mises à jour d'identifiants au groupe de fonctionnalités sélectionné. Consultez le guide [Sous-entrées et groupes de fonctionnalités]({subentries_docs_url}) pour plus de détails sur le flux de travail."
+          "new_secrets_json": "Nouveau secrets.json (contenu complet)"
         }
       },
       "settings": {
@@ -287,7 +283,6 @@
           "map_view_token_expiration": "Activer l’expiration du jeton de la vue carte",
           "map_view_enabled": "Activer la vue carte",
           "contributor_mode": "Mode de contribution de localisation",
-          "subentry": "Groupe de fonctionnalités",
           "secrets_extra_watch_paths": "Chemins de surveillance supplémentaires pour secrets.json (un par ligne)"
         },
         "data_description": {
@@ -300,7 +295,6 @@
           "map_view_token_expiration": "Lorsqu'elle est activée, les jetons de la vue carte expirent après 1 semaine. Lorsqu'elle est désactivée (par défaut), ils n'expirent pas.",
           "map_view_enabled": "Activée par défaut. Si désactivée, les requêtes de la vue carte sont refusées comme avec un jeton invalide et les liens des appareils sont effacés. Ne fait pas tourner les liens existants ; si un lien a pu fuiter, utilisez « Activer l'expiration du jeton de la vue carte » (jusqu'à deux semaines si déjà activée).",
           "contributor_mode": "Choisissez comment votre appareil contribue au réseau Google (par défaut Toutes les zones pour une contribution participative ou uniquement les zones à forte affluence).",
-          "subentry": "Enregistrez ces options pour le groupe de fonctionnalités sélectionné. Consultez [Sous-entrées et groupes de fonctionnalités]({subentries_docs_url}) pour des exemples.",
           "secrets_extra_watch_paths": "Facultatif. Chemins absolus supplémentaires vers des fichiers secrets.json que l'intégration doit surveiller pour une prise en charge automatique, un par ligne. Laissez vide pour ne surveiller que les emplacements par défaut."
         }
       },
@@ -371,7 +365,7 @@
   "services": {
     "locate_device": {
       "name": "Localiser l’appareil",
-      "description": "Obtenir la position actuelle d’un appareil Google Find My.",
+      "description": "Obtenir la position actuelle d’un appareil Google Find My. Lorsqu’elle est appelée par un utilisateur, cette action nécessite l’autorisation de contrôle sur les entités de l’appareil ; les automatisations et les scripts sans contexte utilisateur ne sont pas concernés.",
       "fields": {
         "device_id": {
           "name": "Appareil",
@@ -381,7 +375,7 @@
     },
     "play_sound": {
       "name": "Émettre un son",
-      "description": "Jouer un son sur un appareil Google Find My.",
+      "description": "Jouer un son sur un appareil Google Find My. Lorsqu’elle est appelée par un utilisateur, cette action nécessite l’autorisation de contrôle sur les entités de l’appareil ; les automatisations et les scripts sans contexte utilisateur ne sont pas concernés.",
       "fields": {
         "device_id": {
           "name": "Appareil",
@@ -391,7 +385,7 @@
     },
     "stop_sound": {
       "name": "Arrêter le son",
-      "description": "Arrêter le son sur un appareil Google Find My.",
+      "description": "Arrêter le son sur un appareil Google Find My. Lorsqu’elle est appelée par un utilisateur, cette action nécessite l’autorisation de contrôle sur les entités de l’appareil ; les automatisations et les scripts sans contexte utilisateur ne sont pas concernés.",
       "fields": {
         "device_id": {
           "name": "Appareil",
@@ -401,17 +395,17 @@
     },
     "refresh_device_urls": {
       "name": "Actualiser les URL des appareils",
-      "description": "Actualise les URL de configuration des appareils Google Find My pour qu’elles pointent vers la vue carte intégrée.",
+      "description": "Actualise les URL de configuration des appareils Google Find My pour qu’elles pointent vers la vue carte intégrée. Réservée aux administrateurs lorsqu’elle est appelée par un utilisateur.",
       "fields": {}
     },
     "rebuild_device_registry": {
       "name": "Reconstruire le registre des appareils",
-      "description": "Maintenance : reconstruit les liens du registre des appareils pour les hubs Google Find My et supprime les traqueurs incorrectement liés à l’entrée parente.",
+      "description": "Maintenance : reconstruit les liens du registre des appareils pour les hubs Google Find My et supprime les traqueurs incorrectement liés à l’entrée parente. Réservée aux administrateurs lorsqu’elle est appelée par un utilisateur.",
       "fields": {}
     },
     "locate_external": {
       "name": "Localiser l’appareil (externe)",
-      "description": "Localiser un appareil à l’aide de l’assistant externe ; délègue à la localisation normale.",
+      "description": "Localiser un appareil à l’aide de l’assistant externe ; délègue à la localisation normale. Lorsqu’elle est appelée par un utilisateur, cette action nécessite l’autorisation de contrôle sur les entités de l’appareil ; les automatisations et les scripts sans contexte utilisateur ne sont pas concernés.",
       "fields": {
         "device_id": {
           "name": "Appareil",
@@ -425,7 +419,7 @@
     },
     "rebuild_registry": {
       "name": "Reconstruire / Migrer le registre",
-      "description": "Maintenance : exécuter une migration douce données→options ou reconstruire les entités/appareils de cette intégration.",
+      "description": "Maintenance : exécuter une migration douce données→options ou reconstruire les entités/appareils de cette intégration. Réservée aux administrateurs lorsqu’elle est appelée par un utilisateur.",
       "fields": {
         "mode": {
           "name": "Mode",
@@ -434,6 +428,44 @@
         "device_ids": {
           "name": "Appareils (optionnel)",
           "description": "Limiter l’opération à certains appareils. Laisser vide pour cibler tous les appareils Google Find My."
+        }
+      }
+    },
+    "read_beacon_state": {
+      "name": "Read Beacon State",
+      "description": "Diagnostic: connects to a tracker over Bluetooth, reads its FMDN state and returns it as the response. It sends read requests only and runs only when called; administrators only. The first access to a Provider that was never accessed before makes it choose an owner account key until factory reset, so use it on trackers that are already set up.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "Select a Google Find My device (or pass a canonical ID via Developer Tools)."
+        },
+        "address": {
+          "name": "Bluetooth address (optional)",
+          "description": "Connect to this address instead of searching for a Fast Pair advertisement that matches the device's account key. The address is not checked against any key."
+        },
+        "timeout": {
+          "name": "Timeout (optional)",
+          "description": "Time limit in seconds, 5 to 120, for the key lookup and again for connection and reads. Cleanup may add a few seconds."
+        },
+        "include_raw_response": {
+          "name": "Inclure la réponse brute (facultatif)",
+          "description": "Renvoie aussi la réponse brute d'état de provisionnement en hexadécimal. Elle contient l'EID actuel complet du traceur, traitez la sortie en conséquence."
+        },
+        "search_seconds": {
+          "name": "Fenêtre de recherche d'EID (facultatif)",
+          "description": "Secondes de chaque côté de l'horloge du traceur pour chercher, seconde par seconde, le compteur d'un EID. 0 désactive la recherche. Elle s'exécute après la fin de la connexion, ajoute jusqu'à 5 minutes et sollicite le processeur pendant ce temps."
+        },
+        "search_eid": {
+          "name": "EID à rechercher (facultatif)",
+          "description": "Un EID vu dans une annonce, 20 ou 32 octets en hexadécimal. Recherché en plus de l'EID signalé par le traceur et de celui annoncé par l'adresse choisie. Utilisé uniquement avec une recherche."
+        },
+        "identity_form": {
+          "name": "Identité à connecter (facultatif)",
+          "description": "À quelle identité du traceur se connecter : n'importe laquelle, le localisateur qui envoie la trame FMDN ou l'appareil audio qui annonce Common Audio. Ignoré si une adresse est indiquée."
+        },
+        "derivation_windows": {
+          "name": "Fenêtre de recherche de dérivations (facultatif)",
+          "description": "Fenêtres de rotation de 1024 s à parcourir de chaque côté de l'horloge du traceur, en essayant d'autres formes de clé et de bloc sur les EID recherchés. 0 la désactive. Elle s'exécute après la fermeture de la connexion, ajoute jusqu'à 5 minutes et sollicite le processeur pendant ce temps."
         }
       }
     }
@@ -830,7 +862,7 @@
       "message": "L’appareil {device_id} est introuvable ou ne fait pas partie de cette intégration."
     },
     "no_active_entry": {
-      "message": "Aucune entrée Google Find My Device active n'est disponible. Entrées actives : {active_count}/{total_count}. Activez l'une des entrées configurées ({entries}) ou ajoutez un nouveau compte, puis réessayez."
+      "message": "Aucune entrée Google Find My Device active n'est disponible. Entrées actives : {active_count}/{total_count}. Activez l'une des entrées configurées ou ajoutez un nouveau compte, puis réessayez."
     },
     "locate_failed": {
       "message": "Échec de la localisation de l’appareil {device_id} : {error}"
@@ -859,11 +891,77 @@
     "stop_sound_uncorrelated": {
       "message": "Stop Sound pour {device_id} a été envoyé, mais n'a pas pu être associé à la sonnerie en cours: elle a été déclenchée ailleurs, ou la clé dont dispose cette instance est trop ancienne pour en répondre. Google risque de ne pas pouvoir associer l'arrêt à la sonnerie, l'appareil peut donc continuer à sonner. Appuyez sur le bouton du traceur ou attendez la fin de la sonnerie."
     },
+    "stop_sound_no_cancel_key": {
+      "message": "Stop Sound pour {device_id} a été envoyé, mais cette instance ne dispose d'aucune clé pour une sonnerie sur cet appareil. La sonnerie a probablement été déclenchée ailleurs, par exemple dans l'application Find Hub, Google risque donc de ne pas pouvoir associer l'arrêt et l'appareil peut continuer à sonner. Arrêtez-la là où elle a été déclenchée, appuyez sur le bouton du traceur ou attendez la fin de la sonnerie."
+    },
+    "stop_sound_cancel_key_aged": {
+      "message": "Stop Sound pour {device_id} a été envoyé avec la clé de la dernière sonnerie déclenchée par cette instance, mais cette clé date de plus de 30 minutes et ne peut pas répondre de la sonnerie actuelle, l'appareil peut donc continuer à sonner. Appuyez sur le bouton du traceur ou attendez la fin de la sonnerie."
+    },
+    "stop_sound_cancel_key_foreign": {
+      "message": "Stop Sound pour {device_id} a été envoyé avec le request UUID fourni, mais celui-ci n'appartient à aucune sonnerie déclenchée par cette instance : rien ne prouve que l'arrêt corresponde à la sonnerie en cours, l'appareil peut donc continuer à sonner. Laissez le request UUID vide pour utiliser la clé propre à cette instance, appuyez sur le bouton du traceur ou attendez la fin de la sonnerie."
+    },
     "missing_token_cache": {
       "message": "Cache de jetons manquant. Fournissez le TokenCache spécifique à l’entrée (par exemple entry.runtime_data.token_cache)."
     },
     "missing_namespace": {
       "message": "Espace de noms manquant. Transmettez l’espace de noms spécifique à l’entrée ou l’ID de ConfigEntry pour isoler les métadonnées mises en cache."
+    },
+    "device_list_rate_limited": {
+      "message": "Google limite temporairement les requêtes de la liste des appareils. L'intégration réessaiera automatiquement."
+    },
+    "device_list_server_error": {
+      "message": "La liste des appareils est temporairement indisponible (erreur serveur {status}). L'intégration réessaiera automatiquement."
+    },
+    "device_list_rejected": {
+      "message": "Le serveur a refusé la requête de la liste des appareils (HTTP {status})."
+    },
+    "device_list_decode_failed": {
+      "message": "La réponse de Google à la requête de la liste des appareils n'a pas pu être décodée."
+    },
+    "device_list_logic_error": {
+      "message": "Google a signalé une erreur lors de la récupération de la liste des appareils."
+    },
+    "multi_entry_guard": {
+      "message": "Plusieurs entrées Google Find My Device sont actives, mais cette requête n'était associée à aucune d'elles. L'intégration réessaiera automatiquement."
+    },
+    "device_list_failed": {
+      "message": "Impossible de récupérer la liste des appareils."
+    },
+    "device_list_network_error": {
+      "message": "Erreur réseau lors de la récupération de la liste des appareils."
+    },
+    "device_list_unexpected_error": {
+      "message": "Erreur inattendue lors de la récupération de la liste des appareils."
+    },
+    "cold_start_empty_device_list": {
+      "message": "La liste des appareils était vide juste après le démarrage. Cette situation est considérée comme temporaire, et l'intégration réessaiera automatiquement."
+    },
+    "update_unexpected_error": {
+      "message": "Erreur inattendue lors de la mise à jour ({error_type})."
+    },
+    "locate_timeout": {
+      "message": "La demande de localisation de l'appareil {device_id} a expiré."
+    },
+    "locate_not_accepted": {
+      "message": "Aucune demande de localisation n'a été acceptée lors de ce cycle ({not_accepted} non acceptées, {rejected} refusées)."
+    },
+    "locate_all_rejected": {
+      "message": "Le serveur a refusé la demande de localisation pour tous les appareils ({rejected}) lors de ce cycle."
+    },
+    "beacon_keys_unavailable": {
+      "message": "No key material is available for this device."
+    },
+    "beacon_invalid_address": {
+      "message": "The address is not a valid Bluetooth address."
+    },
+    "beacon_invalid_eid": {
+      "message": "L'EID doit compter 20 ou 32 octets en hexadécimal."
+    },
+    "beacon_bluetooth_unavailable": {
+      "message": "The Bluetooth integration is not loaded."
+    },
+    "beacon_diagnostic_busy": {
+      "message": "Another beacon diagnostic is running. Try again when it has finished."
     }
   },
   "system_health": {

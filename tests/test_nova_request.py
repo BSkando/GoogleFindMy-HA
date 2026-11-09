@@ -2924,11 +2924,11 @@ async def test_async_ttl_policy_recalibration_logs_info_not_warning(
             with caplog.at_level(logging.INFO, logger=logger_name):
                 await policy.async_on_401(adaptive_downshift=True)
 
-            recal = [
+            recalibrations = [
                 r for r in caplog.records if "Unexpected short TTL" in r.getMessage()
             ]
-            assert len(recal) == 1
-            assert recal[0].levelno == logging.INFO
+            assert len(recalibrations) == 1
+            assert recalibrations[0].levelno == logging.INFO
             assert not any(
                 r.levelno == logging.WARNING
                 and "Unexpected short TTL" in r.getMessage()
@@ -2989,9 +2989,11 @@ def test_sync_ttl_policy_recalibration_logs_info_not_warning(
     with caplog.at_level(logging.INFO, logger=logger_name):
         policy.on_401(adaptive_downshift=True)
 
-    recal = [r for r in caplog.records if "Unexpected short TTL" in r.getMessage()]
-    assert len(recal) == 1
-    assert recal[0].levelno == logging.INFO
+    recalibrations = [
+        r for r in caplog.records if "Unexpected short TTL" in r.getMessage()
+    ]
+    assert len(recalibrations) == 1
+    assert recalibrations[0].levelno == logging.INFO
     assert not any(
         r.levelno == logging.WARNING and "Unexpected short TTL" in r.getMessage()
         for r in caplog.records

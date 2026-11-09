@@ -824,7 +824,7 @@ class TestUpdateBLEBattery:
 # the FMDN spec's "Bits 5-6 battery, Bit 7 UWT" without honouring the
 # spec's explicit qualifier that bits are referenced from MSB to LSB.
 # See custom_components/googlefindmy/eid_resolver.py around the
-# "FMDN hashed_flags byte layout" comment block and docs/BLE_BATTERY_SENSOR.md L45.
+# "FMDN hashed_flags byte layout" comment block and docs/BLE_BATTERY_SENSOR.md, section 1, step 5.
 # ===========================================================================
 
 
@@ -1185,7 +1185,7 @@ class TestBLEBatterySensorNativeValue:
             battery_pct=100,
             uwt_mode=False,
             decoded_flags=0x02,
-            observed_at_wall=1000.0,
+            observed_at_wall=time.time(),
         )
         resolver._ble_battery_state["dev-1"] = state
 
@@ -1197,6 +1197,7 @@ class TestBLEBatterySensorNativeValue:
         resolver = _make_resolver()
         sensor = _build_battery_sensor(device_id="dev-no-data", resolver=resolver)
         sensor._attr_native_value = 25
+        sensor._last_observation_wall = time.time()  # fresh sighting
         assert sensor.native_value == 25
 
     def test_value_none_when_no_data_no_restore(self) -> None:
@@ -1209,6 +1210,7 @@ class TestBLEBatterySensorNativeValue:
         """When resolver is not in hass.data, returns _attr_native_value fallback."""
         sensor = _build_battery_sensor(device_id="dev-1", resolver=None)
         sensor._attr_native_value = 5
+        sensor._last_observation_wall = time.time()  # fresh sighting
         assert sensor.native_value == 5
 
     def test_value_updates_on_battery_change(self) -> None:
@@ -1223,7 +1225,7 @@ class TestBLEBatterySensorNativeValue:
             battery_pct=100,
             uwt_mode=False,
             decoded_flags=0x02,
-            observed_at_wall=1000.0,
+            observed_at_wall=time.time(),
         )
         assert sensor.native_value == 100
 
@@ -1232,7 +1234,7 @@ class TestBLEBatterySensorNativeValue:
             battery_pct=25,
             uwt_mode=False,
             decoded_flags=0x04,
-            observed_at_wall=2000.0,
+            observed_at_wall=time.time(),
         )
         assert sensor.native_value == 25
 
@@ -1241,6 +1243,7 @@ class TestBLEBatterySensorNativeValue:
         hass = SimpleNamespace(data={DOMAIN: "not-a-dict"})
         sensor = _build_battery_sensor(device_id="dev-1", hass=hass)
         sensor._attr_native_value = 42
+        sensor._last_observation_wall = time.time()  # fresh sighting
         assert sensor.native_value == 42
 
     def test_resolver_missing_domain_key(self) -> None:
@@ -1248,6 +1251,7 @@ class TestBLEBatterySensorNativeValue:
         hass = SimpleNamespace(data={})
         sensor = _build_battery_sensor(device_id="dev-1", hass=hass)
         sensor._attr_native_value = 99
+        sensor._last_observation_wall = time.time()  # fresh sighting
         assert sensor.native_value == 99
 
 
@@ -1287,6 +1291,7 @@ class TestBLEBatterySensorAvailability:
             resolver=resolver,
         )
         sensor._attr_native_value = 100  # restored
+        sensor._last_observation_wall = time.time()  # fresh sighting
         assert sensor.available is True
 
     def test_unavailable_when_not_present_no_data(self) -> None:
@@ -1327,6 +1332,7 @@ class TestBLEBatterySensorAvailability:
             resolver=resolver,
         )
         sensor._attr_native_value = 50
+        sensor._last_observation_wall = time.time()  # fresh sighting
         # Exception path => returns _attr_native_value is not None => True
         assert sensor.available is True
 
@@ -1358,6 +1364,7 @@ class TestBLEBatterySensorAvailability:
             resolver=resolver,
         )
         sensor._attr_native_value = 25
+        sensor._last_observation_wall = time.time()  # fresh sighting
         # No is_device_present => falls to bottom: _attr_native_value is not None
         assert sensor.available is True
 
@@ -1429,7 +1436,7 @@ class TestBLEBatterySensorCoordinatorUpdate:
             battery_pct=25,
             uwt_mode=False,
             decoded_flags=0x04,
-            observed_at_wall=1000.0,
+            observed_at_wall=time.time(),
         )
         coordinator = _fake_coordinator(
             device_id="dev-1",
@@ -1526,7 +1533,15 @@ class TestBLEBatterySensorRestore:
         sensor.async_write_ha_state = MagicMock()
 
         last_data = SimpleNamespace(native_value="25")
-        sensor.async_get_last_sensor_data = AsyncMock(return_value=last_data)
+        sensor.async_get_last_extra_data = AsyncMock(
+            return_value=SimpleNamespace(
+                as_dict=lambda: {
+                    "native_value": last_data.native_value,
+                    "native_unit_of_measurement": "%",
+                    "last_observation_wall": time.time(),
+                }
+            )
+        )
 
         # Patch super().async_added_to_hass to be a no-op
         with patch.object(
@@ -1546,7 +1561,15 @@ class TestBLEBatterySensorRestore:
         sensor.async_write_ha_state = MagicMock()
 
         last_data = SimpleNamespace(native_value="99.7")
-        sensor.async_get_last_sensor_data = AsyncMock(return_value=last_data)
+        sensor.async_get_last_extra_data = AsyncMock(
+            return_value=SimpleNamespace(
+                as_dict=lambda: {
+                    "native_value": last_data.native_value,
+                    "native_unit_of_measurement": "%",
+                    "last_observation_wall": time.time(),
+                }
+            )
+        )
 
         with patch.object(
             GoogleFindMyBLEBatterySensor.__bases__[1],
@@ -1565,7 +1588,14 @@ class TestBLEBatterySensorRestore:
         sensor.async_write_ha_state = MagicMock()
 
         last_data = SimpleNamespace(native_value=None)
-        sensor.async_get_last_sensor_data = AsyncMock(return_value=last_data)
+        sensor.async_get_last_extra_data = AsyncMock(
+            return_value=SimpleNamespace(
+                as_dict=lambda: {
+                    "native_value": last_data.native_value,
+                    "native_unit_of_measurement": "%",
+                }
+            )
+        )
 
         with patch.object(
             GoogleFindMyBLEBatterySensor.__bases__[1],
@@ -1584,7 +1614,14 @@ class TestBLEBatterySensorRestore:
         sensor.async_write_ha_state = MagicMock()
 
         last_data = SimpleNamespace(native_value="unknown")
-        sensor.async_get_last_sensor_data = AsyncMock(return_value=last_data)
+        sensor.async_get_last_extra_data = AsyncMock(
+            return_value=SimpleNamespace(
+                as_dict=lambda: {
+                    "native_value": last_data.native_value,
+                    "native_unit_of_measurement": "%",
+                }
+            )
+        )
 
         with patch.object(
             GoogleFindMyBLEBatterySensor.__bases__[1],
@@ -1603,7 +1640,14 @@ class TestBLEBatterySensorRestore:
         sensor.async_write_ha_state = MagicMock()
 
         last_data = SimpleNamespace(native_value="unavailable")
-        sensor.async_get_last_sensor_data = AsyncMock(return_value=last_data)
+        sensor.async_get_last_extra_data = AsyncMock(
+            return_value=SimpleNamespace(
+                as_dict=lambda: {
+                    "native_value": last_data.native_value,
+                    "native_unit_of_measurement": "%",
+                }
+            )
+        )
 
         with patch.object(
             GoogleFindMyBLEBatterySensor.__bases__[1],
@@ -1622,7 +1666,14 @@ class TestBLEBatterySensorRestore:
         sensor.async_write_ha_state = MagicMock()
 
         last_data = SimpleNamespace(native_value="not-a-number")
-        sensor.async_get_last_sensor_data = AsyncMock(return_value=last_data)
+        sensor.async_get_last_extra_data = AsyncMock(
+            return_value=SimpleNamespace(
+                as_dict=lambda: {
+                    "native_value": last_data.native_value,
+                    "native_unit_of_measurement": "%",
+                }
+            )
+        )
 
         with patch.object(
             GoogleFindMyBLEBatterySensor.__bases__[1],
@@ -1640,7 +1691,7 @@ class TestBLEBatterySensorRestore:
         sensor = _build_battery_sensor(device_id="dev-1", resolver=resolver)
         sensor.async_write_ha_state = MagicMock()
 
-        sensor.async_get_last_sensor_data = AsyncMock(return_value=None)
+        sensor.async_get_last_extra_data = AsyncMock(return_value=None)
 
         with patch.object(
             GoogleFindMyBLEBatterySensor.__bases__[1],

@@ -262,11 +262,7 @@
         "title": "Anmeldedaten aktualisieren (optional)",
         "description": "Aktualisiere deine Anmeldedaten. Bestehende Werte werden aus Sicherheitsgründen nicht angezeigt.\n\nFüge den vollständigen Inhalt einer neuen **secrets.json** ein (mit GoogleFindMyTools erzeugt).\n\nNach dem Absenden werden die Anmeldedaten validiert und gespeichert; die Integration wird neu geladen, ohne deine Entitätsnamen zu ändern.",
         "data": {
-          "new_secrets_json": "Neue secrets.json (vollständiger Inhalt)",
-          "subentry": "Funktionsgruppe"
-        },
-        "data_description": {
-          "subentry": "Wende Aktualisierungen der Anmeldedaten auf die ausgewählte Funktionsgruppe an. Workflows findest du im Abschnitt [Subeinträge und Funktionsgruppen]({subentries_docs_url})."
+          "new_secrets_json": "Neue secrets.json (vollständiger Inhalt)"
         }
       },
       "settings": {
@@ -287,7 +283,6 @@
           "map_view_token_expiration": "Ablauf von Kartenansicht-Tokens aktivieren",
           "map_view_enabled": "Kartenansicht aktivieren",
           "contributor_mode": "Modus für Standortmeldungen",
-          "subentry": "Funktionsgruppe",
           "secrets_extra_watch_paths": "Zusätzliche secrets.json-Überwachungspfade (einer pro Zeile)"
         },
         "data_description": {
@@ -300,7 +295,6 @@
           "map_view_token_expiration": "Wenn aktiviert, laufen die Token für die Kartenansicht nach 1 Woche ab. Wenn deaktiviert (Standard), laufen die Token nicht ab.",
           "map_view_enabled": "Standardmäßig aktiviert. Wenn deaktiviert, werden Kartenansicht-Anfragen wie mit einem ungültigen Token abgelehnt und Geräte-Links gelöscht. Bestehende Freigabelinks werden nicht erneuert; könnte ein Link geleakt sein, nutze 'Ablauf von Kartenansicht-Tokens aktivieren' (bis zu zwei Wochen, falls bereits aktiviert).",
           "contributor_mode": "Lege fest, wie dein Gerät zum Google-Netzwerk beiträgt (standardmäßig Alle Bereiche für Crowdsourcing oder nur stark frequentierte Bereiche).",
-          "subentry": "Speichere diese Optionen in der ausgewählten Funktionsgruppe. Beispiele findest du unter [Subeinträge und Funktionsgruppen]({subentries_docs_url}).",
           "secrets_extra_watch_paths": "Optional. Zusätzliche absolute Pfade zu secrets.json-Dateien, die die Integration zur automatischen Übernahme überwachen soll, einer pro Zeile. Leer lassen, um nur die Standardorte zu überwachen."
         }
       },
@@ -371,7 +365,7 @@
   "services": {
     "locate_device": {
       "name": "Gerät orten",
-      "description": "Ermittelt die aktuelle Position eines Google-Find-My-Geräts.",
+      "description": "Ermittelt die aktuelle Position eines Google-Find-My-Geräts. Ruft ein Benutzer die Aktion auf, braucht er die Berechtigung zum Steuern der Entitäten des Geräts; Automationen und Skripte ohne Benutzerkontext sind nicht betroffen.",
       "fields": {
         "device_id": {
           "name": "Gerät",
@@ -381,7 +375,7 @@
     },
     "play_sound": {
       "name": "Ton abspielen",
-      "description": "Spielt einen Ton auf einem Google-Find-My-Gerät ab.",
+      "description": "Spielt einen Ton auf einem Google-Find-My-Gerät ab. Ruft ein Benutzer die Aktion auf, braucht er die Berechtigung zum Steuern der Entitäten des Geräts; Automationen und Skripte ohne Benutzerkontext sind nicht betroffen.",
       "fields": {
         "device_id": {
           "name": "Gerät",
@@ -391,7 +385,7 @@
     },
     "stop_sound": {
       "name": "Ton stoppen",
-      "description": "Stoppt den Ton auf einem Google-Find-My-Gerät.",
+      "description": "Stoppt den Ton auf einem Google-Find-My-Gerät. Ruft ein Benutzer die Aktion auf, braucht er die Berechtigung zum Steuern der Entitäten des Geräts; Automationen und Skripte ohne Benutzerkontext sind nicht betroffen.",
       "fields": {
         "device_id": {
           "name": "Gerät",
@@ -401,17 +395,17 @@
     },
     "refresh_device_urls": {
       "name": "Geräte-URLs aktualisieren",
-      "description": "Aktualisiert die Konfigurations-URLs der Geräte, damit sie auf die integrierte Kartenansicht zeigen.",
+      "description": "Aktualisiert die Konfigurations-URLs der Geräte, damit sie auf die integrierte Kartenansicht zeigen. Bei Aufruf durch einen Benutzer nur für Administratoren.",
       "fields": {}
     },
     "rebuild_device_registry": {
       "name": "Geräteregistrierung neu aufbauen",
-      "description": "Wartung: baut die Geräteregistrierung für Google Find My Hubs neu auf und entfernt Tracker-Geräte, die fälschlicherweise dem übergeordneten Eintrag zugeordnet sind.",
+      "description": "Wartung: baut die Geräteregistrierung für Google Find My Hubs neu auf und entfernt Tracker-Geräte, die fälschlicherweise dem übergeordneten Eintrag zugeordnet sind. Bei Aufruf durch einen Benutzer nur für Administratoren.",
       "fields": {}
     },
     "locate_external": {
       "name": "Gerät orten (extern)",
-      "description": "Ortung über den externen Helfer; delegiert an die normale Ortung.",
+      "description": "Ortung über den externen Helfer; delegiert an die normale Ortung. Ruft ein Benutzer die Aktion auf, braucht er die Berechtigung zum Steuern der Entitäten des Geräts; Automationen und Skripte ohne Benutzerkontext sind nicht betroffen.",
       "fields": {
         "device_id": {
           "name": "Gerät",
@@ -425,7 +419,7 @@
     },
     "rebuild_registry": {
       "name": "Registrierung migrieren/neu aufbauen",
-      "description": "Wartung: Führt eine Migration der Einstellungen durch oder baut die Entitäten/Geräte dieser Integration neu auf.",
+      "description": "Wartung: Führt eine Migration der Einstellungen durch oder baut die Entitäten/Geräte dieser Integration neu auf. Bei Aufruf durch einen Benutzer nur für Administratoren.",
       "fields": {
         "mode": {
           "name": "Modus",
@@ -434,6 +428,44 @@
         "device_ids": {
           "name": "Geräte (optional)",
           "description": "Begrenzt den Vorgang auf bestimmte Geräte. Leer lassen, um alle Google-Find-My-Geräte zu berücksichtigen."
+        }
+      }
+    },
+    "read_beacon_state": {
+      "name": "Beacon-Status lesen",
+      "description": "Diagnose: verbindet sich per Bluetooth mit einem Tracker, liest seinen FMDN-Status und gibt ihn als Antwort zurück. Sendet nur Leseanfragen und läuft nur bei Aufruf; nur für Administratoren. Der erste Zugriff auf ein Gerät, das noch nie angesprochen wurde, lässt es bis zum Zurücksetzen auf Werkseinstellungen einen Owner-Kontoschlüssel festlegen, deshalb nur bei bereits eingerichteten Trackern verwenden.",
+      "fields": {
+        "device_id": {
+          "name": "Gerät",
+          "description": "Wähle ein Gerät aus (oder übergib eine kanonische ID über die Entwicklerwerkzeuge)."
+        },
+        "address": {
+          "name": "Bluetooth-Adresse (optional)",
+          "description": "Mit dieser Adresse verbinden, statt nach einer Fast-Pair-Anzeige zu suchen, die zum Kontoschlüssel des Geräts passt. Die Adresse wird gegen keinen Schlüssel geprüft."
+        },
+        "timeout": {
+          "name": "Zeitlimit (optional)",
+          "description": "Zeitlimit in Sekunden, 5 bis 120, für die Schlüsselsuche und erneut für Verbindung und Lesen. Das Aufräumen kann einige Sekunden hinzufügen."
+        },
+        "include_raw_response": {
+          "name": "Rohantwort einschließen (optional)",
+          "description": "Gibt zusätzlich die rohe Antwort zum Bereitstellungsstatus als Hexadezimalwert aus. Die Antwort enthält die vollständige aktuelle EID des Trackers, behandle die Ausgabe entsprechend."
+        },
+        "search_seconds": {
+          "name": "EID-Suchfenster (optional)",
+          "description": "Sekunden je Seite der Tracker-Uhr, in denen sekundengenau nach dem Zähler einer EID gesucht wird. 0 schaltet die Suche ab. Die Suche läuft nach dem Ende der Verbindung, dauert bis zu 5 Minuten länger und belastet in dieser Zeit die CPU."
+        },
+        "search_eid": {
+          "name": "Gesuchte EID (optional)",
+          "description": "Eine in einer Anzeige gesehene EID, 20 oder 32 Byte als Hexadezimalwert. Wird zusätzlich zur vom Tracker gemeldeten und zur von der gewählten Adresse gesendeten EID gesucht. Nur mit einer Suche wirksam."
+        },
+        "identity_form": {
+          "name": "Identität für die Verbindung (optional)",
+          "description": "Mit welcher Identität des Trackers verbunden wird: einer beliebigen, dem Locator, der den FMDN-Rahmen sendet, oder dem Audiogerät, das Common Audio ankündigt. Wird ignoriert, wenn eine Adresse angegeben ist."
+        },
+        "derivation_windows": {
+          "name": "Fenster der Ableitungssuche (optional)",
+          "description": "Rotationsfenster von je 1024 s, die auf jeder Seite der Tracker-Uhr durchsucht werden; dabei werden andere Schlüssel- und Blockformen gegen die Ziel-EIDs probiert. 0 schaltet sie aus. Die Suche läuft nach dem Trennen der Verbindung, dauert bis zu 5 Minuten länger und belastet währenddessen die CPU."
         }
       }
     }
@@ -830,7 +862,7 @@
       "message": "Gerät {device_id} wurde nicht gefunden oder gehört nicht zu dieser Integration."
     },
     "no_active_entry": {
-      "message": "Es ist kein aktiver Google-Find-My-Gerät-Eintrag verfügbar. Aktive Einträge: {active_count}/{total_count}. Aktiviere einen der konfigurierten Einträge ({entries}) oder richte ein neues Konto ein und versuche es erneut."
+      "message": "Es ist kein aktiver Google-Find-My-Gerät-Eintrag verfügbar. Aktive Einträge: {active_count}/{total_count}. Aktiviere einen der konfigurierten Einträge oder richte ein neues Konto ein und versuche es erneut."
     },
     "locate_failed": {
       "message": "Ortung für Gerät {device_id} fehlgeschlagen: {error}"
@@ -859,11 +891,77 @@
     "stop_sound_uncorrelated": {
       "message": "Stop Sound für {device_id} wurde gesendet, konnte aber dem laufenden Klingeln nicht zugeordnet werden: Das Klingeln wurde anderswo gestartet, oder der hier vorliegende Schlüssel ist zu alt, um dafür einzustehen. Google kann den Stopp möglicherweise nicht zuordnen, das Gerät klingelt dann weiter. Drücke die Taste am Tracker oder warte, bis das Klingeln von selbst endet."
     },
+    "stop_sound_no_cancel_key": {
+      "message": "Stop Sound für {device_id} wurde gesendet, aber diese Instanz hat keinen Schlüssel für ein Klingeln auf diesem Gerät. Das Klingeln wurde vermutlich anderswo gestartet, etwa in der App Find Hub. Google kann den Stopp dann möglicherweise nicht zuordnen, und das Gerät klingelt weiter. Beende es dort, wo es gestartet wurde, drücke die Taste am Tracker oder warte, bis das Klingeln von selbst endet."
+    },
+    "stop_sound_cancel_key_aged": {
+      "message": "Stop Sound für {device_id} wurde mit dem Schlüssel des letzten Klingelns dieser Instanz gesendet, aber der Schlüssel ist älter als 30 Minuten und kann nicht für das jetzige Klingeln einstehen. Das Gerät klingelt möglicherweise weiter. Drücke die Taste am Tracker oder warte, bis das Klingeln von selbst endet."
+    },
+    "stop_sound_cancel_key_foreign": {
+      "message": "Stop Sound für {device_id} wurde mit der angegebenen Request-UUID gesendet, aber sie gehört zu keinem Klingeln, das diese Instanz gestartet hat. Nichts belegt, dass der Stopp das laufende Klingeln trifft, das Gerät klingelt möglicherweise weiter. Lass die Request-UUID leer, damit der eigene Schlüssel dieser Instanz verwendet wird, drücke die Taste am Tracker oder warte, bis das Klingeln von selbst endet."
+    },
     "missing_token_cache": {
       "message": "Token-Cache fehlt. Bitte den eintragsbezogenen TokenCache übergeben (z. B. entry.runtime_data.token_cache)."
     },
     "missing_namespace": {
       "message": "Namespace fehlt. Übergebe den eintragsbezogenen Namespace bzw. die ConfigEntry-ID, um Metadaten sauber zu isolieren."
+    },
+    "device_list_rate_limited": {
+      "message": "Google begrenzt die Abfragen der Geräteliste vorübergehend. Die Integration versucht es automatisch erneut."
+    },
+    "device_list_server_error": {
+      "message": "Die Geräteliste ist vorübergehend nicht verfügbar (Serverfehler {status}). Die Integration versucht es automatisch erneut."
+    },
+    "device_list_rejected": {
+      "message": "Der Server hat die Abfrage der Geräteliste abgelehnt (HTTP {status})."
+    },
+    "device_list_decode_failed": {
+      "message": "Die Antwort von Google auf die Abfrage der Geräteliste konnte nicht dekodiert werden."
+    },
+    "device_list_logic_error": {
+      "message": "Google hat beim Abrufen der Geräteliste einen Fehler gemeldet."
+    },
+    "multi_entry_guard": {
+      "message": "Mehrere Einträge von Google Find My Device sind aktiv, aber diese Abfrage war keinem von ihnen zugeordnet. Die Integration versucht es automatisch erneut."
+    },
+    "device_list_failed": {
+      "message": "Die Geräteliste konnte nicht abgerufen werden."
+    },
+    "device_list_network_error": {
+      "message": "Netzwerkfehler beim Abrufen der Geräteliste."
+    },
+    "device_list_unexpected_error": {
+      "message": "Unerwarteter Fehler beim Abrufen der Geräteliste."
+    },
+    "cold_start_empty_device_list": {
+      "message": "Die Geräteliste war direkt nach dem Start leer. Das gilt als vorübergehend, und die Integration versucht es automatisch erneut."
+    },
+    "update_unexpected_error": {
+      "message": "Unerwarteter Fehler bei der Aktualisierung ({error_type})."
+    },
+    "locate_timeout": {
+      "message": "Bei der Ortungsanfrage für Gerät {device_id} wurde das Zeitlimit überschritten."
+    },
+    "locate_not_accepted": {
+      "message": "In diesem Durchlauf wurde die Ortungsanfrage keines Geräts angenommen ({not_accepted} nicht angenommen, {rejected} abgelehnt)."
+    },
+    "locate_all_rejected": {
+      "message": "Der Server hat die Ortungsanfrage in diesem Durchlauf für alle Geräte ({rejected}) abgelehnt."
+    },
+    "beacon_keys_unavailable": {
+      "message": "Für dieses Gerät ist kein Schlüsselmaterial verfügbar."
+    },
+    "beacon_invalid_address": {
+      "message": "Die Adresse ist keine gültige Bluetooth-Adresse."
+    },
+    "beacon_invalid_eid": {
+      "message": "Die EID muss 20 oder 32 Byte als Hexadezimalwert umfassen."
+    },
+    "beacon_bluetooth_unavailable": {
+      "message": "Die Bluetooth-Integration ist nicht geladen."
+    },
+    "beacon_diagnostic_busy": {
+      "message": "Eine andere Beacon-Diagnose läuft bereits. Bitte nach ihrem Ende erneut versuchen."
     }
   },
   "system_health": {

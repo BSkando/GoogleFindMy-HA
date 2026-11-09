@@ -42,6 +42,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_registry import RegistryEntry as EntityRegistryEntry
 
+from ..Auth.log_safety import describe_exception
 from ..const import (
     DOMAIN,
     INTEGRATION_VERSION,
@@ -60,9 +61,12 @@ from ..const import (
 from ._mixin_typing import _MixinBase
 from .helpers.registry import (
     NOT_GIVEN,
+    STALE_REMOVAL_MAX_ATTEMPTS,
+    STALE_REMOVAL_REQUIRED_MISSES,
     DeviceRegistryCapabilities,
     NotGivenType,
     OwnershipIntent,
+    plan_stale_device_removals,
     read_device_ownership,
 )
 from .helpers.registry import (
@@ -1403,14 +1407,11 @@ class RegistryOperations(_MixinBase):
             if not unique_id:
                 return None
 
-            try:
-                entity_id = ent_reg.async_get_entity_id(
-                    DEVICE_TRACKER_DOMAIN,
-                    DOMAIN,
-                    unique_id,
-                )
-            except TypeError:
-                entity_id = None
+            entity_id = ent_reg.async_get_entity_id(
+                DEVICE_TRACKER_DOMAIN,
+                DOMAIN,
+                unique_id,
+            )
 
             if not entity_id:
                 return None
@@ -1418,10 +1419,7 @@ class RegistryOperations(_MixinBase):
             entry: EntityRegistryEntry | None = None
             getter = getattr(ent_reg, "async_get", None)
             if callable(getter):
-                try:
-                    entry = getter(entity_id)
-                except TypeError:
-                    entry = None
+                entry = getter(entity_id)
 
             if entry is None and ent_registry_values:
                 for candidate in ent_registry_values:
@@ -1621,6 +1619,302 @@ class RegistryOperations(_MixinBase):
         """
 
         self._reindex_poll_targets_from_device_registry()
+
+    def _remove_stale_devices(
+        self,
+        fresh_list_ids: set[str],
+        *,
+        dropped_candidates: int,
+        canonicless_warn: int,
+        canonicless_names: Mapping[tuple[str, str], int] | None = None,
+    ) -> int:
+        """Remove tracker devices that left the Google account.
+
+        Called by the update cycle only with a device list it fetched in this
+        cycle and that is not empty. The decision is
+        ``plan_stale_device_removals`` (protection rules S-R1 to S-R9); this
+        method keeps the miss counter, logs, and executes the plan.
+
+        Removal goes through ``_apply_device_ownership`` with DETACH on the
+        subentry link the device sits on. Without ``detach_subentry_id`` DETACH
+        names the hub link and leaves a tracker device untouched (M-10); with
+        it, core removes the device and its entities once no link is left. The
+        device is **not** added to ``ignored_devices``: a tracker added back to
+        the account comes back, and core restores its device id, user name,
+        area and entity ids from the registry's deleted entries.
+
+        The platforms do not bring its entities back on their own: each keeps
+        the ids it has set up in a set that lives as long as the setup, so a
+        known id coming back adds nothing. The removed Google ids are therefore
+        remembered, and the first fresh list that carries one again reloads the
+        entry once (``_reload_if_removed_devices_returned``).
+
+        A device counts as removed when it is gone from the registry or no
+        longer has a link to this entry afterwards (on a core below 2026.8
+        another entry can keep it; this entry's entities are gone either way).
+        A refused DETACH, or one that raises, leaves the device, its Google
+        ids and the remembered set untouched. The next fresh list tries again,
+        once: after ``STALE_REMOVAL_MAX_ATTEMPTS`` failed attempts the device is
+        given up until the next setup, because ``_apply_device_ownership`` logs
+        a DETACH it refuses as an error and an unbounded retry would repeat
+        that with every device list. An error on one device does not cost the
+        others their removal or their report.
+
+        Args:
+            fresh_list_ids: Google ids of the list fetched in this cycle.
+            dropped_candidates: List entries without a valid id in this fetch.
+            canonicless_warn: The decoder's ``warn`` drop count for this fetch.
+            canonicless_names: ``(raw name, kind)`` pairs the decoder dropped
+                from this fetch for lack of a canonical id, with their counts
+                (S-R3d).
+
+        Returns:
+            The number of devices removed.
+        """
+        entry = self.config_entry or getattr(self, "entry", None)
+        entry_id = getattr(entry, "entry_id", None) if entry is not None else None
+        if not entry_id:
+            return 0
+
+        self._reload_if_removed_devices_returned(entry, entry_id, fresh_list_ids)
+
+        dev_reg = dr.async_get(self.hass)
+        given_up = self._stale_removal_given_up
+        plan = plan_stale_device_removals(
+            [
+                device
+                for device in dr.async_entries_for_config_entry(dev_reg, entry_id)
+                if device.id not in given_up
+            ],
+            entry_id=entry_id,
+            domain=DOMAIN,
+            service_identifiers=(
+                service_device_identifier(entry_id),
+                (DOMAIN, LEGACY_SERVICE_IDENTIFIER),
+            ),
+            fresh_list_ids=fresh_list_ids,
+            dropped_candidates=dropped_candidates,
+            canonicless_warn=canonicless_warn,
+            canonicless_names=canonicless_names or {},
+            previous_misses=getattr(self, "_stale_device_misses", {}),
+            name_baseline=self._stale_name_baseline,
+        )
+        self._stale_device_misses = dict(plan.misses)
+        self._stale_name_baseline = plan.name_baseline
+
+        if plan.skipped_reason is not None:
+            _LOGGER.debug(
+                "[%s] stale-device removal skipped (reason=%s)",
+                entry_id,
+                plan.skipped_reason,
+            )
+            return 0
+
+        # Polling record: the device name stays at DEBUG (AGENTS.md section 5,
+        # class (b)); INFO carries the Home Assistant device id instead.
+        for device, misses in plan.first_misses:
+            _LOGGER.info(
+                "[%s] Device %s is missing from the Google device list (%d/%d)",
+                entry_id,
+                device.id,
+                misses,
+                STALE_REMOVAL_REQUIRED_MISSES,
+            )
+            _LOGGER.debug(
+                "[%s] Device %s missing from the Google device list is '%s'",
+                entry_id,
+                device.id,
+                device.name_by_user or device.name,
+            )
+
+        if not plan.remove:
+            return 0
+
+        # Local import: the tracker module pulls in the decryption stack.
+        from ..NovaApi.ExecuteAction.LocateTracker.foreign_reading_tracker import (
+            FOREIGN_READING_TRACKER,
+        )
+
+        tracker_scope = getattr(entry, "parent_entry_id", None) or entry_id
+        removed_ids: list[str] = []
+        for device, google_ids in plan.remove:
+            try:
+                removed = self._detach_stale_device(dev_reg, device, entry_id)
+            except Exception as err:  # noqa: BLE001 - one device must not cost the others
+                _LOGGER.warning(
+                    "[%s] Removing device %s that left the Google account failed (%s)",
+                    entry_id,
+                    device.id,
+                    type(err).__name__,
+                )
+                _LOGGER.debug(
+                    "[%s] Removal error detail for device %s: %s",
+                    entry_id,
+                    device.id,
+                    describe_exception(err),
+                )
+                removed = False
+            if not removed:
+                self._count_failed_stale_removal(entry_id, device.id)
+                continue
+            self._stale_removal_attempts.pop(device.id, None)
+            for google_id in sorted(google_ids):
+                self.purge_device(google_id)
+                FOREIGN_READING_TRACKER.forget_device(tracker_scope, google_id)
+                self._stale_removed_google_ids.add(google_id)
+            _LOGGER.debug(
+                "[%s] Removed stale device %s '%s' (Google ids: %s)",
+                entry_id,
+                device.id,
+                device.name_by_user or device.name,
+                ", ".join(self._redact_text(gid, 8) for gid in sorted(google_ids)),
+            )
+            removed_ids.append(device.id)
+
+        if removed_ids:
+            _LOGGER.info(
+                "[%s] Removed %d device(s) no longer in the Google account: %s",
+                entry_id,
+                len(removed_ids),
+                ", ".join(removed_ids),
+            )
+        return len(removed_ids)
+
+    def _detach_stale_device(self, dev_reg: Any, device: Any, entry_id: str) -> bool:
+        """Detach every link of ``device`` to ``entry_id``; tell whether it left.
+
+        Returns:
+            ``True`` when the device is gone from the registry or has no link
+            to ``entry_id`` any more; ``False`` when core kept it linked.
+        """
+        for link in sorted(
+            _extract_subentry_links_impl(device, entry_id),
+            key=lambda value: value or "",
+        ):
+            current = dev_reg.async_get(device.id)
+            if current is None:
+                break
+            self._apply_device_ownership(
+                dev_reg,
+                intent=OwnershipIntent.DETACH,
+                device_id=device.id,
+                entry_id=entry_id,
+                detach_subentry_id=link,
+                device=current,
+            )
+        current = dev_reg.async_get(device.id)
+        return current is None or not _extract_subentry_links_impl(current, entry_id)
+
+    def _count_failed_stale_removal(self, entry_id: str, device_id: str) -> None:
+        """Retry a refused or failed removal once, then give the device up.
+
+        Nothing was removed, so nothing is purged or remembered.
+        ``_apply_device_ownership`` logs a DETACH it refuses as an error, so
+        the retry is bounded: after
+        ``STALE_REMOVAL_MAX_ATTEMPTS`` attempts the device is left alone until
+        the next setup, and that is said once at WARNING.
+        """
+        attempts = self._stale_removal_attempts.get(device_id, 0) + 1
+        self._stale_removal_attempts[device_id] = attempts
+        if attempts >= STALE_REMOVAL_MAX_ATTEMPTS:
+            self._stale_removal_given_up.add(device_id)
+            self._stale_device_misses.pop(device_id, None)
+            _LOGGER.warning(
+                "[%s] Giving up removing device %s after %d failed attempts; it "
+                "stays until the integration is set up again",
+                entry_id,
+                device_id,
+                attempts,
+            )
+            return
+        _LOGGER.debug(
+            "[%s] Device %s is still linked after detaching it; not counted as "
+            "removed, the next fresh list tries again",
+            entry_id,
+            device_id,
+        )
+        # One more fresh list without it retries the removal.
+        self._stale_device_misses[device_id] = STALE_REMOVAL_REQUIRED_MISSES - 1
+
+    def _reload_if_removed_devices_returned(
+        self, entry: Any, entry_id: str, fresh_list_ids: set[str]
+    ) -> bool:
+        """Reload the entry once when a removed device is back in the account.
+
+        ``_remove_stale_devices`` remembers the Google ids it removed. When a
+        fresh list carries one of them again, the update cycle has already
+        put the device back into the registry, but no platform adds its
+        entities: each keeps the ids it has set up for as long as the setup
+        lives. A reload is the lever, the same one the tracker platform's
+        self-heal uses, and it goes through the same shared latch so that it
+        never doubles a reload that is already on its way.
+
+        The remembered ids are forgotten once this call has scheduled the
+        reload. They are kept in every other case: when the entry cannot reach
+        a setup, when the schedule fails, and when another reload holds the
+        latch (if that one lands it replaces this coordinator and the set with
+        it; if it never lands, a later fresh list tries again, and the latch
+        keeps that from doubling a reload).
+
+        Args:
+            entry: The config entry of this coordinator.
+            entry_id: Its id.
+            fresh_list_ids: Google ids of the list fetched in this cycle.
+
+        Returns:
+            ``True`` when this call scheduled a reload.
+        """
+        returned = self._stale_removed_google_ids & set(fresh_list_ids)
+        if not returned:
+            return False
+
+        # Local imports: the package module imports this one.
+        from .. import claim_pending_entry_reload, discard_pending_entry_reload
+        from ..entry_reload_gate import entry_reload_is_hopeless
+
+        schedule_reload = getattr(
+            getattr(self.hass, "config_entries", None), "async_schedule_reload", None
+        )
+        if not callable(schedule_reload) or entry_reload_is_hopeless(
+            self.hass, entry_id, entry
+        ):
+            _LOGGER.debug(
+                "[%s] %d removed device(s) are back in the Google account, but the "
+                "entry cannot be reloaded now",
+                entry_id,
+                len(returned),
+            )
+            return False
+
+        if not claim_pending_entry_reload(self.hass, entry_id):
+            _LOGGER.debug(
+                "[%s] %d removed device(s) are back in the Google account; a reload "
+                "is already on its way",
+                entry_id,
+                len(returned),
+            )
+            return False
+
+        try:
+            schedule_reload(entry_id)
+        except Exception as err:  # noqa: BLE001 - a claim that comes to nothing must be given back
+            discard_pending_entry_reload(self.hass, entry_id)
+            _LOGGER.warning(
+                "[%s] Failed to schedule the reload for devices back in the Google "
+                "account (%s)",
+                entry_id,
+                type(err).__name__,
+            )
+            return False
+
+        self._stale_removed_google_ids.clear()
+        _LOGGER.info(
+            "[%s] Reloading the entry once: %d removed device(s) are back in the "
+            "Google account",
+            entry_id,
+            len(returned),
+        )
+        return True
 
     def _ensure_registry_for_devices(
         self,
@@ -1997,9 +2291,19 @@ class RegistryOperations(_MixinBase):
                     device=device,
                 )
                 healed_device = _refresh_device_entry(device_id, updated or device)
-                if healed_device is None:
-                    _LOGGER.error(
-                        "[%s] Failed to heal device %s", entry_id, device_label
+                # Unreachable today: ``device`` is not None here and
+                # ``_refresh_device_entry`` returns its fallback instead of None.
+                # Kept as a guard should the helper ever start returning None.
+                if healed_device is None:  # pragma: no cover - fallback never None
+                    # The registry sync runs on every poll cycle, so the ERROR names
+                    # the device by its registry id and the display name goes to a
+                    # DEBUG companion (AGENTS.md section 5 (b)).
+                    _LOGGER.error("[%s] Failed to heal device %s", entry_id, device_id)
+                    _LOGGER.debug(
+                        "[%s] Heal failure above concerns '%s' (device %s)",
+                        entry_id,
+                        device_label,
+                        device_id,
                     )
                     return device, False
                 return healed_device, True
@@ -2202,7 +2506,10 @@ class RegistryOperations(_MixinBase):
                     device_id_hint=dev_id,
                 )
                 device_updated = device_updated or healed
-                # Keep name fresh if not user-overridden and a new upstream label is available
+                # Keep the integration name in step with Google, also when the
+                # user has named the device: core does the same, and the user
+                # name stays in ``name_by_user`` and wins in the UI. The removal
+                # of stale devices matches canonicless drops against this name.
                 use_name = (
                     raw_label
                     if raw_label and raw_label != "Google Find My Device"
@@ -2217,11 +2524,7 @@ class RegistryOperations(_MixinBase):
 
                 device_id = getattr(dev, "id", "")
                 update_existing_kwargs: dict[str, Any] = {"device_id": device_id}
-                name_needs_update = (
-                    bool(use_name)
-                    and not getattr(dev, "name_by_user", None)
-                    and dev.name != use_name
-                )
+                name_needs_update = bool(use_name) and dev.name != use_name
                 manufacturer_needs_update = (
                     getattr(dev, "manufacturer", None) != manufacturer
                 )

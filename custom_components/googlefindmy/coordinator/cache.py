@@ -108,6 +108,7 @@ _METADATA_KEYS = (
     "fastPairModelId",
     "manufacturer",
     "model",
+    "trackable_components",
     "encrypted_account_key",
     "encryptedAccountKey",
     "public_key_address",
@@ -440,6 +441,108 @@ def _tally_identity(row: Mapping[str, Any]) -> tuple[Any, ...] | None:
     # not against an adversary.
     digest = hashlib.blake2s(repr(fix).encode("utf-8"), digest_size=8).hexdigest()
     return ("fix", digest)
+
+
+# How many fused report identities are remembered per device. Same number and same
+# reasoning as ``_TALLY_MEMORY``: the case is a report that keeps coming back, two such
+# reports can alternate within one second, and a single slot would let them refuse each
+# other on every delivery. The alternation is constructed, not measured live.
+_FUSED_REPORT_MEMORY = 8
+
+# What a repeated report takes over from the cached row: the fused geometry and the
+# fields the fusion itself writes. Anything else in the report is news and commits.
+_DUPLICATE_GEOMETRY_KEYS = (
+    "latitude",
+    "longitude",
+    "accuracy",
+    "accuracy_estimated",
+    "status",
+    "location_type",
+)
+
+
+def _fusion_report_identity(row: Mapping[str, Any]) -> str | None:
+    """Return what identifies *row* as one report for the fusion, or ``None``.
+
+    Not ``_tally_identity``: that one takes the timestamp as the whole identity, and
+    two genuinely different reports of the same second would then be fused once
+    between them. This one keys on the stamp AND the raw position and radius, so it
+    answers "has exactly this report been fused already?".
+
+    The fields are normalised here rather than trusted as they arrive, because the
+    paths hand the fusion different shapes of one report: poll and manual locate run
+    ``sanitize_decoder_row`` and drop an error-code accuracy BEFORE the fusion, the
+    push path only after it. Without the normalisation the same report would carry a
+    different identity per path and be fused once per path.
+
+    A missing stamp is part of the identity (``None``), not a reason to give up: two
+    identical stampless reports are indistinguishable by construction, the same
+    reading ``_tally_identity`` takes. Only a row without a usable position has
+    nothing to recognise it by. A digest rather than the values, so no coordinate is
+    kept beside the cache; blake2s with 8 bytes, because this guards against
+    repetition, not against an adversary.
+
+    Whether the report arrives as a trusted anchor is part of the identity: a
+    semantic mapping writes the configured position and radius into the report, so
+    an ordinary report can carry the same geometry. Treating the anchor as its repeat
+    would skip the promotion of the row to ``trusted``. A semantic report with the
+    cached stamp is a replay and skips the mapping, so the case the tests pin is one
+    of reports without a stamp.
+
+    Whether a valid accuracy is only the fallback estimate is part of it as well: the
+    fallback radius is the same number as a real fix of that size, and taking the
+    measured report as the repeat of the estimated one would keep the row marked
+    estimated. Compared with ``is True``, so a row that never carried the flag and
+    one that carries ``False`` stay the same report.
+    """
+    latitude = _finite_or_none(row.get("latitude"))
+    longitude = _finite_or_none(row.get("longitude"))
+    if latitude is None or longitude is None:
+        return None
+    raw_accuracy = _coerce_float_impl(row.get("accuracy"))
+    accuracy = raw_accuracy if _is_valid_accuracy(raw_accuracy) else None
+    fix = (
+        _normalize_epoch_seconds(row.get("last_seen")),
+        latitude,
+        longitude,
+        accuracy,
+        row.get("accuracy_estimated") is True,
+        row.get("location_type") == "trusted",
+    )
+    return hashlib.blake2s(repr(fix).encode("utf-8"), digest_size=8).hexdigest()
+
+
+def _is_fused_report(coord: Any, device_id: str, identity: str | None) -> bool:
+    """True when *identity* was committed for *device_id* already.
+
+    A module function, not a method, for the reason ``_accuracy_gate_rejects`` gives:
+    the fusion suites build their coordinator as ``MagicMock(spec=CacheOperations)``,
+    where a method would be auto-mocked into a truthy ``Mock`` and every report would
+    look fused. The store is read with ``getattr`` because it is created lazily. A
+    ``None`` identity is never booked, so it is never found either.
+    """
+    fused = getattr(coord, "_fused_report_ids", None) or {}
+    return identity in (fused.get(device_id) or ())
+
+
+def _book_fused_report(coord: Any, device_id: str, identity: str | None) -> None:
+    """Remember that *identity* is now part of *device_id*'s cached row.
+
+    Called only after the row is committed: a report the significance gate drops was
+    never taken over, and remembering it would refuse its next delivery for nothing.
+    Booked only when absent, in the shape of ``claim_report_for_tally``; appending on
+    every delivery would let the repeats of one report evict the other report of the
+    same second from the ring.
+    """
+    if identity is None or _is_fused_report(coord, device_id, identity):
+        return
+    fused = getattr(coord, "_fused_report_ids", None)
+    if fused is None:
+        fused = {}
+        coord._fused_report_ids = fused
+    ring = list(fused.get(device_id) or ())
+    ring.append(identity)
+    fused[device_id] = ring[-_FUSED_REPORT_MEMORY:]
 
 
 class CacheOperations(_MixinBase):
@@ -797,6 +900,16 @@ class CacheOperations(_MixinBase):
             self._device_location_data[device_id] = merged
         else:
             self._device_location_data[device_id] = dict(data)
+        # A primed position replaces the geometry the remembered reports were
+        # fused into (on a restart the first refresh can commit before the
+        # tracker restores an older state over it). Unlike a clear jump, which
+        # puts a newer report in place, the primed row can be older than the
+        # reports in the ring, so forget them; otherwise every repeat of the
+        # current report would keep the primed, older position.
+        if "latitude" in data or "longitude" in data:
+            fused_reports = getattr(self, "_fused_report_ids", None)
+            if fused_reports is not None:
+                fused_reports.pop(device_id, None)
         # Restore-seed the coordinator last-good from the primed row so the Plus
         # Code display accessors return a value immediately after a restart,
         # before the first poll. The device_tracker already calls this on restore
@@ -1084,6 +1197,11 @@ class CacheOperations(_MixinBase):
             return
 
         fused_applied = slot.pop("_fused_applied", False)
+        # The identity the fusion pencilled onto this report, on every path: the poll
+        # and the manual locate ran the fusion themselves, the push path just above.
+        # Popped before sanitize/merge so it never reaches the cached row, and booked
+        # only after the commit below, like the anchor intents that follow.
+        fusion_report_id = slot.pop("_fusion_report_id", None)
         # F-FABLE-2: pop the supersede marker early (before sanitize/merge/commit)
         # so it never leaks into the cached row, but defer the action until AFTER
         # the payload commits (post-@580). If the significance gate below rejects
@@ -1197,6 +1315,9 @@ class CacheOperations(_MixinBase):
                 name_cache[device_id] = name
 
         self._device_location_data[device_id] = slot
+        # Every committed report is remembered, fused or not: a clear jump taken over
+        # unaveraged overlaps itself on its next delivery and would be fused then.
+        _book_fused_report(self, device_id, fusion_report_id)
         # A committed fix makes any retained coarse fix that is not newer than it
         # obsolete: the coarse row exists as side information for as long as we
         # have nothing better, and now we do. Without this it would keep naming a
@@ -1256,6 +1377,7 @@ class CacheOperations(_MixinBase):
                 slot,
                 supersede_anchors=supersede_anchor,
                 seed_anchors=anchor_seed,
+                fusion_report_id=fusion_report_id,
             )
 
         # Trigger resolver refresh if identity changed
@@ -1273,6 +1395,8 @@ class CacheOperations(_MixinBase):
         location: dict[str, Any],
         supersede_anchors: bool = False,
         seed_anchors: dict[str, Any] | None = None,
+        *,
+        fusion_report_id: str | None = None,
     ) -> None:
         """Propagate location updates to devices sharing the same tracker.
 
@@ -1291,6 +1415,10 @@ class CacheOperations(_MixinBase):
                 round-trip anchor with this (source-A) anchor as an independent
                 copy, so a B-to-A return under a sibling device_id finds an
                 anchor and recovers, symmetric to the source-device seed (@622).
+            fusion_report_id: Identity of the report behind ``location``. Each
+                adopting target remembers it, so the same report reaching that
+                target itself is not fused with the propagated (already fused)
+                position.
         """
         if not location:
             return
@@ -1357,6 +1485,9 @@ class CacheOperations(_MixinBase):
             self._expire_coarse_fix(target_id, merged)
             # Coordinator last-good for the shared target, same non-poison gate.
             self._record_last_good_location(target_id, merged)
+            # The target now holds this report, so it remembers it like a direct
+            # commit would; only targets that adopted the row get here.
+            _book_fused_report(self, target_id, fusion_report_id)
 
             # F-CODEX-9: the superseding clear-jump was propagated to this
             # shared target, so invalidate its stale round-trip anchor too -
@@ -1617,6 +1748,12 @@ class CacheOperations(_MixinBase):
 
         Returns True when the caller should continue processing the payload.
         """
+        # Identify the report as it arrived, before any branch below rewrites its
+        # coordinates in place. Set on every path, cold start included, because
+        # every committed report is remembered (see ``update_device_cache``).
+        report_id = _fusion_report_identity(new_data)
+        new_data["_fusion_report_id"] = report_id
+
         existing = self._device_location_data.get(device_id)
         if not existing or existing.get("latitude") is None:
             return True
@@ -1629,6 +1766,27 @@ class CacheOperations(_MixinBase):
         existing_lat = _coerce_float_impl(existing.get("latitude"))
         existing_lon = _coerce_float_impl(existing.get("longitude"))
         if existing_lat is None or existing_lon is None:
+            return True
+
+        # The same report again: the cached position already contains it, so
+        # averaging it in once more would move the position towards the raw fix
+        # without a new location. Keep the cached geometry and let the rest of
+        # the report (battery, height, metadata) through. Before the trusted and
+        # gate branches, because a remembered report has passed them already.
+        if _is_fused_report(self, device_id, report_id):
+            for key in _DUPLICATE_GEOMETRY_KEYS:
+                if key in existing:
+                    new_data[key] = existing[key]
+                else:
+                    new_data.pop(key, None)
+            # Against a trusted anchor the first delivery was snapped back, height
+            # included (branch below); the repeat keeps that height as well, or it
+            # would undo half of the snap without a new location.
+            if existing.get("location_type") == "trusted" and (
+                existing.get("altitude") is not None
+            ):
+                new_data["altitude"] = existing["altitude"]
+            _LOGGER.debug("Skipping re-fusion for %s: report already fused", device_id)
             return True
 
         existing_acc_raw = _coerce_float_impl(existing.get("accuracy"))

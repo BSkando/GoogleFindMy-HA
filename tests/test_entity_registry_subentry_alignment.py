@@ -16,6 +16,7 @@ from custom_components.googlefindmy import binary_sensor, device_tracker, sensor
 from custom_components.googlefindmy.const import (
     CONF_GOOGLE_EMAIL,
     DATA_SECRET_BUNDLE,
+    DOMAIN,
     OPT_ENABLE_STATS_ENTITIES,
     SERVICE_SUBENTRY_KEY,
     TRACKER_SUBENTRY_KEY,
@@ -78,7 +79,7 @@ def _make_add_entities(
             entity.hass = hass
             registry.record_entity(
                 entity_id,
-                platform=domain,
+                platform=DOMAIN,
                 unique_id=unique_id,
                 config_entry_id=entry.entry_id,
                 config_entry_subentry_id=getattr(entity, "subentry_identifier", None),
@@ -191,16 +192,16 @@ async def test_entity_registry_subentry_alignment(
     service_entries = [
         item
         for item in entries
-        if item.platform == "binary_sensor"
+        if item.domain == "binary_sensor"
         or (
-            item.platform == "sensor"
+            item.domain == "sensor"
             and not str(item.unique_id).endswith(tracker_sensor_suffixes)
         )
     ]
     tracker_entries = [
         item
         for item in entries
-        if item.platform == "device_tracker"
+        if item.domain == "device_tracker"
         or str(item.unique_id).endswith(tracker_sensor_suffixes)
     ]
 

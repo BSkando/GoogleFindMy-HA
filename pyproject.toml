@@ -11,7 +11,7 @@ name = "googlefindmy-ha"
 # script/stamp_version.py, so on those lines the hand-tag/stamp path is primary,
 # not a fallback. Canonical anchor:
 # custom_components/googlefindmy/AGENTS.md ("Version bump touches three files").
-version = "1.15.23"
+version = "1.15.35"
 description = "Home Assistant integration for Google's Find My Device network."
 readme = "README.md"
 license = "MIT"
@@ -54,10 +54,13 @@ types-requests = ">=2.32.0.20240712"
 types-cffi = ">=1.17.0"
 types-html5lib = ">=1.1.11"
 types-PySocks = ">=1.7.1"
+types-defusedxml = ">=0.7.0.20260504"
 lxml-stubs = ">=0.5.1"
 
 # Security auditing
 pip-audit = ">=2.6"
+# script/diff_coverage.py parses coverage.xml with it (bandit B314/B405)
+defusedxml = ">=0.7.1"
 
 # Additional dev tools
 pyyaml = ">=6.0.2"
@@ -429,6 +432,7 @@ exclude_lines = [
     "if __name__ == \"__main__\":",
     "pragma: no cover",
     "if TYPE_CHECKING:",
+    "^[ \\t]*raise NotImplementedError\\b",
 ]
 
 [tool.coverage.paths]
@@ -528,8 +532,8 @@ max-branches = 20
 max-statements = 100
 
 [tool.codespell]
-skip = ".git,*.lock,*.svg,*.png,*.jpg,*.ico,ProtoDecoders,firebase_messaging,*.pyi,translations,*.proto,*_pb2.py,package-lock.json,custom_components/googlefindmy/vendor"
-ignore-words-list = "hass,nd,ot,aas,bund,trough,te,ded,checkin,alpha-numeric,re-declaring,pre-empt,pre-empted,pre-empting,pre-emptive,pre-emptively,pre-empts,titel"
+skip = ".git,*.lock,*.svg,*.png,*.jpg,*.ico,ProtoDecoders,firebase_messaging,*.pyi,translations,*.proto,*_pb2.py,package-lock.json,./custom_components/googlefindmy/vendor/leaflet,./tests/fixtures"
+ignore-words-list = "hass,nd,ot,aas,bund,trough,te,ded,checkin,alpha-numeric,re-declaring,pre-empt,pre-empted,pre-empting,pre-emptive,pre-emptively,pre-empts,titel,unparseable,addressings,re-use,re-uses,re-used,re-using,re-usable"
 check-filenames = true
 
 [tool.bandit]

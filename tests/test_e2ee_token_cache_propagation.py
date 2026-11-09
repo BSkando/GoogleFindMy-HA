@@ -310,7 +310,7 @@ def test_fcm_background_decode_uses_entry_cache(
     ]
 
     async def fake_async_decrypt(  # type: ignore[no-untyped-def]
-        device_update, *, cache: object
+        device_update, *, cache: object, action_feedback: bool = False
     ):
         # P1-2: Capture the provider during decryption to verify scoped context
         provider = _CACHE_PROVIDER.get()

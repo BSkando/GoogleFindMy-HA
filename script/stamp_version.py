@@ -31,6 +31,20 @@ segment order is PEP 440: the numeric release tuple precedes the prerelease, so
 carry a leading ``v`` (BSkando tags ``vX.Y.Z``, jleinenbach ``X.Y.Z[.N]``);
 release-stamp.yml strips that optional ``v`` before calling this script, so both
 fork tag conventions produce the same v-less version literals.
+
+``--check-against-tags FILE`` checks the version against the existing tags
+instead of stamping (release-stamp.yml runs it before the stamp)::
+
+    python script/stamp_version.py --version 1.15.34 --tag 1.15.34 \
+        --check-against-tags tags.txt --line 1.15
+
+It refuses a version that does not have exactly three numeric segments (an
+``aN``/``bN`` prerelease suffix is allowed, a ``v`` is not), that is not
+greater than every tag of the same repository, that leaves the release line
+given by ``--line``, or that equals a tag listed in ``--reserved-tags`` (the
+other repository's line). Limit: the workflow runs after the release is
+published, so a refusal stops the stamp, not the release; the maintainer then
+deletes the release and its tag.
 """
 
 from __future__ import annotations
@@ -51,8 +65,27 @@ from pathlib import Path
 # lines, so release.yml (Workflow A) opens an empty hand-tag draft there instead
 # of proposing a stale number; the stamp path here still honours the exact chosen
 # tag verbatim. The shell guard in release-stamp.yml MUST stay byte-equal to this
-# pattern (locked by tests/test_stamp_version.py).
+# pattern (locked by tests/test_stamp_version.py). This shape is what may be
+# *stamped*; which tag may be *released* is narrower: release-stamp.yml runs
+# ``--check-against-tags`` first, which refuses a fourth segment, a ``v`` and
+# any number not greater than every existing tag of the repository, so a
+# release on an older maintenance line is refused too. There is no switch for
+# a deliberate exception; it needs a change of that workflow step.
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?([ab][0-9]+)?$")
+
+# Shape of a new release (``--check-against-tags``): three numeric segments,
+# optionally a PEP 440 alpha/beta suffix, no ``v`` and no fourth segment.
+RELEASE_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+([ab][0-9]+)?$")
+# Version of an existing tag: an optional ``v``/``V``, at least two numeric
+# release segments, an optional alpha/beta suffix and an optional ``-N`` (as in
+# upstream's historic ``V1.7.0-6``, which is ignored). Any other tag, such as
+# ``2026-snapshot`` or ``nightly``, carries no version and is skipped.
+_TAG_VERSION_RE = re.compile(
+    r"^[vV]?(?P<release>[0-9]+(?:\.[0-9]+)+)"
+    r"(?:(?P<pre>[ab])(?P<pre_n>[0-9]+))?(?:-[0-9]+)?$"
+)
+_RELEASE_WIDTH = 6
+_LINE_RE = re.compile(r"^[0-9]+\.[0-9]+$")
 
 CONST_REL = "custom_components/googlefindmy/const.py"
 MANIFEST_REL = "custom_components/googlefindmy/manifest.json"
@@ -167,6 +200,83 @@ def stamp_all(repo_root: Path, version: str) -> list[Path]:
     return sorted(changed)
 
 
+def version_key(tag: str) -> tuple[int, ...] | None:
+    """Return a sort key for ``tag``, or ``None`` when it carries no version.
+
+    The numeric segments are padded with zeros, so ``1.7.15.20`` sorts below
+    ``1.15.21`` as HACS does; a prerelease sorts below its release, an alpha
+    below a beta.
+    """
+    match = _TAG_VERSION_RE.match(tag.strip())
+    if match is None:
+        return None
+    release = [int(part) for part in match.group("release").split(".")]
+    if len(release) > _RELEASE_WIDTH:
+        return None
+    release += [0] * (_RELEASE_WIDTH - len(release))
+    pre = match.group("pre")
+    rank = 2 if pre is None else (0 if pre == "a" else 1)
+    pre_n = int(match.group("pre_n")) if pre is not None else 0
+    return (*release, rank, pre_n)
+
+
+def check_against_tags(
+    version: str,
+    *,
+    tags: list[str],
+    tag: str | None = None,
+    line: str | None = None,
+    reserved: list[str] | None = None,
+) -> list[str]:
+    """Return the reasons to refuse ``version``; an empty list accepts it.
+
+    ``tags`` are the tags of the repository that publishes ``version``; the
+    published ``tag`` itself (default: ``version``) is skipped because the
+    workflow runs after publishing. ``line`` is ``MAJOR.MINOR``; ``reserved``
+    are the tags of the other repository's line, which must not be reused.
+    """
+    reasons: list[str] = []
+    if not RELEASE_RE.match(version):
+        reasons.append(
+            f"version {version} does not have exactly three numeric segments "
+            "(X.Y.Z, optionally aN/bN, no 'v')"
+        )
+    key = version_key(version)
+    if key is None:
+        reasons.append(f"version {version} is not a version")
+        return reasons
+    own = version if tag is None else tag
+    others = [
+        (other_key, other)
+        for other in (t.strip() for t in tags)
+        if other and other != own
+        if (other_key := version_key(other)) is not None
+    ]
+    if others:
+        highest_key, highest = max(others)
+        if key <= highest_key:
+            reasons.append(f"version {version} is not greater than {highest}")
+    if line is not None:
+        if not _LINE_RE.match(line):
+            raise ValueError(f"line {line!r} is not MAJOR.MINOR")
+        major, minor = (int(part) for part in line.split("."))
+        if key[:2] != (major, minor):
+            reasons.append(
+                f"version {version} leaves the release line {line} (expected {line}.x)"
+            )
+    for other in (t.strip() for t in reserved or []):
+        if other and version_key(other) == key:
+            reasons.append(
+                f"version {version} is already used by the fork as tag {other}"
+            )
+            break
+    return reasons
+
+
+def _read_tags(path: Path) -> list[str]:
+    return [line for line in _read(path).splitlines() if line.strip()]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -178,6 +288,29 @@ def main() -> int:
         "--version",
         required=True,
         help="Exact version to stamp, e.g. 1.7.14 or 1.7.14b1 (no 'v' prefix).",
+    )
+    parser.add_argument(
+        "--check-against-tags",
+        type=Path,
+        metavar="FILE",
+        help=(
+            "Check the version against the tags listed in FILE (one per line) "
+            "and exit; nothing is stamped."
+        ),
+    )
+    parser.add_argument(
+        "--tag",
+        help="Published tag name, skipped in the comparison (default: --version).",
+    )
+    parser.add_argument(
+        "--line",
+        help="Release line MAJOR.MINOR the version must stay in, e.g. 1.15.",
+    )
+    parser.add_argument(
+        "--reserved-tags",
+        type=Path,
+        metavar="FILE",
+        help="Tags of the other repository's line; their numbers are refused.",
     )
     parser.add_argument(
         "--repo-root",
@@ -194,6 +327,27 @@ def main() -> int:
             "X.Y.Z[.N][bN] (optional .N fourth segment then optional bN/aN, "
             "no 'v' prefix)"
         )
+
+    if args.check_against_tags is not None:
+        reserved = (
+            _read_tags(args.reserved_tags) if args.reserved_tags is not None else None
+        )
+        try:
+            reasons = check_against_tags(
+                version,
+                tags=_read_tags(args.check_against_tags),
+                tag=args.tag,
+                line=args.line,
+                reserved=reserved,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        for reason in reasons:
+            print(f"stamp_version: REFUSED: {reason}")
+        if reasons:
+            return 1
+        print(f"stamp_version: OK, {version} passes the tag check")
+        return 0
 
     try:
         changed = stamp_all(args.repo_root, version)

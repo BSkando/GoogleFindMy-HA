@@ -71,7 +71,7 @@
     - [6) In-repo Find My Device Network protocol reference](#6-in-repo-find-my-device-network-protocol-reference)
   - [High-confidence & sourcing standard for Codex](#high-confidence--sourcing-standard-for-codex)
     - [0. Scope](#0-scope)
-    - [1. High-confidence mode (≥ 90 %)](#1-high-confidence-mode-%E2%89%A5-90-)
+    - [1. High-confidence mode (≥ 90 %)](#1-high-confidence-mode--90-)
     - [2. Mandatory evidence](#2-mandatory-evidence)
     - [3. Workflow for code changes](#3-workflow-for-code-changes)
       - [Home Assistant regression helper](#home-assistant-regression-helper)
@@ -110,8 +110,8 @@
 > fragment; and Markdown is out of its scope, because this file itself quotes a German translation
 > guideline.
 
-> **Environment reset reminder:** After a container or virtualenv reset, rerun `make test-stubs` so the Home Assistant and
-> pytest stubs are reinstalled before invoking linting or pytest commands.
+> **Environment reset reminder:** After a container or virtualenv reset, rerun `make install-dev` (or `poetry install --with dev,test`)
+> so Home Assistant and the pytest plugin are reinstalled before invoking linting or pytest commands.
 
 ## Start here — platinum essentials (front page)
 
@@ -122,7 +122,7 @@
   untyped `hass.data` buckets; the guardrails live under [Home Assistant specifics (must-haves)](#117-home-assistant-specifics-
   must-haves) and [Config subentry maintenance helper](#config-subentry-maintenance-helper).
 * **Required local checks.** Before committing, run `python -m ruff check --fix`, `python -m mypy --strict --install-types --
-  non-interactive`, and `python -m pytest --cov -q` (after `make test-stubs` in new environments); see [Local commands
+  non-interactive`, and `python -m pytest --cov -q` (after `make install-dev` in new environments); see [Local commands
   (VERIFY)](#10-local-commands-verify) for context.
 
 <a id="language-policy"></a>
@@ -135,8 +135,8 @@
 
 Always keep any `from __future__` imports immediately after the module docstring, even when the file starts with the repository-relative path header described above. This ordering prevents pytest's import hook from rejecting the file during rewrites.
 > **Precedence:** (1) Official **Home Assistant Developer Docs** → (2) this AGENTS.md → (3) repository conventions. This file never overrides security/legal policies.
-> **Language policy:** Keep the project consistently in English for documentation, inline code comments, and docstrings. (Translation files remain multilingual.)
-> Guard: `tests/test_guard_prose_contract.py` (see the Language reminder above for its scope and limits).
+> **Language policy:** Keep the project consistently in English for documentation, inline code comments, docstrings, and configuration names such as workflow environments. (Translation files remain multilingual.)
+> Guard: `tests/test_guard_prose_contract.py` (see the Language reminder above for its scope and limits); workflow environment names: `tests/test_guard_workflow_environments.py`.
 > **Non-blocking:** Missing optional artifacts (README sections, `quality_scale.yaml`, CODEOWNERS, CI files) **must not block** urgent fixes. The agent proposes a minimal stub or follow-up task instead.
 > **References:** This contract relies on the sources listed below; for a curated, extended list of links, see [BOOKMARKS.md](custom_components/googlefindmy/BOOKMARKS.md).
 > **Upstream documentation hierarchy:** When consulting external guidance, prioritize Home Assistant's canonical domains in this order: developer portal (`https://developers.home-assistant.io`), user documentation (`https://www.home-assistant.io`), and the alerts/service bulletins site (`https://alerts.home-assistant.io`). If a required host is unreachable while the connectivity probe still confirms general internet access, pause implementation, request manual approval for that domain, and document the escalation before proceeding.
@@ -231,6 +231,68 @@ Always keep any `from __future__` imports immediately after the module docstring
   supported core at all because that rename predates our minimum; see
   `docs/AI_DEPRECATIONS_GUIDE.md`, section VI.
 
+  **Raising the floor: CI consequences.** The test suite runs against the
+  declared minimum in exactly one place: the `declared floor` axis of the
+  `test_legacy_python` job in `.github/workflows/ci.yml`, with its step `Verify
+  the pinned floor still matches hacs.json`. The `test` job installs only what
+  `poetry.lock` resolves. The `check-declared-minimum` job in
+  `.github/workflows/ha-dependency-check.yml` and
+  `tests/test_pip_audit_security.py` read the minimum, but neither runs the suite
+  against it. Core `2026.8.0` requires Python `>=3.14.2`, so the raise makes the
+  Python 3.13 job look obsolete. Deleting it removes the only run of the suite on
+  the minimum, and the only check that notices is the job count in
+  `test_every_job_requires_its_needs_explicitly`
+  (`tests/test_ci_approval_gate.py`), which does not know which job carried the
+  floor. Do not lower that count to make the deletion pass; move the axis
+  instead. When the minimum is raised to `2026.8.0`, do all of the following in
+  the same PR:
+
+  * Move the `declared floor` axis, with its label unchanged, into a lock-free
+    Python 3.14 job. Carry over everything the axis depends on: its matrix key
+    `floor: true`, the `hacs.json` check, `Rewrite the stub constraints for this
+    axis`, `Install dependencies without the Poetry lock` and `Report and verify
+    the resolved Home Assistant and plugin versions`. The `hacs.json` check runs
+    only under `if: matrix.floor`, so dropping the key together with the
+    `pycares<5` cap would skip that check without failing. Pin
+    `homeassistant==2026.8.0` and `pytest-homeassistant-custom-component==0.13.354`,
+    the plugin release that requires exactly `2026.8.0`; releases `0.13.349` to
+    `0.13.353` require the betas `2026.8.0b0` to `2026.8.0b5` instead. Confirm
+    both pins on PyPI before committing.
+  * Raise `hacs.json`, `pyproject.toml`, the `homeassistant>=` line in
+    `custom_components/googlefindmy/requirements-dev.txt`, the axis pin and the
+    plugin pin together. The `hacs.json` check compares only `hacs.json` with the
+    axis pin, so it catches neither of the other two. Find every other mention of
+    the old minimum with `git grep -n -F 2025.9.1`. Guards that pin it, such as
+    `test_the_declared_minimum_is_still_the_one_this_guard_assumes` in
+    `tests/test_guard_config_flow_reload_deprecation.py`, fail on purpose:
+    re-check the premise their message names instead of only updating the
+    version string.
+  * Add the snapshot
+    `tests/fixtures/pip_audit/ha_package_constraints_2026.8.0.txt` in the same
+    PR; `tests/test_pip_audit_security.py` fails without it and names its source.
+    That test audits every other `ha_package_constraints_*.txt` as an additional
+    supported release, so remove the snapshots below the new minimum or keep
+    them on purpose.
+  * Drop the `last 3.13 line` axis and the `pycares<5` cap in `Rewrite the stub
+    constraints for this axis`. Core `2026.8.0` requires `aiodns==4.0.4`, which
+    requires `pycares>=5`, so the cap would make the floor axis unresolvable.
+  * Keep the `CI Success` job in step with the job list: its `needs`, the result
+    check in `Check all jobs passed` and the row in `Write CI summary`.
+    `test_ci_success_includes_the_gate` requires every job in `needs`, but no
+    test checks the per-job result checks, so a job without one can fail without
+    failing `CI Success`.
+  * Before deleting `custom_components/googlefindmy/constraints-test-stubs.txt`,
+    list its readers with `git grep -n constraints-test-stubs` and update or
+    remove each one.
+  * Update every text that describes the Python 3.13 axes. Find them with
+    `git grep -n -E 'test_legacy_python|3\.13'`, which also lists mentions of
+    the language level that stay; among the axis texts are the CI paragraph in
+    `README.md`, the `Pinned stub constraints` bullet, the "Two separate axes"
+    note at the start of section 11, the `test_legacy_python` pin paragraph in
+    section 11.2, the header comment of `constraints-test-stubs.txt` and the
+    matrix comment of the `test` job. The language level (`py313` for ruff and
+    mypy) is a separate decision, as that section 11 note states.
+
   **Before and after.**
 
   ```python
@@ -266,12 +328,15 @@ Always keep any `from __future__` imports immediately after the module docstring
 * [`custom_components/googlefindmy/AGENTS.md`](custom_components/googlefindmy/AGENTS.md) — Top-level index for integration guidance. It links to the per-topic AGENT files under `custom_components/googlefindmy/agents/` (currently `config_flow`, `runtime_patterns`, and `typing_guidance`). Always consult the relevant topical file before editing `custom_components/googlefindmy/**` so you pick up the right runtime vs. typing rules (for example, tuple-based parent unloads versus per-platform subentry forwarding).
 * [`custom_components/googlefindmy/ProtoDecoders/AGENTS.md`](custom_components/googlefindmy/ProtoDecoders/AGENTS.md) — Protobuf overlay structure requirements, including the mandate that generated message classes remain nominal subclasses of `google.protobuf.message.Message` so helper utilities typed against the concrete base keep accepting them.
 * [`custom_components/googlefindmy/FMDNCrypto/AGENTS.md`](custom_components/googlefindmy/FMDNCrypto/AGENTS.md) — Cryptography helper typing contract that documents concrete `int` expectations for modular arithmetic and coordinate normalization across the decompression helpers.
-* **Config entry reload states:** `SERVICE_REBUILD_REGISTRY` in `custom_components/googlefindmy/services.py` calls `hass.config_entries.async_reload(entry_id)` unfiltered inside a `try`/`except` that logs the failure. There is no allowed reload state set to keep in sync: one was added in `7ab87a2e` and removed again in `faafc7e7`, and the file has carried no `ConfigEntryState` reference since. Do not reintroduce one. The core already gates: `async_reload` goes through `ConfigEntries.async_unload`, which raises `OperationNotAllowed` while `entry.state.recoverable` is false, so an entry in `FAILED_UNLOAD` or `MIGRATION_ERROR` is **not** recoverable through this service; the call produces a logged error, not a repair. A local filter would only move that verdict earlier and drift from the enum, which is what the two commits above already demonstrated. This is the same verdict `entry_reload_gate.entry_reload_is_hopeless` reaches for the scheduling paths (see `agents/runtime_patterns/AGENTS.md`), so both sides answer alike: a terminal entry needs a restart or a targeted repair, not another reload. When Home Assistant introduces a state, review it there, in the positive terminal list, not here.
+* **Config entry reload states:** `SERVICE_REBUILD_REGISTRY` in `custom_components/googlefindmy/services.py` reloads every target entry unfiltered inside a `try`/`except` that logs the failure. In the default mode `rebuild` it does so in two halves: `hass.config_entries.async_unload(entry_id)`, then the purge of the entry's entities and devices (`purge_entry_registrations`, because unloading keeps registry entries), then `hass.config_entries.async_setup(entry_id)`. A failed unload purges nothing; a failed purge still sets an active entry up again (it is unloaded already); a disabled entry is purged but not set up again, which is what a reload of a disabled entry does as well. The purge covers what is registered to the entry's subentries. Mode `migrate` and a missing purge helper keep the plain `async_reload(entry_id)`. There is no allowed reload state set to keep in sync: one was added in `7ab87a2e` and removed again in `faafc7e7`, and the file has carried no `ConfigEntryState` reference since. Do not reintroduce one. The core already gates: `async_reload` goes through `ConfigEntries.async_unload`, which raises `OperationNotAllowed` while `entry.state.recoverable` is false, so an entry in `FAILED_UNLOAD` or `MIGRATION_ERROR` is **not** recoverable through this service; the call produces a logged error, not a repair. A local filter would only move that verdict earlier and drift from the enum, which is what the two commits above already demonstrated. This is the same verdict `entry_reload_gate.entry_reload_is_hopeless` reaches for the scheduling paths (see `agents/runtime_patterns/AGENTS.md`), so both sides answer alike: a terminal entry needs a restart or a targeted repair, not another reload. When Home Assistant introduces a state, review it there, in the positive terminal list, not here.
 * **Platform subentry quick reference:**
   * Shared runtime data lives under `hass.data[DOMAIN]["entries"][entry_id]`. Always rebuild this mapping before child setup resumes and populate `entry.runtime_data` from the shared bucket instead of direct dictionary lookups.
   * Keep the Home Assistant service registration contract aligned with Section IV.I of `docs/CONFIG_SUBENTRIES_HANDBOOK.md`: register platform entity services inside `async_setup` and catch `ImplementationUnavailableError` during parent setup to raise `ConfigEntryNotReady`.
   * Service-level diagnostics (`binary_sensor`, diagnostic `sensor` entities, repairs counters, etc.) **must** pass `SERVICE_SUBENTRY_KEY` when constructing entities **and** expose `device_info = service_device_info(include_subentry_identifier=True)`. This guarantees every diagnostic entity binds to the same service device + config subentry pair so Home Assistant keeps the hub grouped in the device registry.
   * Per-device platforms (`device_tracker`, per-device `sensor` entities such as `last_seen`, `button` actions, future tracker-scoped entities) **must** pass `TRACKER_SUBENTRY_KEY`, publish tracker-specific identifiers in `device_info`, and rely on Home Assistant's automatic device association—do **not** add manual `via_device` tuples for tracker devices.
+  * Device-scoped entities of **any** domain stay on their tracker device, binary sensors included. The relink (`_async_relink_subentry_entities` in `custom_components/googlefindmy/__init__.py`) keeps every other `binary_sensor` on the service device and recognises a device-scoped one only by its `unique_id` suffix in `_DEVICE_SCOPED_BINARY_SENSOR_SUFFIXES` (today `_uwt_mode`). Whoever adds a device-scoped binary sensor adds its suffix there; otherwise the relink moves it to the service device on every start and the duplicate cleanup deletes it as a sibling of the other trackers' sensors. `tests/test_relink_uwt_mode_anchor.py::test_relink_knows_the_device_scoped_binary_sensors` fails when a suffix is missing, for the classes within the guard's scope. The guard cannot see every form; its docstrings name examples, pinned by `test_suffix_guard_declared_blind_spots` and `test_suffix_guard_blind_to_a_symlinked_directory`.
+  * The integration removes a tracker device itself only when it is missing from two consecutive fresh, non-empty, complete device lists (`_remove_stale_devices` in `coordinator/registry.py`, decided by `plan_stale_device_removals` in `coordinator/helpers/registry.py`, called from the update cycle in `coordinator/polling.py`). Only devices of the own config entry count, never the service device, never a device without a readable Google id, and never a device while any of its Google ids is still listed. A cached, deferred or empty list, a fetch that dropped candidates without a valid id, and a canonicless `warn` drop all count as no list; a device whose name the decoder dropped from the fetch for lack of a canonical id, whatever its class, counts as listed (`decoder.get_canonicless_name_counts`), compared through `normalize_device_name` and without the hub collision suffix, and only while that name has more drops of one kind (`android`, `no_information`, `tracker`, from the device type Google reports) than in the last counting list that still carried the device with its id (a phone of the same name that was dropped before does not keep a departed tracker; a phone and a tracker of one name that swap roles in one listing do, because the drop changes kind; two devices of one name and one kind stay indistinguishable, different names in the Find Hub app tell them apart; after a restart the name alone protects). For this match the registry sync keeps the integration `name` of a tracker in step with Google also under a user name, as Core does; `name_by_user` is never touched. Removal runs through `_apply_device_ownership` with DETACH on the device's subentry link, counts a device that is gone from the registry or has no link to the entry afterwards, retries a refused or failing removal once and then leaves the device alone until the next setup (one WARNING), and does **not** add the device to `ignored_devices`, so a tracker added back to the account returns. Its entities return with it only through a reload, because each platform keeps the ids it has set up for the lifetime of its setup: the coordinator remembers the removed Google ids and reloads the entry once, through the shared latch `claim_pending_entry_reload`, when a fresh list carries one again (`tests/test_stale_device_return_platform.py` pins the platform side). Its log records run on the poll path: INFO names the Home Assistant `device_id`, the device name stays at DEBUG (section 5, class (b)); an exception is logged at WARNING with its class only and at DEBUG through `describe_exception`, never with its text. This is the Quality Scale rule `stale-devices`; `tests/test_stale_device_removal.py` holds one test per protection rule (S-R1 to S-R9, S-R3d).
+  * Unloading an entry keeps its registry entries. The integration purges the entities and devices of a subentry on unload only when its platforms demonstrably never loaded (`ValueError` from the platform unload, `_async_unload_subentry` and the legacy branch of `_unload_config_subentry` in `custom_components/googlefindmy/__init__.py`), never otherwise. Removing a subentry or the entry is cleaned up by Core (`ConfigEntries.async_remove_subentry`, entry removal); devices that leave the Google account are removed by the stale-device rule above, not by the unload. The `rebuild` mode of `googlefindmy.rebuild_registry` removes entities and devices explicitly between unload and setup through `purge_entry_registrations` in the service context. `tests/test_unload_keeps_registry.py` covers reload, never-loaded subentries and the Core path; `tests/test_services_rebuild_registry.py` covers the service.
   * Subentry setup validation now lives alongside `_async_setup_new_subentries` in `custom_components/googlefindmy/__init__.py` with coverage in `tests/test_subentry_setup_trigger.py`; skim those guards when adjusting child setup or registry checks.
   * Registry updates **must not** pass `add_config_entry_id`,
     `add_config_subentry_id`, `remove_config_entry_id` or
@@ -384,19 +449,19 @@ Use the following patterns whenever a module only exists as a `.pyi` stub or whe
 ### Quick-reference (per-task checklist)
 
 * Connectivity probe: follow the [connectivity probe](#connectivity-probe) before each implementation cycle.
-* Dependency bootstrap: `python -m pip install --upgrade homeassistant pytest-homeassistant-custom-component` or run `make test-stubs` before linting or tests.
-* Dependency primer (fresh environments): install core extras such as `httpx[http2]`, `ecdsa`, and `selenium` alongside the Home Assistant stubs so coverage and flow tests do not stall on missing HTTP/crypto/browser drivers.
-* Cache accelerators: preserve the pip download cache (for example, mount/retain `.cache/pip`) so repeated `make test-stubs` and `pip install -r custom_components/googlefindmy/requirements-dev.txt` runs reuse the built wheels instead of redownloading them on every validation cycle.
-* Optional driver preload: `make test-stubs` now also installs `custom_components/googlefindmy/requirements-dev.txt` so optional clients (for example, `gpsoauth`) are ready for `pytest --cov -q` without extra commands.
+* Dependency bootstrap: run `make install-dev` (or `poetry install --with dev,test`) before linting or tests; it installs `homeassistant`, `pytest-homeassistant-custom-component` and the rest of the dev/test toolchain from `poetry.lock`.
+* Dependency primer (fresh environments): `make install-dev` already installs core extras such as `httpx[http2]`, `ecdsa`, and `selenium` (runtime dependencies in `pyproject.toml`); install them by hand only in pip-based setups so coverage and flow tests do not stall on missing HTTP/crypto/browser drivers.
+* Cache accelerators: preserve the download caches (for example, mount/retain `~/.cache/pypoetry` for Poetry and `.cache/pip` for pip) so repeated `make install-dev` and `pip install -r custom_components/googlefindmy/requirements-dev.txt` runs reuse the built wheels instead of redownloading them on every validation cycle.
+* Optional driver preload: `make install-dev` installs the runtime dependencies from `pyproject.toml` together with the `dev` and `test` groups, so optional clients (for example, `gpsoauth`) are ready for `pytest --cov -q` without extra commands.
 * Required checks (in order): `python -m ruff check --fix`, `python -m mypy --strict`, `python -m pytest --cov -q`.
 * Registry helpers: when adjusting device/entity relink logic, reuse the shared helper contract documented near `_async_relink_entities_for_entry` instead of adding new lookup paths so registry fallbacks stay consistent.
 
-> **`make test-stubs` refresh (fresh checkout quick how-to):**
-> 1. Run `make test-stubs` once after cloning or after `make clean` to install the Home Assistant + pytest stubs.
-> 2. If the command reports a missing Python, activate your environment first (for example, `source .venv/bin/activate`) and rerun it.
-> 3. Reuse the same command whenever mypy/pytest import errors resurface after environment resets; the target is idempotent and completes quickly when the stubs are already present.
+> **`make install-dev` refresh (fresh checkout quick how-to):**
+> 1. Run `make install-dev` once after cloning to install Home Assistant, `pytest-homeassistant-custom-component` and the dev/test toolchain into the Poetry environment.
+> 2. If the command reports a missing `poetry`, install it first (`pip install poetry`, see the README) and rerun it.
+> 3. Reuse the same command whenever mypy/pytest import errors resurface after environment resets; Poetry skips packages that are already installed at the locked version.
 
-> **Quickstart:** Run `make test-stubs` once per fresh environment to install `homeassistant` and `pytest-homeassistant-custom-component` before `pytest -q`, `mypy --strict`, or `ruff check`; the download/build step typically finishes in about five minutes, so plan lint/test runs with that buffer in mind.
+> **Quickstart:** Run `make install-dev` once per fresh environment to install `homeassistant` and `pytest-homeassistant-custom-component` before `pytest -q`, `mypy --strict`, or `ruff check`; the download/build step typically finishes in about five minutes, so plan lint/test runs with that buffer in mind.
 
 ### Connectivity probe
 
@@ -409,15 +474,15 @@ Use the following patterns whenever a module only exists as a `.pyi` stub or whe
 
 * **Cache cleanup:** Run `make clean` to prune `__pycache__` directories and stale bytecode before rerunning tests.
 * **Connectivity probe:** Follow the [connectivity probe](#connectivity-probe) and capture the output before running tests.
-* **Test stub install:** Use `make test-stubs` to install `homeassistant` and `pytest-homeassistant-custom-component` when you need a minimal bootstrap immediately before `pytest -q`. Plan for several minutes of download time in the hosted environment because the Home Assistant wheels are large.
+* **Test dependency install:** Use `make install-dev` to install `homeassistant`, `pytest-homeassistant-custom-component` and the remaining dev/test packages before `pytest -q`. Plan for several minutes of download time in the hosted environment because the Home Assistant wheels are large.
 * **Lint-in-test requirement:** Every testing cycle must include `python -m ruff check --fix .` so lint autofixes run alongside the rest of the suite.
-* **Pinned stub constraints:** The stub versions are locked in `custom_components/googlefindmy/constraints-test-stubs.txt` to reduce resolver backtracking; reuse that constraint file when installing Home Assistant stubs outside the Makefile targets.
+* **Pinned stub constraints:** `make install-dev` resolves Home Assistant and the pytest plugin from `poetry.lock`. `custom_components/googlefindmy/constraints-test-stubs.txt` only applies to pip-based installs: `custom_components/googlefindmy/requirements-dev.txt` includes it via `-c`, and the `test_legacy_python` job in `.github/workflows/ci.yml` rewrites its pins for each Home Assistant axis. Reuse it when installing Home Assistant with pip outside Poetry.
 * **DocToc preinstall:** Run `make bootstrap-doctoc` once per environment to install the DocToc dev dependency non-interactively (cached under `.npm-cache`); subsequent `make doctoc` calls reuse the installation to refresh the AGENTS.md table of contents.
 > **Connectivity Probes in Final Reports:** Clarify that a "connectivity probe" (manual verification of API/FCM reachability) counts as a valid required "test" step for the final report when automated integration tests cannot simulate the specific network outage scenario. This reduces ambiguity regarding documentation of probes versus traditional test runs.
-* **Strict mypy prep:** In a fresh environment, run `make test-stubs` before `mypy --install-types --non-interactive --strict` so the Home Assistant stubs are already present and strict type checking doesn't trip over missing packages.
+* **Strict mypy prep:** In a fresh environment, run `make install-dev` before `mypy --install-types --non-interactive --strict` so the Home Assistant stubs are already present and strict type checking doesn't trip over missing packages.
 * **Coverage reminder:** After adjusting registry helper fallbacks, rerun `pytest --cov -q` to confirm coverage stays intact before committing.
-* **Pytest coverage guard:** `pytest -q --cov` will raise the conftest bootstrap error if the Home Assistant stubs are missing. Run `make test-stubs` first so coverage runs complete without runtime import failures.
-* **Pytest-homeassistant HTTP stub:** When `pytest-homeassistant-custom-component` is installed (for example via `make test-stubs` or `pip install -r custom_components/googlefindmy/requirements-dev.txt`), keep the autouse `disable_http_server` fixture in `tests/conftest.py` enabled. The plugin accesses `homeassistant.helpers.http` during startup in HA 2025.12.0; the fixture patches that helper so imports succeed under the lightweight stub environment.
+* **Pytest coverage guard:** `pytest -q --cov` will raise the conftest bootstrap error if the Home Assistant stubs are missing. Run `make install-dev` first so coverage runs complete without runtime import failures.
+* **Pytest-homeassistant HTTP stub:** When `pytest-homeassistant-custom-component` is installed (for example via `make install-dev` or `pip install -r custom_components/googlefindmy/requirements-dev.txt`), keep the autouse `disable_http_server` fixture in `tests/conftest.py` enabled. The plugin accesses `homeassistant.helpers.http` during startup in HA 2025.12.0; the fixture patches that helper so imports succeed under the lightweight stub environment.
 * **Import normalization:** Run `python -m ruff check --select I --fix` to auto-sort import blocks (especially in `tests/`) instead of rearranging them manually. Import coroutine annotations (for example, `Coroutine`) from `collections.abc` alongside other container ABCs to avoid duplicate-definition lint errors when `typing` re-exports overlap.
 * **Pytest log capture for citations:** Pipe full coverage runs to a log file (for example, `python -m pytest --cov -q | tee pytest-full.log`) and cite the relevant tail snippet instead of rerunning the suite when only the output is needed.
 
@@ -425,11 +490,11 @@ Use the following patterns whenever a module only exists as a `.pyi` stub or whe
 
 * **Generated protobuf sampling.** Use `script/rg_proto_snippet.sh` to preview hits when searching massive generated files (for example, `script/rg_proto_snippet.sh encryptedMetadata custom_components/googlefindmy/ProtoDecoders`). The helper wraps `rg --max-count` and truncates each line via `cut` so shell output stays within the limit documented in this guide.
 
-* **Dependency bootstrap timing:** Expect `pip install --upgrade homeassistant pytest-homeassistant-custom-component` to run for roughly five minutes in the hosted environment (downloads + wheel builds). Plan shell work accordingly so lengthy installs finish before kicking off lint or test runs.
-* **Dev dependency install guard:** Run `make test-deps` after cloning or rebasing to install the full `requirements-dev.txt` stack (and Home Assistant stubs). This avoids skipped or failed `pytest`/`mypy` runs due to missing packages and keeps the resolver checks green without manual pip retries. **Always run this (or an equivalent `python -m pip install -r requirements-dev.txt`) before any lint/test invocation**, especially when exercising Moto Tag regression suites that import optional crypto/backoff libraries.
+* **Dependency bootstrap timing:** Expect `make install-dev` to run for roughly five minutes in the hosted environment (downloads + wheel builds). Plan shell work accordingly so lengthy installs finish before kicking off lint or test runs.
+* **Dev dependency install guard:** Run `make install-dev` after cloning or rebasing to install the full dev/test stack (including Home Assistant). This avoids skipped or failed `pytest`/`mypy` runs due to missing packages and keeps the resolver checks green without manual pip retries. **Always run this (or an equivalent `python -m pip install -r custom_components/googlefindmy/requirements-dev.txt`) before any lint/test invocation**, especially when exercising Moto Tag regression suites that import optional crypto/backoff libraries.
 * **Rotation-window debug toggle:** The resolver's rotation window helper now accepts an `allow_negative` flag to log and scan negative windows when debugging drift-heavy anchors. When investigating timebase drift, enable the toggle in the resolver debug path instead of re-reading the code to remember how negative offsets are surfaced.
-* **Bootstrap helper:** Run `make bootstrap-base-deps` from the repo root to pre-install `homeassistant` and `pytest-homeassistant-custom-component` once per environment. The task drops a sentinel at `.bootstrap/homeassistant-preinstall.stamp`; delete it (or run `make clean`) if you need to force a reinstall. For a faster, test-focused bootstrap immediately before running `pytest -q`, prefer `make test-stubs`, which installs only these two stub packages without the broader base toolchain.
-* **Stub refresh after upgrades:** When dependency versions change (for example, after rebasing or updating requirements), rerun `make test-stubs` so Home Assistant stubs stay in sync before invoking `pytest -q` or `mypy --strict`.
+* **Bootstrap helper:** `make install-dev` is the single bootstrap target. The former targets `make bootstrap-base-deps`, `make test-deps`, `make test-stubs` and `make install-ha-stubs` were removed with the move to Poetry and no longer exist.
+* **Stub refresh after upgrades:** When dependency versions change (for example, after rebasing or updating requirements), rerun `make install-dev` so Home Assistant and the pytest plugin stay in sync before invoking `pytest -q` or `mypy --strict`.
 * **Fallback reminder:** If a CLI helper such as `pre-commit` is not yet on the PATH, rerun the command via its module form (for example, `python -m pre_commit run --all-files`) so the initial check still succeeds.
 * **Online mode:** When a network connection is available you may install or update missing development tooling (for example, `pip`, `pip-tools`, `pre-commit`, `rustup`, `node`, `jq`) whenever it is necessary for maintenance or local verification.
 * **Offline mode:** When no connection is available, limit the work to local analysis only and call out any follow-up actions that must happen once connectivity is restored.
@@ -437,7 +502,7 @@ Use the following patterns whenever a module only exists as a `.pyi` stub or whe
 ### Cleanup shortcuts
 
 * **DocToc reinstall:** Run `make clean` to delete `.bootstrap/doctoc-preinstall.stamp` when you need to force a fresh DocToc install before rerunning `make doctoc`.
-* **Home Assistant stub reinstall:** Run `make clean` to delete `.bootstrap/homeassistant-preinstall.stamp` when a dependency change requires reinstalling the `homeassistant`/`pytest-homeassistant-custom-component` stubs via `make bootstrap-base-deps`.
+* **Home Assistant reinstall:** After a dependency change, rerun `make install-dev`; Poetry reinstalls the changed `homeassistant`/`pytest-homeassistant-custom-component` versions from `poetry.lock`. There is no sentinel file to delete.
 
 ### Module invocation primer
 
@@ -452,8 +517,8 @@ Prefer the executable name when it is available; fall back to the module form wh
 
 ### Shared pip cache for stub installs
 
-* Export `PIP_CACHE_DIR=/workspace/.cache/pip` (or reuse the default `~/.cache/pip`) before invoking `make test-stubs` so wheel downloads persist across sessions. Reusing the same cache keeps the Home Assistant and pytest stub installs fast and avoids repeated dependency fetches in fresh shells.
-* If you routinely rebuild the stub environment, keep a reusable virtualenv or wheelhouse around to sidestep the lengthy `make test-stubs` bootstrap. For example, cache a pre-populated `.venv` or store `pip download` artifacts in a shared directory that `PIP_FIND_LINKS` or `pip --no-index --find-links` can consume on the next run.
+* Export `PIP_CACHE_DIR=/workspace/.cache/pip` (or reuse the default `~/.cache/pip`) and `POETRY_CACHE_DIR` (default `~/.cache/pypoetry`) before invoking `make install-dev` or pip installs so wheel downloads persist across sessions. Reusing the same caches keeps the Home Assistant and pytest plugin installs fast and avoids repeated dependency fetches in fresh shells.
+* If you routinely rebuild the stub environment, keep a reusable virtualenv or wheelhouse around to sidestep the lengthy `make install-dev` bootstrap. For example, cache a pre-populated `.venv` or store `pip download` artifacts in a shared directory that `PIP_FIND_LINKS` or `pip --no-index --find-links` can consume on the next run.
 
 ---
 
@@ -464,7 +529,7 @@ Prefer the executable name when it is available; fall back to the module form wh
 * **Translation schema guardrails.** Home Assistant option/config flow translations must stick to the documented schema. Under each `options.step.<id>` or `config.step.<id>` block, only use `title`, `description`, `data`, `data_description`, `menu_options`, `error`, `abort`, and `progress`. Avoid nested `select` objects or other ad-hoc keys—translation validation will reject them and the options UI will render placeholders instead of labels.
   * `data_description` entries must be **strings**. Validators reject dictionaries at that path, so encode select choice labels in plain text (for example, list the choices in the field description) and reserve option-specific labels for the selector definition in `config_flow.py`.
   * Keep localized translations in sync with the base `strings.json`. If you flatten a `data_description` value to a string in the source strings, mirror the same shape in every `translations/<lang>.json` file; a single lingering dictionary (for example, per-locale `options`) will cause hassfest to fail.
-  * **Consistent form of address (formality).** Each `translations/<lang>.json` file must use a single, consistent form of address throughout, matching the register Home Assistant uses for that locale. Never mix formal and informal address within one file. Home Assistant mandates formality only for German: use the informal *du*, never the formal *Sie* (per the Home Assistant [translation guidelines](https://developers.home-assistant.io/docs/translations/), German section: "Duze in den Übersetzungen, und verwende nicht das formale 'Sie'."). For every other locale, follow the register that locale already establishes. In this repository that means: French formal (*vous*); European Portuguese (`pt`) courtesy third person (courtesy imperative, no explicit *você* pronoun); Brazilian Portuguese (`pt-BR`) informal *você*; Dutch informal (*je*); Italian informal (*tu*); Polish informal second person (*ty*); Spanish informal (*tú*). Hebrew has no formal/informal *you* distinction, and the English base (`strings.json`, `translations/en.json`) is register-neutral. When adding or editing a localized string, match the existing register of that file.
+  * **Consistent form of address (formality).** Each `translations/<lang>.json` file must use a single, consistent form of address throughout, matching the register Home Assistant uses for that locale. Never mix formal and informal address within one file. Home Assistant mandates formality only for German: use the informal *du*, never the formal *Sie* (per the Home Assistant [translation guidelines](https://developers.home-assistant.io/docs/translations/), German section: "Duze in den Übersetzungen, und verwende nicht das formale 'Sie'."). For every other locale, follow the register that locale already establishes. In this repository that means: French formal (*vous*); European Portuguese (`pt`) courtesy third person (courtesy imperative, no explicit *você* pronoun); Brazilian Portuguese (`pt-BR`) informal *você*; Dutch informal (*je*); Italian informal (*tu*); Polish informal second person (*ty*); Spanish informal (*tú*). Hebrew has no formal/informal *you* distinction, and the English base (`strings.json`, `translations/en.json`) is register-neutral. When adding or editing a localized string, match the existing register of that file. <!-- codespell:ignore -->
 * **Voluptuous defaults:** When schema defaults need to reference runtime values (for example, Home zone coordinates), prefer callable defaults rather than eagerly captured constants. Tests that validate option-flow defaults should coerce callables to their resolved values before asserting to avoid brittle comparisons across environments.
 * **Contributor guidance hygiene.** Verify that root and scoped `AGENTS.md` files remain accurate. When code or tests touch related automation or guidance, review and update the impacted `.github` workflows/templates, shared test utilities, and documentation so they stay current.
   * **Mypy override ordering.** Append new strictly-typed modules to the override list in `pyproject.toml` in alphabetical order so future reviews can spot additions quickly.
@@ -472,8 +537,8 @@ Prefer the executable name when it is available; fall back to the module form wh
   * **Test scaffolding reference.** The Home Assistant config flow stubs and helper behaviors for tests are documented in [`tests/AGENTS.md`](tests/AGENTS.md); point future contributors there whenever discovery/update helpers change.
   * **Task scheduling helpers.** Home Assistant-style test doubles for `async_create_task` may accept only `(coro)` without keyword arguments like `name`. Design scheduling wrappers so they gracefully handle both signatures and still attach error-handling callbacks when a task object is returned.
   * **Discovery callbacks.** Reuse `ha_typing.callback` for new discovery helper callbacks so strict mypy keeps enforcing the typed decorator instead of drifting back to untyped shims.
-* **pre-commit.ci automation.** The GitHub App is enabled with permission to push formatting fixes to PR branches whenever the configured hooks (e.g., `ruff`, `ruff-format`) report autofixable issues; keep `.pre-commit-config.yaml` aligned with the enforced checks.
-* **TOC upkeep.** Generate the root `AGENTS.md` overview with the pinned DocToc dev dependency: run `make doctoc` to hydrate `node_modules` with the cached `npm ci --prefer-offline --no-fund --no-audit --cache .npm-cache --include=dev` workflow and refresh the Table of Contents, or invoke `pre-commit run doctoc --files AGENTS.md` if you want to reuse the pre-commit shim.
+* **pre-commit hooks.** Run the hooks from the project environment (`poetry run pre-commit run --all-files`); the `mypy` and `pytest` hooks use `language: system` and fail when the environment is not active. CI runs every other hook as the `pre-commit` entry of the `lint` matrix. Nothing pushes fixes to PR branches, because no hosted pre-commit service is connected; keep `.pre-commit-config.yaml` aligned with the enforced checks.
+* **TOC upkeep.** Generate the root `AGENTS.md` overview with the in-repo hook `script/precommit_hooks/update_doctoc.py`: run `pre-commit run doctoc --files AGENTS.md`, or `make doctoc` as a shorthand for the same script. The hook derives anchors the way GitHub renders heading ids, so every link of the overview resolves on GitHub.
 * **Hassfest auto-sort workflow.** `.github/workflows/hassfest-auto-fix.yml` must remain present and operational so manifest key ordering issues are auto-corrected and pushed back to PR branches; update the workflow when hassfest or `git-auto-commit-action` inputs change upstream.
 * **Action pinning.** Every third-party `uses:` line in `.github/workflows/`, except the two branch-tracking actions named below, references a full 40-character commit SHA followed by a comment naming the most specific release tag that points at it (`uses: actions/checkout@<sha> # v7.0.1`); a tag such as `@v7` can be moved, a commit SHA cannot. Dependabot's `github-actions` ecosystem (`.github/dependabot.yml`) updates such pins and the version comment together. The only exceptions are `home-assistant/actions/hassfest` and `hacs/action`: they track their default branch on purpose because their newest release tags are far behind it, and a pin would freeze the validation rules until someone refreshes it by hand. Each exception carries a comment line above it pointing here. `tests/test_workflow_action_pins.py` enforces the form in the regular `pytest` run, including that the exception list has no stale entries and that one action resolves to one SHA everywhere. The test runs offline, so it does not check that the tag in the comment really points at the SHA: verify that when writing or changing a pin (`gh api repos/<owner>/<repo>/commits/<tag> --jq .sha` must print the pinned SHA). Extend its `BRANCH_TRACKING_ACTIONS` only together with this paragraph.
 * **Purpose & scope.** PR title/description state *what* changes and *why*, and which user scenarios are affected.
@@ -496,12 +561,12 @@ Prefer the executable name when it is available; fall back to the module form wh
 
 > **Local run (VERIFY)**
 > **Offline mode:**
-> – pre-commit run --all-files *(mandatory, even if pre-commit.ci could supply autofixes)*
+> – pre-commit run --all-files *(mandatory; run it from the project environment, e.g. `poetry run pre-commit run --all-files`, because the mypy and pytest hooks use the installed tools)*
 > – ruff format --check *(mandatory; capture the outcome in the "Testing" section)*
 > – ruff check . *(mandatory; you may run `ruff check --fix` beforehand, but finish with a non-fixing run and document the result)*
 > – mypy --strict --explicit-package-bases custom_components/googlefindmy tests *(mandatory for Python changes; capture the outcome)*
 > – pytest -q *(mandatory; investigate and resolve every `DeprecationWarning`; capture the outcome)*
-> – If Home Assistant stubs are missing, run `make install-ha-stubs` before rerunning pytest (see [README — Installing Home Assistant test dependencies on demand](README.md#installing-home-assistant-test-dependencies-on-demand)).
+> – If Home Assistant stubs are missing, run `make install-dev` before rerunning pytest (see [README — Installing Home Assistant test dependencies on demand](README.md#installing-home-assistant-test-dependencies-on-demand)).
 >
 > **Online mode (in addition to the offline steps):**
 > – pip install -r custom_components/googlefindmy/requirements-dev.txt *(install or update missing dependencies)*
@@ -569,7 +634,7 @@ Run `poetry lock` to fix the lock file.
 * **Coverage-driven follow-up:** Treat the maintenance-run coverage data as the prioritization source for test improvements, and schedule exactly one follow-up task per cycle that targets the highest-risk coverage gap highlighted by the report so the next increment closes the most critical hole first.
 * **Error-to-test mandate:** When either I or the user encounters a defect, misbehavior, or regression during maintenance, treat it as a mandatory opportunity to extend an existing pytest or add a new one that captures the scenario before the cycle closes.
 * **Connectivity caveat:** The managed environment occasionally blocks TLS handshakes for PyPI-hosted metadata, which causes `pip-audit` (and other HTTPS-dependent checks) to fail with `SSLError: CERTIFICATE_VERIFY_FAILED`. When this happens, document the failure in the PR/testing summary, capture the offending package URL, and proceed with the remaining maintenance tasks instead of repeatedly retrying the audit.
-* **Configuration alignment:** Ensure configuration files (`pyproject.toml`, `.pre-commit-config.yaml`, `manifest.json`, requirement files) reflect the same dependency versions and document the synchronization.
+* **Configuration alignment:** Ensure configuration files (`pyproject.toml`, `.pre-commit-config.yaml`, `manifest.json`, requirement files) reflect the same dependency versions and document the synchronization. Ruff, codespell and bandit follow `poetry.lock`: when a dependency update raises one of them, the same PR bumps the matching `rev:` in `.pre-commit-config.yaml` and the pin in `script/local_verify.py`, and `tests/test_precommit_config_contract.py` fails until both match. Dependabot's `pre-commit` ecosystem stays disabled for these three hooks.
 * **Completion notice:** When finished, report whether another maintenance run is required (for example, due to pending upstream fixes) or maintenance mode can be closed. Capture any remaining TODOs or follow-up tasks.
 
 ### Config subentry maintenance helper
@@ -586,6 +651,7 @@ Run `poetry lock` to fix the lock file.
 * The integration stores the uploaded secret bundle under `DATA_SECRET_BUNDLE` on the config entry; it originates from the user's `secrets.json` input.
 * Owner key derivation runs through the Spot API helper and is exposed at runtime via `async_get_owner_key(token_cache)`; the helper records the bytes and version in the entry-scoped token cache.
 * Shared-key retrieval is handled by `async_get_shared_key(cache=token_cache)`, which normalizes the value and stores it in the same entry-scoped cache under the canonical `shared_key` key (falling back to migrated per-user keys when present).
+* Per-component keys (`derive_component_key`, `docs/FMDN.md` S3.4.1) are only derived from the EIK, in memory: never persisted, never logged, never promoted to an identity key.
 
 ### Wrapped EIK hypothesis
 
@@ -595,6 +661,8 @@ Run `poetry lock` to fix the lock file.
 
 * Resolver scans currently seed three candidates: `ABSOLUTE` (wall-clock), `REL_PAIR` (pair-date anchored), and `REL_SECRETS` (secrets-creation anchored). Once a candidate yields a match, the resolver caches the winning epoch/offset per device to lock onto that timebase and narrow future rotation windows.
 * Runtime code outside the resolver does not re-derive these candidates or pick one of them as "the" counter (the CLI tools in `SpotApi/UploadPrecomputedPublicKeyIds` and `SpotApi/CreateBleDevice` derive counters from `pair_date` for precomputed IDs and device registration and are not consumers of the resolver). The FMDN finder reports what a match observed (`GoogleFindMyEIDResolver.last_confirmed_sighting`: variant, window counter, sighting time, and the observed unwanted tracking protection mode from `_effective_uwt_mode()`) and sends nothing without a recent sighting or while that mode is unknown, because the upload field cannot express "unknown" and a `0` would report the mode as off (field data: `docs/UWT_FIELD_DATA.md`), nor when none of the device's current candidate identity keys is the key the sighting was matched under (`ConfirmedSighting.key_fingerprint`), because the window counter belongs to that key; the owner resolves a report over the recent past and near future of the counter (FMDN specification, "Decryption of values encrypted with EID").
+* A sighting of a multi-component device also names its component series (`ConfirmedSighting.component`, `docs/FMDN.md` S3.4.1). The finder derives the per-component key from the identity key its fingerprint selects and reports that EID; the fingerprint always stays that of the EIK. The derivation is measured on one device and not published by Google.
+* The finder's upload path itself is unverified, independent of the sending conditions above. The disabled code sends own-device reports in a shape that does not match Spot's owner path (`SpotReportingService/UploadOwnerScans`), and this integration's own decrypt path cannot read them back (text payload for `CROWDSOURCED`, unread payload for `SEMANTIC`). Before touching `fmdn_finder/location_uploader.py` or `fmdn_finder/google_uploader.py`, read `docs/FMDN_UPLOAD_LIMITATION.md`, section "Owner location reports". Do not fix single rows of its comparison table; change the upload path only together with a live probe of one own device, and keep `FEATURE_FMDN_FINDER_ENABLED` and `FMDN_UPLOAD_ENABLED` off until then.
 
 ### Owner-key error taxonomy (classify only from positive evidence)
 
@@ -717,7 +785,7 @@ For any work that migrates entity-registry records during reload/startup flows, 
 
 * **Never log** tokens, email addresses, precise coordinates, raw API payloads, or class (c) identifiers in clear text. Device identifiers are graded by one question: *can somebody who holds only the log file use the value without owning this Home Assistant instance or this Google account?*
   * (a) **Rotating identifiers** (EID, the `request_uuid` this integration generates, the BLE MAC of an FMDN advertisement that resolved to one of the user's own trackers, which rotates with the EID, or once per 24 h while unwanted-tracking mode is active, `docs/FMDN.md` S3.5): allowed at any level, in full or truncated. The MAC of an advertisement that did not resolve belongs to somebody else's tracker until proven otherwise and is class (c); a caller-supplied value (the `stop_sound` service accepts a `request_uuid`) is graded by its content, not by the parameter name; the EID is truncated by convention (`EID_LOG_PREFIX_LENGTH` in `fmdn_finder/`: 8 hex chars of `eid_hex`, 8 bytes of the raw `eid`). Truncation does not turn a stable value into class (a): a prefix or suffix of a class (b) or (c) identifier keeps its class, and class (c) may only appear in the masked form defined under (c).
-  * (b) **Registry identifiers of this instance** (`entry_id`, `config_subentry_id`, Home Assistant `device_id`) and the Google canonical ids of the user's own trackers: allowed at any level, they carry no meaning outside this instance and this account. User-provided device names are derived information (see "Redact rigorously" below). A record that can repeat unattended (polling, transport recovery, background sweeps, state-change listeners) keeps the name out of the record at INFO and above and carries it only at DEBUG; a count, an index or a class (a)/(b) identifier may stand in its place, none of them is required. The locate transport pins the Name@DEBUG half at WARNING as "Count@WARNING, Name@DEBUG" (`test_location_request_r6_name_sweep.py`), and `tests/test_guard_logging_entity_ids.py` pins the `entity_id` form package-wide at INFO and above. A record bound to one invocation (a manual locate, a button press, a service call) may name the device at any level, because the caller asked for that device by name and has to see which one failed. An automation can repeat an invocation, so a new invocation-bound record prefers the count-or-index form unless the name is what the operator has to act on; the name-carrying records above DEBUG that exist today, on the locate transport and on the poll path alike, are a documented exception, not a template, and are reduced as they are touched. A device name is the operator's own label inside the operator's own instance; the PII ban (section 1, "Behavioral safety") covers data about persons that the integration handles (e-mail addresses, account identifiers, coordinates), it does not turn every label into PII. A label that names a person other than the operator is class (c) once the log leaves the instance; the operator redacts it before attaching a log, because the integration cannot know which labels are personal. An `entity_id` is a slug of that name and follows the same rule.
+  * (b) **Registry identifiers of this instance** (`entry_id`, `config_subentry_id`, Home Assistant `device_id`) and the Google canonical ids of the user's own trackers: allowed at any level, they carry no meaning outside this instance and this account. User-provided device names are derived information (see "Redact rigorously" below). A record that can repeat unattended (polling, transport recovery, background sweeps, state-change listeners) keeps the name out of the record at INFO and above and carries it only at DEBUG; a count, an index or a class (a)/(b) identifier may stand in its place, none of them is required. The locate transport pins the Name@DEBUG half at WARNING as "Count@WARNING, Name@DEBUG" (`test_location_request_r6_name_sweep.py`), and `tests/test_guard_logging_entity_ids.py` pins the `entity_id` form package-wide at INFO and above. `tests/test_guard_unattended_device_names.py` pins the Name@DEBUG half for the unattended device-location, registry-heal, poll and Google Home filter paths (`api.async_get_device_location`, `ProtoDecoders/decoder.get_devices_with_location`, the subentry heal in `coordinator/registry._ensure_registry_for_devices`, the poll cycle `coordinator/polling._async_start_poll_cycle`, the Google Home filter `google_home_filter.GoogleHomeFilter.should_filter_detection`); inside these five functions it checks the shape of each logger call above DEBUG; its docstring names the call forms it reads as a closed list, and the blind spots of its name check. A record bound to one invocation (a manual locate, a button press, a service call) may name the device at any level, because the caller asked for that device by name and has to see which one failed. An automation can repeat an invocation, so a new invocation-bound record prefers the count-or-index form unless the name is what the operator has to act on; the name-carrying records above DEBUG that exist today on the locate transport are a documented exception, not a template, and are reduced as they are touched. A device name is the operator's own label inside the operator's own instance; the PII ban (section 1, "Behavioral safety") covers data about persons that the integration handles (e-mail addresses, account identifiers, coordinates), it does not turn every label into PII. A label that names a person other than the operator is class (c) once the log leaves the instance; the operator redacts it before attaching a log, because the integration cannot know which labels are personal. An `entity_id` is a slug of that name and follows the same rule.
   * (c) **Hardware addresses** (BLE or Wi-Fi MAC of scanners, proxies, phones), stable identifiers of third parties (foreign trackers, other accounts) and clear-text identifiers of anybody who is not the operator: never in clear text. The permitted masked forms are the masking helpers for e-mail and account values (`_mask_email_for_logs`, `_redact_account_for_log`) and, for addresses, the last four characters (`AA:BB:CC:DD:EE:FF` becomes `...E:FF`, `_mask_address_for_logs` in `fmdn_finder/location_uploader.py`); any longer part of the value is clear text.
   * When in doubt, treat a value as (c): a log file leaves the operator's control the moment it is attached to an issue, and a stable identifier is still valid years later, while a rotating one is stale before anybody reads it.
 * **Diagnostics redaction:** use a central `TO_REDACT` list in `diagnostics.py`.
@@ -806,7 +874,7 @@ repair issue and the guard.
   * [ ] Cross-check locale files for missing keys, placeholder mismatches, or obsolete entries before submitting the PR.
   * [ ] Run the documented helper command (if available) to compare locales; otherwise perform a manual diff review to confirm parity and note the method in the PR.
   * ⚠️ Hassfest rejects `config.menu` objects. When a flow shows a menu, translate the options under `config.step.<step_id>.menu_options` (or the matching `options.*`/`config_subentries.*` section) instead of adding a top-level `menu` block.
-* Translate service and exception texts (`translation_key`).
+* Translate service and exception texts (`translation_key`). Every `UpdateFailed` in the package keeps its English message and passes `translation_domain=DOMAIN` and a literal `translation_key`: the integration card shows the key of the cause as setup-retry reason. Newer cores copy it there themselves; on older ones (2025.9.1 and 2026.1.3 measured) `_initial_refresh_not_ready` in `__init__.py` takes it from the cause, and only from a cause with `translation_domain=DOMAIN`. Placeholders are limited to `_ALLOWED_PLACEHOLDERS` (IDs, status, counts, the error class name) and never carry a device name. `tests/test_guard_update_failed_translation.py` enforces both; extend its allow list together with the template when a new placeholder is needed.
 * Update README only when user-visible behavior/options change.
 * Program output quoted verbatim in a guide is a claim like any other, and one message per code path is not the same as one message for several: `docker-login/README.md` once printed the closed-window line for the timeout path too, so a user diagnosing a timeout was told to look for words that path cannot emit. Guard such a quote by rendering it through the real code path and locating it in the fenced block that directly follows its own lead-in sentence; a "the text appears somewhere in the file" check passes on a guide that files two messages under one heading, and a "somewhere after the lead-in" check passes when the message sits under a later one. Extent today, stated so it is not mistaken for coverage: three such guards exist. `tests/test_auth_flow.py::test_the_docker_login_guide_quotes_each_abort_message` covers the two `LoginAborted` messages under `## Cancelling a login`, each located in the fenced block that follows its own lead-in. `tests/test_auth_flow.py::test_the_guide_describes_the_driver_timeout_path_it_can_actually_produce` covers the driver-timeout bullet in `## Troubleshooting`, where the quotation is inline rather than fenced: it renders the failure through the flow, asserts the guide names the type that came out, and takes the denied exit status from `main._EXIT_LOGIN_ABORTED` instead of from the prose. Its reach stops at `_run_oauth_flow_or_exit`; a blanket handler further out in `main._main` could still falsify the bullet without turning it red. Every other quotation of program output in that guide, fenced or inline, is unguarded. `tests/test_main_cli_exit_paths.py::test_the_guide_quotes_each_reauth_restore_message` covers two of the four messages `main._restore_cleared_tokens` can print (the successful and the declined restore), in the `--reauth` paragraph of the same `## Cancelling a login` section: it renders each one through the real function (both interpolate — a token count, the anchor name) and locates it in the fenced block after its own lead-in. Its other two messages -- the unreadable file and the failed write -- stay unguarded, because the guide paraphrases them rather than quoting them. `tests/test_docker_login_hardening.py` couples README prose to code as well, but by asserting phrases, not by rendering messages. Extend the guard when you quote a new message there.
 * A setting the user can switch off needs an off switch **every supported launcher can type**, and `cmd.exe` cannot type an empty one: `set VAR=` deletes the name there, so bash's empty-but-present state has no Windows equivalent and `if defined` is the counterpart of `${VAR+set}`, not of `${VAR:-}`. `GFMY_LOCALE` therefore takes the POSIX `C`/`POSIX` locale as a stated absence of a preference and drops it without the warning a typo earns, which gives `login.sh`, `login.cmd` and a bare `docker compose run` one spelling in common. Reading a shell locale with `:-` cannot tell "said nothing" from "said no preference" and silently overwrites the second; use `+set` wherever an empty value is a documented answer. The rule lives twice on purpose, as a `case` arm in `login.sh` (host locale) and as `_NO_LOCALE_PATTERN` in `chrome_driver.py` (explicit value); extend both together. Extent today, stated so it is not mistaken for coverage: `tests/test_docker_login_hardening.py::test_both_halves_agree_on_what_counts_as_no_preference` pins the pair over twelve values, six POSIX spellings and six real locales, and nothing outside that set. What carries the container side is the ABSENCE OF A WARNING; the `None` is asserted too but proves nothing on its own: `C` and `POSIX` are no language tags either way, so a `None` check is satisfied by the warning branch too and would not notice the rule being deleted.
@@ -910,7 +978,7 @@ artifacts remain exempt when explicitly flagged by repo configuration).
 
 **Input validation & injection**
 
-* **Never** use `eval`/`exec`. For literals, use `ast.literal_eval`.
+* **Never** use `eval`/`exec`. For literals, use `ast.literal_eval`. The only exception is for tests and is narrow: section "`eval` and `exec` in tests" of [`tests/AGENTS.md`](tests/AGENTS.md) lists every allowed call site, and `tests/test_guard_eval_exec_sites.py` pins that list.
 * Subprocess: **no `shell=True`** for untrusted data; pass argv lists; use `shlex.quote` if you must touch shell.
 * Use parameterized queries for SQL/LDAP/XML; sanitize file names and paths.
 
@@ -947,22 +1015,27 @@ artifacts remain exempt when explicitly flagged by repo configuration).
   Poetry `dev`/`test` groups in `pyproject.toml`), so they are **not** reproducibly
   pinned either. Only a small **explicitly constrained** subset is exact-pinned and
   must not be relaxed under the Chrome-currency rationale:
-  `custom_components/googlefindmy/requirements-dev.txt` pins `pytest-asyncio==1.3.0`,
+  `custom_components/googlefindmy/requirements-dev.txt` pins `pytest-asyncio==1.4.0`,
   and `custom_components/googlefindmy/constraints-test-stubs.txt` pins
-  `homeassistant==2025.12.1` and `pytest-homeassistant-custom-component==0.13.299`; it
-  also caps `pycares<5` (an upper bound, not an exact pin; the runtime floor
-  `pycares>=4.4.0` lives in `requirements-dev.txt`).
+  `homeassistant==2026.10.3` and `pytest-homeassistant-custom-component==0.13.374`
+  (the `poetry.lock` versions; bump both together, since each plugin release
+  requires one exact Home Assistant release). The `test_legacy_python` job pins
+  its two Python 3.13 axes exactly (`homeassistant==2025.9.1` with plugin
+  `0.13.278`, and `homeassistant==2026.2.3` with plugin `0.13.316`) and adds the
+  cap `pycares<5` for the declared-floor axis only (an upper bound, not an exact
+  pin; the runtime floor `pycares>=4.4.0` lives in `requirements-dev.txt`).
 * Actual coverage today (each claim cites the workflow proving its *effective*
   behaviour):
   * **PR CI passes an approval gate.** In
     `.github/workflows/ci.yml` the first job, `approval_gate`, runs only on
-    `pull_request` and is bound to the environment `ci-freigabe`; `hassfest`
-    needs it, and every other job needs `hassfest`. Where `ci-freigabe` has a
-    required reviewer (in `jleinenbach/GoogleFindMy-HA`), that reviewer must
-    approve the run before any job starts; where it has no protection rules
-    (in `BSkando/GoogleFindMy-HA`), the gate passes without waiting for
-    approval. Pushes to `main` skip the gate and run all jobs (each job
-    states an explicit `if:` so the skipped
+    `pull_request` and is bound to the environment `home-assistant-tests`;
+    `hassfest` needs it, and every other job needs `hassfest`. Where
+    `home-assistant-tests` has a required reviewer (in
+    `jleinenbach/GoogleFindMy-HA`), that reviewer must approve the run before
+    any job starts; where it has no protection rules (GitHub creates a missing
+    environment without rules on the first run that references it), the gate
+    passes without waiting for approval. Pushes to `main` skip the gate and
+    run all jobs (each job states an explicit `if:` so the skipped
     gate does not skip them). A run that is not approved, is rejected or
     expires never turns `CI Success` green: `CI Success` depends on the gate
     and fails a pull request run whose gate result is not `success`. Workflow
@@ -972,7 +1045,7 @@ artifacts remain exempt when explicitly flagged by repo configuration).
     run for the current head). The gate is only as strong as the environment: GitHub
     creates a missing environment without protection rules when a job
     references it, so the approval is enforced only while
-    `gh api repos/<owner>/<repo>/environments/ci-freigabe --jq '.protection_rules[].type'`
+    `gh api repos/<owner>/<repo>/environments/home-assistant-tests --jq '.protection_rules[].type'`
     prints `required_reviewers` for that repository. Name it explicitly:
     without `GH_REPO`, gh resolves the `{owner}/{repo}` placeholders from the
     checkout's git remotes, and in a fork checkout with an `upstream` remote
@@ -990,8 +1063,11 @@ artifacts remain exempt when explicitly flagged by repo configuration).
     Compatibility Check
     (`.github/workflows/ha-dependency-check.yml`, which installs
     `homeassistant` on every pull request). `tests/test_ci_approval_gate.py`
-    locks the shape of `ci.yml`. Gate, guard test and this bullet are
-    repository-neutral and may go upstream: where `ci-freigabe` has no
+    locks the shape of `ci.yml`.
+    `tests/test_guard_workflow_environments.py` pins every `environment:` in
+    `.github/workflows/` to an English allowlist; a new name is added there
+    deliberately, with a reason. Gate, guard tests and this bullet are
+    repository-neutral and may go upstream: where `home-assistant-tests` has no
     protection rules, the gate passes without approval, and nothing has to be
     configured there.
   * **`pip-audit` on PRs is report-only.** `.github/workflows/pip-audit.yml`
@@ -1088,7 +1164,7 @@ artifacts remain exempt when explicitly flagged by repo configuration).
 
 ### 11.3 Async, concurrency & cancellation
 
-* **Async-first**: no event-loop blocking. In new code that has a `hass` in reach, prefer `await hass.async_add_executor_job(...)`: it registers the job in `hass._tasks`, so shutdown waits for it. The thread pool is the same either way (Home Assistant installs it as the loop's default executor), so `asyncio.to_thread` stays correct where no `hass` is available, which is the case for the crypto and token paths that use it today. This mirrors the remediation in [`docs/AI_MAINTENANCE_TASKLIST.md`](docs/AI_MAINTENANCE_TASKLIST.md) § 4.
+* **Async-first**: no event-loop blocking. In new code that has a `hass` in reach, prefer `await hass.async_add_executor_job(...)`: it registers the job in the caller's task bucket, so shutdown waits for it only when the caller is itself a tracked task: the job lands in `hass._tasks` only if `asyncio.current_task()` is in `hass._tasks`, otherwise in `hass._background_tasks`, which Home Assistant cancels on stop instead of awaiting (`homeassistant/core.py`, 2026.9.3, `async_add_executor_job` and `async_stop`). A job started from the poll cycle is such a case, because the cycle runs as a background task (`coordinator/polling.py`). The thread pool is the same either way (Home Assistant installs it as the loop's default executor), so `asyncio.to_thread` stays correct where no `hass` is available, which is the case for the crypto and token paths that use it today. This mirrors the remediation in [`docs/AI_MAINTENANCE_TASKLIST.md`](docs/AI_MAINTENANCE_TASKLIST.md) § 4.
 * Use **`asyncio.TaskGroup`** for structured concurrency where suitable.
 * Cancel correctly (`task.cancel(); await task`) and handle `CancelledError`. Use `asyncio.shield` only for small critical sections.
 
@@ -1146,11 +1222,11 @@ artifacts remain exempt when explicitly flagged by repo configuration).
 
 * [ ] PEP 8/257 compliance; complete docstrings maintained per **Rule §9.DOC**.
 * [ ] Strict typing incl. PEP 695 where relevant; no implicit `Any` in public APIs.
-* [ ] No `eval/exec`; subprocess without `shell=True`; parameterized I/O; safe loaders.
+* [ ] No `eval/exec` (tests: only the call sites listed in `tests/AGENTS.md`); subprocess without `shell=True`; parameterized I/O; safe loaders.
 * [ ] Archive extraction is traversal-safe; paths validated with `pathlib`.
 * [ ] `secrets` used for tokens; cryptography aligns with BSI TR-02102-1 guidance.
 * [ ] Logs redact tokens, PII, coordinates and class (c) identifiers (section 5) at every level, and derived identifiers (user-provided names, `entity_id`) from records that can repeat unattended at INFO and above; diagnostics redact device, canonical and EID keys through `TO_REDACT` (the instance's own `entry_id` is class (b) and stays).
-* [ ] The **whole runtime stack** uses `>=` floors (the Chrome/ChromeDriver-currency rationale is what is scoped to the browser packages, not hard pins across the stack); **most test/tooling** deps also use `>=` floors, only a constrained subset is exact-pinned (`pytest-asyncio==1.3.0`, `constraints-test-stubs.txt`); the `test` job (behind the required `CI Success` check of the `main` ruleset) enforces a **narrow** manifest CVE gate (`test_no_fixable_integration_owned_vulnerability`), the separate `pip-audit` workflow runs report-only on PRs + weekly auto-update PRs; Semgrep SAST runs on PRs only (workflow triggers on `pull_request` alone, baseline scan against the PR base, gate fails on new `ERROR`/`HIGH`/`CRITICAL` findings); CodeQL scans the full tree (PR merge ref, push to `main`, weekly) and blocks merges into `main` via the ruleset's `code_scanning` rule; not every change is human-reviewed (release-stamp/hassfest-auto-fix auto-commit); a broad full-tree CVE scan and an SBOM scan remain hardening targets.
+* [ ] The **whole runtime stack** uses `>=` floors (the Chrome/ChromeDriver-currency rationale is what is scoped to the browser packages, not hard pins across the stack); **most test/tooling** deps also use `>=` floors, only a constrained subset is exact-pinned (`pytest-asyncio==1.4.0`, `constraints-test-stubs.txt`); the `test` job (behind the required `CI Success` check of the `main` ruleset) enforces a **narrow** manifest CVE gate (`test_no_fixable_integration_owned_vulnerability`), the separate `pip-audit` workflow runs report-only on PRs + weekly auto-update PRs; Semgrep SAST runs on PRs only (workflow triggers on `pull_request` alone, baseline scan against the PR base, gate fails on new `ERROR`/`HIGH`/`CRITICAL` findings); CodeQL scans the full tree (PR merge ref, push to `main`, weekly) and blocks merges into `main` via the ruleset's `code_scanning` rule; not every change is human-reviewed (release-stamp/hassfest-auto-fix auto-commit); a broad full-tree CVE scan and an SBOM scan remain hardening targets.
 * [ ] Async: no loop blockers; `to_thread`/`TaskGroup`; proper cancel handling.
 * [ ] I/O optimized (batch/atomic); caches with clear TTL/invalidations.
 * [ ] HA-specific: Coordinator, injected session, `get_url`, config-flow test, Repairs/Diagnostics, HA Store.

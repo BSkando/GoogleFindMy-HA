@@ -1,4 +1,9 @@
-# Pinned Home Assistant stub packages to speed up make test-stubs runs
-homeassistant==2025.12.1
-pytest-homeassistant-custom-component==0.13.299
-pycares<5
+# Pins for the Home Assistant test stack, read via `-c` from requirements-dev.txt.
+# The HA compatibility axes in .github/workflows/ci.yml rewrite the two pins per axis.
+# Keep both pins on the versions recorded in poetry.lock and bump them together:
+# each plugin release requires one exact Home Assistant release. These versions
+# need Python >=3.14.2, like the Poetry environment. Home Assistant 2026.10.3
+# pulls pycares>=5 through aiodns 4; the `pycares<5` cap for the declared-floor
+# axis is added by the test_legacy_python job in .github/workflows/ci.yml.
+homeassistant==2026.10.3
+pytest-homeassistant-custom-component==0.13.374

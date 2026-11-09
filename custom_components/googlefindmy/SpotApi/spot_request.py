@@ -241,6 +241,11 @@ async def async_spot_request(
     - One auth refresh attempt on UNAUTHENTICATED/PERMISSION_DENIED.
     - One AAS token clear attempt on InvalidAasTokenError (counts toward retry budget).
     - Maximum total attempts: _SPOT_MAX_RETRIES + 1 (initial) + 1 (auth refresh).
+
+    Channel resets:
+    - The channel is shared, so a reset names the channel of the failed attempt
+      and leaves a replacement alone that another caller has already built.
+    - Timeouts close it only if every retryable attempt timed out on that channel.
     """
 
     active_transport = transport or SPOT_GRPC_TRANSPORT
@@ -249,6 +254,8 @@ async def async_spot_request(
     refreshed_once = False
     retries_used = 0
     aas_cleared_once = False
+    timed_out_channel: object = None
+    timeouts_on_channel = 0
 
     while True:
         attempt = retries_used + 1
@@ -326,7 +333,7 @@ async def async_spot_request(
             ConnectionResetError,
             BrokenPipeError,
         ) as err:
-            await active_transport.reset()
+            await active_transport.reset(expected=channel)
             if retries_used < _SPOT_MAX_RETRIES:
                 retries_used += 1
                 await _async_sleep(_compute_delay(attempt))
@@ -345,7 +352,7 @@ async def async_spot_request(
             # re-raised unchanged.
             if not is_ssl_transport_teardown_error(err):
                 raise
-            await active_transport.reset()
+            await active_transport.reset(expected=channel)
             if retries_used < _SPOT_MAX_RETRIES:
                 retries_used += 1
                 await _async_sleep(_compute_delay(attempt))
@@ -353,10 +360,15 @@ async def async_spot_request(
             raise SpotNetworkError("SSL transport teardown after retries.") from err
 
         except TimeoutError as err:
+            if channel is not timed_out_channel:
+                timed_out_channel, timeouts_on_channel = channel, 0
+            timeouts_on_channel += 1
             if retries_used < _SPOT_MAX_RETRIES:
                 retries_used += 1
                 await _async_sleep(_compute_delay(attempt))
                 continue
+            if timeouts_on_channel > _SPOT_MAX_RETRIES:
+                await active_transport.reset(expected=channel)
             raise SpotNetworkError("Timeout after retries.") from err
 
         except (OSError, socket.gaierror) as err:
@@ -364,7 +376,7 @@ async def async_spot_request(
                 retries_used += 1
                 await _async_sleep(_compute_delay(attempt))
                 continue
-            await active_transport.reset()
+            await active_transport.reset(expected=channel)
             raise SpotNetworkError("Transport error after retries.") from err
 
         if reply_bytes is None or len(reply_bytes) == 0:

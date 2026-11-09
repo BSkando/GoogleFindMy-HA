@@ -160,7 +160,7 @@ Notes for AI/automation:
 pre-commit run --all-files
 python3 -m script.hassfest
 pytest -q
-poetry run bandit -r custom_components -c pyproject.toml
+poetry run bandit -r custom_components script -c pyproject.toml
 ```
 
 ---

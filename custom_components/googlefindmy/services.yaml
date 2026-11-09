@@ -9,7 +9,10 @@
 
 locate_device:
   name: Locate Device
-  description: "Get the current location of a Google Find My device."
+  description: >-
+    Get the current location of a Google Find My device.
+    When called by a user, this action requires control permission on the device's
+    entities; automations and scripts without a user context are not affected.
   target:
     entity:
       domain: device_tracker
@@ -25,7 +28,10 @@ locate_device:
 
 play_sound:
   name: Play Sound
-  description: "Play a sound on a Google Find My device."
+  description: >-
+    Play a sound on a Google Find My device.
+    When called by a user, this action requires control permission on the device's
+    entities; automations and scripts without a user context are not affected.
   target:
     entity:
       domain: device_tracker
@@ -47,6 +53,8 @@ stop_sound:
     stop is still submitted, but the action reports that it could not be correlated
     and the device may keep ringing. That report is an error, so a script stops at
     this step unless you set continue_on_error.
+    When called by a user, this action requires control permission on the device's
+    entities; automations and scripts without a user context are not affected.
   target:
     entity:
       domain: device_tracker
@@ -73,7 +81,10 @@ stop_sound:
 
 locate_external:
   name: Locate Device (External)
-  description: "Locate a device using the external helper; delegates to the normal locate operation."
+  description: >-
+    Locate a device using the external helper; delegates to the normal locate operation.
+    When called by a user, this action requires control permission on the device's
+    entities; automations and scripts without a user context are not affected.
   target:
     entity:
       domain: device_tracker
@@ -96,17 +107,24 @@ locate_external:
 
 refresh_device_urls:
   name: Refresh Device URLs
-  description: "Refresh the configuration URLs for Google Find My devices to point to the integrated map view."
+  description: >-
+    Refresh the configuration URLs for Google Find My devices to point to the integrated
+    map view.
+    Administrators only when called by a user.
 
 rebuild_device_registry:
   name: Rebuild Device Registry
   description: >-
     Maintenance: rebuilds device registry links for Google Find My hubs and removes
     tracker devices incorrectly tied to the parent entry.
+    Administrators only when called by a user.
 
 rebuild_registry:
   name: Rebuild / Migrate Registry
-  description: "Maintenance: Run targeted migrations (data→options, unique IDs, button relinking) or rebuild entities/devices for this integration."
+  description: >-
+    Maintenance: Run targeted migrations (data→options, unique IDs, button relinking) or
+    rebuild entities/devices for this integration.
+    Administrators only when called by a user.
   fields:
     mode:
       name: Mode
@@ -140,3 +158,93 @@ rebuild_registry:
       selector:
         text:
           multiline: false
+
+read_beacon_state:
+  name: Read Beacon State
+  description: >-
+    Diagnostic: connects to a tracker over Bluetooth and reads its FMDN state, then
+    returns it as the response. It sends read requests only, never a ring or provisioning
+    command, and it runs only when you call it. Administrators only. The first access
+    of any client to a Provider that was never accessed before makes it choose an
+    owner account key until factory reset, so use it on trackers that are already
+    set up. Needs a Bluetooth adapter or connectable proxy in range.
+  fields:
+    device_id:
+      name: Device
+      description: "Select a Google Find My device (or pass a canonical ID via Developer Tools)."
+      required: true
+      selector:
+        device:
+          integration: googlefindmy
+    address:
+      name: Bluetooth address (optional)
+      description: >-
+        Connect to this address instead of searching for a Fast Pair advertisement that
+        matches the device's account key. The address is not checked against any key.
+      required: false
+      selector:
+        text:
+    timeout:
+      name: Timeout (optional)
+      description: "Time limit in seconds, 5 to 120, for the key lookup and again for connection and reads. Cleanup may add a few seconds."
+      required: false
+      default: 45
+      selector:
+        number:
+          min: 5
+          max: 120
+          unit_of_measurement: seconds
+    include_raw_response:
+      name: Include raw response (optional)
+      description: "Also return the raw provisioning response as hexadecimal. It holds the tracker's full current EID, so treat the output accordingly."
+      required: false
+      default: false
+      selector:
+        boolean:
+    search_seconds:
+      name: EID search window (optional)
+      description: >-
+        Seconds to search on each side of the tracker's clock, second by second, for
+        the counter behind an EID. 0 turns it off. It runs after the connection has
+        closed, adds up to 5 minutes and loads the CPU meanwhile.
+      required: false
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 172800
+          mode: box
+          unit_of_measurement: s
+    search_eid:
+      name: EID to search for (optional)
+      description: "An EID seen in an advertisement, 20 or 32 bytes in hexadecimal. Searched in addition to the EID the tracker reports and the EID the chosen address advertises. Used only with a search."
+      required: false
+      selector:
+        text:
+    identity_form:
+      name: Identity to connect to (optional)
+      description: "Which identity of the tracker to connect to: any, the locator that sends the FMDN frame, or the audio device that announces Common Audio. Ignored when an address is given."
+      required: false
+      default: any
+      selector:
+        select:
+          options:
+            - label: Any
+              value: any
+            - label: Locator
+              value: locator
+            - label: Audio device
+              value: audio
+    derivation_windows:
+      name: Derivation search window (optional)
+      description: >-
+        Rotation windows of 1024 s to search on each side of the tracker's clock, trying
+        other key and block forms against the target EIDs. 0 turns it off. It runs after
+        the connection has closed, adds up to 5 minutes and loads the CPU meanwhile.
+      required: false
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 256
+          mode: box

@@ -28,6 +28,7 @@ from custom_components.googlefindmy.const import (
 )
 from tests.helpers import drain_loop
 from tests.helpers.homeassistant import resolve_config_entry_lookup
+from tests.helpers.service_doubles import FakeServiceRegistry
 
 if TYPE_CHECKING:
     from custom_components.googlefindmy import RuntimeData
@@ -96,14 +97,7 @@ class _StubHttp:
         self.registered.append(view)
 
 
-class _StubServices:
-    def __init__(self) -> None:
-        self.registered: dict[tuple[str, str], Callable[..., Any]] = {}
-
-    def async_register(
-        self, domain: str, service: str, handler: Callable[..., Any]
-    ) -> None:
-        self.registered[(domain, service)] = handler
+_StubServices = FakeServiceRegistry
 
 
 class _StubConfigEntry:

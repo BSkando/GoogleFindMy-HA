@@ -1,11 +1,15 @@
+# custom_components/googlefindmy/SpotApi/spot_grpc_transport.py
 from __future__ import annotations
 
 import asyncio
+import logging
 import ssl
-from typing import Final
+from functools import cache
+from typing import Final, override
 
-from grpclib.client import Channel
+from grpclib.client import Channel as _GrpclibChannel
 from grpclib.encoding.base import CodecBase
+from grpclib.protocol import H2Protocol
 
 __all__ = [
     "RawCodec",
@@ -13,6 +17,17 @@ __all__ = [
     "SPOT_GRPC_TRANSPORT",
     "is_ssl_transport_teardown_error",
 ]
+
+_LOGGER = logging.getLogger(__name__)
+
+# RFC 8305 section 5 recommended delay; matches aiohttp's default in Home Assistant.
+_HAPPY_EYEBALLS_DELAY_S: Final[float] = 0.25
+
+
+@cache
+def _warn_without_happy_eyeballs() -> None:
+    """Warn once per process: every reconnect would otherwise repeat the line."""
+    _LOGGER.warning("grpclib internals changed; connecting without Happy Eyeballs")
 
 
 def is_ssl_transport_teardown_error(exc: BaseException) -> bool:
@@ -90,6 +105,48 @@ class RawCodec(CodecBase):
         raise TypeError(f"RawCodec expects bytes-like, got {type(data)!r}")
 
 
+class Channel(_GrpclibChannel):
+    """grpclib channel that falls back between address families (RFC 8305).
+
+    grpclib offers no public parameter, so this overrides a private method.
+    TCP only; the transport never passes ``path``. If grpclib's private
+    attributes change, fall back to its own sequential connect. If grpclib renames
+    the method, it stops calling this override; ``SpotGrpcTransport.get_channel``
+    warns about that.
+    """
+
+    @override
+    async def _create_connection(self) -> H2Protocol:
+        try:
+            factory = self._protocol_factory
+            host, port = self._host, self._port
+            ssl_context = self._ssl
+            server_hostname = (
+                self._config.ssl_target_name_override
+                if ssl_context is not None
+                else None
+            )
+        except AttributeError:
+            _warn_without_happy_eyeballs()
+            return await super()._create_connection()
+        transport, protocol = await asyncio.get_running_loop().create_connection(
+            factory,
+            host,
+            port,
+            ssl=ssl_context,
+            server_hostname=server_hostname,
+            happy_eyeballs_delay=_HAPPY_EYEBALLS_DELAY_S,
+        )
+        sock = transport.get_extra_info("socket")
+        _LOGGER.debug(
+            "Connected to Spot endpoint (%s,%s) over %s",
+            host,
+            port,
+            sock.family.name if sock is not None else "unknown",
+        )
+        return protocol
+
+
 class SpotGrpcTransport:
     """
     Shared grpclib transport for SPOT gRPC calls.
@@ -158,21 +215,30 @@ class SpotGrpcTransport:
             if self._channel is not None:
                 return self._channel
 
+            if not hasattr(_GrpclibChannel, "_create_connection"):
+                _warn_without_happy_eyeballs()
             ssl_ctx = await self._get_ssl_context() if self._use_ssl else None
             self._channel = Channel(
                 self._host, self._port, ssl=ssl_ctx, codec=self._codec
             )
             return self._channel
 
-    async def reset(self) -> None:
+    async def reset(self, *, expected: Channel | None = None) -> None:
         """
         Close and drop the cached channel so the next call recreates it.
 
         This is intended for callers to use on fatal channel/protocol failures
         where a clean reconnection is required.
+
+        Args:
+            expected: Close only if this is still the cached channel. A caller
+                whose request failed passes its own channel, so a late reset
+                cannot close a healthy channel another caller already rebuilt.
         """
         async with self._lock:
             if self._channel is None:
+                return
+            if expected is not None and self._channel is not expected:
                 return
             self._channel.close()
             self._channel = None

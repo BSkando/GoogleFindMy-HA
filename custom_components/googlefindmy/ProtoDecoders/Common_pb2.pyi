@@ -60,10 +60,25 @@ class LocationReport(Message, _MessageProto):
     ) -> None: ...
 
 class SemanticLocation(Message, _MessageProto):
-    __slots__ = ("locationName",)
+    __slots__ = ("locationName", "status", "semanticLocationIdentifier")
+    class SemanticLocationIdentifier(Message, _MessageProto):
+        __slots__ = ("uuid",)
+        UUID_FIELD_NUMBER: _ClassVar[int]
+        uuid: str
+        def __init__(self, uuid: str | None = ...) -> None: ...
+
     LOCATIONNAME_FIELD_NUMBER: _ClassVar[int]
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    SEMANTICLOCATIONIDENTIFIER_FIELD_NUMBER: _ClassVar[int]
     locationName: str
-    def __init__(self, locationName: str | None = ...) -> None: ...
+    status: int
+    semanticLocationIdentifier: bytes
+    def __init__(
+        self,
+        locationName: str | None = ...,
+        status: int | None = ...,
+        semanticLocationIdentifier: bytes | None = ...,
+    ) -> None: ...
 
 class GeoLocation(Message, _MessageProto):
     __slots__ = ("encryptedReport", "deviceTimeOffset", "accuracy")

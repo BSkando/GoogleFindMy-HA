@@ -425,16 +425,16 @@ def test_translation_values_contain_no_literal_urls() -> None:
 
 
 # German is the one locale where Home Assistant mandates a form of address: the
-# informal "du", never the formal "Sie" (Home Assistant translation guidelines,
+# informal "du", never the formal "Sie" (Home Assistant translation guidelines,  # codespell:ignore
 # German section: "Duze in den Uebersetzungen, und verwende nicht das formale
 # 'Sie'."). AGENTS.md pins this under "Consistent form of address". This guard
-# reproduces the reported regression -- formal "Sie"/"Ihre"/"Ihnen" leaking into
+# reproduces the reported regression -- formal "Sie"/"Ihre"/"Ihnen" leaking into  # codespell:ignore
 # the otherwise informal German file -- so it surfaces in the local suite instead
 # of in review.
 _GERMAN_FORMAL_ADDRESS_PATTERNS = (
-    # Formal address pronoun "Sie" -- covers the imperative "Wenden Sie ..."
-    # as well as the standalone "Sie koennen ...". Case sensitive on purpose:
-    # the informal lowercase "sie" (she/they) is legitimate and must not trip.
+    # Formal address pronoun "Sie" -- covers the imperative "Wenden Sie ..."  # codespell:ignore
+    # as well as the standalone "Sie koennen ...". Case sensitive on purpose:  # codespell:ignore
+    # the informal lowercase "sie" (she/they) is legitimate and must not trip.  # codespell:ignore
     re.compile(r"\bSie\b"),
     # Formal dative pronoun.
     re.compile(r"\bIhnen\b"),
@@ -444,27 +444,27 @@ _GERMAN_FORMAL_ADDRESS_PATTERNS = (
 
 
 def test_german_translation_uses_informal_du() -> None:
-    """German UI text must use the informal "du", never the formal "Sie"."""
+    """German UI text must use the informal "du", never the formal "Sie"."""  # codespell:ignore
     # Negative control first: a silently broken pattern set would let the real
     # check pass on everything, so pin that it still recognises every formal
-    # address form it guards against -- imperative, standalone "Sie", the bare
+    # address form it guards against -- imperative, standalone "Sie", the bare  # codespell:ignore
     # and inflected possessive "Ihr(e...)", and the dative "Ihnen".
     for formal in (
-        "Wenden Sie diese Optionen an.",  # formal imperative
-        "Beispiele finden Sie hier.",  # formal imperative
-        "Sie können das später ändern.",  # standalone formal "Sie"
+        "Wenden Sie diese Optionen an.",  # formal imperative  # codespell:ignore
+        "Beispiele finden Sie hier.",  # formal imperative  # codespell:ignore
+        "Sie können das später ändern.",  # standalone formal "Sie"  # codespell:ignore
         "Erneuere Ihre secrets.json.",  # inflected formal possessive
         "Ihr Gerät bleibt erhalten.",  # bare formal possessive "Ihr"
         "Das gehört Ihnen.",  # formal dative
     ):
         assert any(p.search(formal) for p in _GERMAN_FORMAL_ADDRESS_PATTERNS), formal
     # ...and that the sanctioned informal address does NOT trip it, including
-    # the lowercase "sie" (she/they) and "ihr" (informal plural) that merely
+    # the lowercase "sie" (she/they) and "ihr" (informal plural) that merely  # codespell:ignore
     # share a spelling with the formal forms but are legitimate German.
     informal = (
         "Wende diese Optionen an. Beispiele findest du hier. "
-        "Erneuere deine secrets.json. Wenn Geräte fehlen, werden sie "
-        "ausgeblendet, und ihr könnt sie wieder einblenden."
+        "Erneuere deine secrets.json. Wenn Geräte fehlen, werden sie "  # codespell:ignore
+        "ausgeblendet, und ihr könnt sie wieder einblenden."  # codespell:ignore
     )
     assert not any(p.search(informal) for p in _GERMAN_FORMAL_ADDRESS_PATTERNS)
 

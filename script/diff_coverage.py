@@ -49,7 +49,8 @@ import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from xml.etree import ElementTree
+
+from defusedxml import DefusedXmlException, ElementTree
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -165,6 +166,11 @@ def parse_coverage_xml(text: str, repo_root: Path) -> dict[str, dict[int, int]]:
 
     try:
         root = ElementTree.fromstring(text)
+    except DefusedXmlException as error:
+        raise MeasurementError(
+            f"coverage.xml declares an entity, which a coverage report "
+            f"never needs: {error!r}"
+        ) from error
     except ElementTree.ParseError as error:
         raise MeasurementError(f"coverage.xml is not parsable: {error}") from error
 

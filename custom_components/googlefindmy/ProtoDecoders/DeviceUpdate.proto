@@ -6,6 +6,18 @@
 syntax = "proto3";
 import "ProtoDecoders/Common.proto";
 
+// Schema additions marked "Spot@55f87f62" come from
+// https://github.com/leonboe1/Spot (Spot/DataProcessing/Protos/DeviceUpdate.proto,
+// commit 55f87f62302fae24150188124e8e07d5285568d8, GPL-3.0). They are
+// reverse-engineered and not confirmed by Google. Messages the integration does
+// not use yet are kept so the wire format does not have to be guessed later.
+//
+// Type rule for everything reachable from DevicesList or DeviceUpdate: a new
+// length-delimited field is `bytes`, even where Spot declares a message or a
+// string. A wrong declared type there raises DecodeError and fails the whole
+// device list. The comment names the Spot form, which stays available as a
+// message; read such a field through a guarded helper only.
+
 message GetEidInfoForE2eeDevicesResponse {
   EncryptedOwnerKeyAndMetadata encryptedOwnerKeyAndMetadata = 4;
 }
@@ -14,6 +26,8 @@ message EncryptedOwnerKeyAndMetadata {
   bytes encryptedOwnerKey = 1;
   int32 ownerKeyVersion = 2;
   string securityDomain = 3;
+  int32 domainKeyVersion = 4; // Spot@55f87f62
+  int32 domainType = 5; // Spot@55f87f62: e.g. LSKF=0
 }
 
 message DevicesList {
@@ -104,13 +118,38 @@ message DeviceUpdate {
 
 message DeviceMetadata {
   IdentitfierInformation identifierInformation = 1;
+  repeated bytes supportedActions = 2; // Spot@55f87f62 form: SupportedActions
+  bytes phoneInformation = 3; // Spot@55f87f62 form: DeviceMetadata.PhoneInformation
   DeviceInformation information = 4;
   string userDefinedDeviceName = 5;
   ImageInformation imageInformation = 6;
+
+  // Spot@55f87f62, reverse-engineered, not confirmed by Google.
+  message SupportedActions {
+    ExecuteActionType type = 1;
+    bool isSupported = 2;
+  }
+
+  // Spot@55f87f62, reverse-engineered, not confirmed by Google.
+  message PhoneInformation {
+    string modelNumber = 3;
+    string manufacturer = 4;
+    string codename = 5;
+    string carrier = 6;
+    int32 imei = 7;
+    DeviceInformation information = 26;
+  }
 }
 
 message ImageInformation {
   string imageUrl = 1;
+  int32 components = 2; // Spot@55f87f62
+  repeated bytes componentImages = 3; // Spot@55f87f62 form: ImageInformation.ComponentImage
+
+  // Spot@55f87f62, reverse-engineered, not confirmed by Google.
+  message ComponentImage {
+    string imageUrl = 3;
+  }
 }
 
 message IdentitfierInformation {
@@ -144,23 +183,68 @@ message DeviceInformation {
 }
 
 message DeviceTypeInformation {
+  bytes userDefinedName = 1; // Spot@55f87f62 form: string
   SpotDeviceType deviceType = 2;
+  repeated bytes deviceComponentsInformation = 9; // Spot@55f87f62 form: DeviceComponentInformation
+  SpotBeaconType beaconType = 11; // Spot@55f87f62
+  bytes contactInfo = 12; // Spot@55f87f62 form: DeviceDescription.ContactInfo
+  DeviceDescription.RingingVolume ringingVolume = 13; // Spot@55f87f62
+  repeated bytes componentDetails = 15; // Not in Spot, measured wire shape: DeviceComponentDetail
+}
+
+// Not in Spot. Shape measured on Pixel Buds Pro 2 (2026-11-05); the values were
+// 3, 1, 2 and their meaning next to DeviceComponent is not confirmed.
+message DeviceComponentDetail {
+  DeviceComponent component = 1;
+  bytes detail = 2;
 }
 
 message DeviceRegistration {
+  bytes canonicId = 1; // Spot@55f87f62 form: CanonicId
   DeviceTypeInformation deviceTypeInformation = 2;
+  bytes capabilities = 11; // Spot@55f87f62 form: DeviceCapabilities
+  bool isShared = 14; // Spot@55f87f62
   EncryptedUserSecrets encryptedUserSecrets = 19;
   string manufacturer = 20;
   string fastPairModelId = 21;
   int32 pairDate = 23;
+  int32 rotationExponent = 24; // Spot@55f87f62
+  bytes ringKey = 25; // Spot@55f87f62, key material
+  bytes recoveryKey = 26; // Spot@55f87f62, key material
+  bytes keyRotationInformation = 29; // Spot@55f87f62 form: DeviceRegistration.KeyRotationInformation
+  DeviceEncryptionScheme deviceEncryptionScheme = 30; // Spot@55f87f62
+  bytes unwantedTrackingKey = 31; // Spot@55f87f62, key material
+  bytes lostModeInformation = 32; // Spot@55f87f62 form: DeviceRegistration.LostModeInformation
+  bytes firstSecretsCreationDate = 33; // Spot@55f87f62 form: Time
   string model = 34;
+
+  // Spot@55f87f62, reverse-engineered, not confirmed by Google.
+  message KeyRotationInformation {
+    repeated RotatedEIK rotatedEIKs = 2;
+    bool keyRotationNeeded = 3;
+
+    // Spot@55f87f62, reverse-engineered, not confirmed by Google.
+    message RotatedEIK {
+      bytes encryptedEIK = 1;
+      Time creationDate = 8;
+      Time rotationRequestDate = 9;
+    }
+  }
+
+  // Spot@55f87f62, reverse-engineered, not confirmed by Google.
+  message LostModeInformation {
+    bool lostModeEnabled = 2;
+  }
 }
 
 message EncryptedUserSecrets {
   bytes encryptedIdentityKey = 1;
   int32 ownerKeyVersion = 3;
   bytes encryptedAccountKey = 4;
+  bytes sharingKeys = 6; // Spot@55f87f62 form: SharingKeys
   Time creationDate = 8;
+  bytes previousEikDate = 9; // Spot@55f87f62 form: Time
+  bool encryptedWithSharedSecret = 10; // Spot@55f87f62
   bytes encryptedSha256AccountKeyPublicAddress = 11;
 }
 
@@ -214,6 +298,17 @@ message AccessInformation {
   bool hasAccess = 2;
   bool isOwner = 3;
   bool thisAccount = 4;
+  bytes sharingKeys = 7; // Spot@55f87f62 form: SharingKeys
+}
+
+// Spot@55f87f62, reverse-engineered, not confirmed by Google.
+message SharingKeys {
+  // For an invitee: the owner's public key encrypted with the invitee's owner key.
+  // For an owner: the owner's private key encrypted with the owner's owner key.
+  bytes inviterKey = 4;
+  // For an invitee: the invitee's private key encrypted with the invitee's owner key.
+  // For an owner: the unencrypted invitee's key.
+  bytes inviteeKey = 5;
 }
 
 message RequestMetadata {
@@ -257,6 +352,7 @@ message E2EEPublicKeyRegistration {
     EncryptedUserSecrets encryptedUserSecrets = 3;
     PublicKeyIdList publicKeyIdList = 4;
     int32 pairingDate = 5;
+    DeviceEncryptionScheme deviceEncryptionScheme = 6; // Spot@55f87f62
 }
 
 message PublicKeyIdList {
@@ -285,6 +381,7 @@ message UploadPrecomputedPublicKeyIdsRequest {
 
 message DeviceCapabilities {
     bool isAdvertising = 1;
+    bool ringingVolumeSupported = 4; // Spot@55f87f62
     int32 capableComponents = 5;
     int32 trackableComponents = 6;
 }
@@ -293,8 +390,267 @@ message DeviceDescription {
     string userDefinedName = 1;
     SpotDeviceType deviceType = 2;
     repeated DeviceComponentInformation deviceComponentsInformation = 9;
+    SpotBeaconType beaconType = 11; // Spot@55f87f62
+    ContactInfo contactInfo = 12; // Spot@55f87f62
+    RingingVolume ringingVolume = 13; // Spot@55f87f62
+
+    // Spot@55f87f62, reverse-engineered, not confirmed by Google.
+    message ContactInfo {
+        string phoneNumber = 1;
+        string infoMessage = 2;
+        string email = 4;
+    }
+
+    // Spot@55f87f62, reverse-engineered, not confirmed by Google.
+    enum RingingVolume {
+        FACTORY_DEFAULT = 0;
+        LOW = 1;
+        MEDIUM = 2;
+        HIGH = 3;
+    }
 }
 
 message DeviceComponentInformation {
     string imageUrl = 1;
+    DeviceComponent deviceComponent = 2; // Spot@55f87f62
+}
+
+// Spot@55f87f62, reverse-engineered, not confirmed by Google.
+enum DeviceEncryptionScheme {
+    EID_20_BYTES = 0;
+    EID_32_BYTES = 1;
+}
+
+// Spot@55f87f62, reverse-engineered, not confirmed by Google.
+enum SpotBeaconType {
+    BEACON_TYPE_DEFAULT_TAG = 0;
+    BEACON_TYPE_EMBEDDED = 1;
+    BEACON_TYPE_SELF_REPORT_ONLY = 2;
+    BEACON_TYPE_SELF_REPORT_OR_ADVERTISING = 3;
+    BEACON_TYPE_NON_ADVERTISING_ACCESSORY = 4;
+}
+
+// Everything below is not used by the integration yet (Spot@55f87f62,
+// reverse-engineered, not confirmed by Google). Not on the device-list parse path.
+
+// Spot@55f87f62, reverse-engineered, not confirmed by Google.
+message ListEidsForBleDevicesResponse {
+    repeated DevicePublicKeyIds deviceEids = 1;
+
+    message DevicePublicKeyIds {
+        CanonicId canonicId = 1;
+        int32 rotationPeriod = 3;
+        PublicKeyIdList serverList = 4;
+    }
+}
+
+// Spot@55f87f62, reverse-engineered, not confirmed by Google.
+message GetBleDeviceRequest {
+    CanonicId device = 1;
+}
+
+// Spot@55f87f62, reverse-engineered, not confirmed by Google.
+message GetBleDeviceResponse {
+    DeviceRegistration deviceRegistration = 1;
+}
+
+// Spot@55f87f62, reverse-engineered, not confirmed by Google.
+message DeleteBleDeviceRequest {
+    CanonicId deviceToBeDeleted = 1;
+}
+
+// Spot@55f87f62, reverse-engineered, not confirmed by Google.
+message WebloginAuthResponse {
+    WebloginCookies webloginCookies = 1;
+
+    message WebloginCookies {
+        int32 resultCode = 1;
+        repeated Cookie cookies = 2;
+
+        message Cookie {
+            string cookieName = 1;
+            string cookieValue = 2; // Secret.
+            string domain = 3;
+            string subDomain = 4;
+            string path = 5;
+            bool secure = 6;
+            bool httpOnly = 7;
+            int64 maxAge = 8;
+        }
+    }
+}
+
+// Spot@55f87f62, reverse-engineered, not confirmed by Google.
+message UpdateBleDeviceSharingSettingsResponse {
+    repeated AccessInformation accessInformation = 1;
+    DeviceRegistration deviceRegistration = 2;
+}
+
+// Spot@55f87f62, reverse-engineered, not confirmed by Google.
+message InvitationToken {
+    bytes canonicId = 1;
+    sfixed64 sharingID = 2;
+    bytes ownerPublicKey = 3;
+}
+
+// Spot@55f87f62, reverse-engineered, not confirmed by Google.
+message UpdateBleDeviceSharingSettingsRequest {
+    CanonicId canonicId = 1;
+    SharingOperation operation = 2;
+    string updateForAccount = 3;
+    EncryptedUserSecrets encryptedUserSecrets = 5;
+    sfixed64 sharingID = 6;
+    bytes encryptedPrivateKeyWrapper = 7;
+
+    enum SharingOperation {
+        RETRIEVE_INVITATION = 0; // Executed by invitee.
+        STOP_SHARING = 4; // Executed by owner or invitee.
+        CREATE_INVITE = 7; // Executed by owner.
+        ACCEPT_INVITE = 9; // Executed by invitee.
+        UPLOAD_KEYS = 10; // Executed by owner.
+        UPLOAD_REENCRYPTED_KEYS = 11; // Executed by invitee.
+    }
+}
+
+// Spot@55f87f62, reverse-engineered, not confirmed by Google.
+message PrivateKeyWrapper {
+    bytes privateKey = 1;
+    bytes publicKey = 2;
+}
+
+// Only for UploadScans, not UploadOwnerScans.
+// Spot@55f87f62, reverse-engineered, not confirmed by Google.
+message UploadScansResponse {
+    repeated SightedDeviceInteraction sightedDeviceInteractions = 4;
+
+    message SightedDeviceInteraction {
+        repeated TruncatedEID truncatedEid = 1;
+        bytes unwantedTrackingKey = 2;
+        bytes ringKey = 3;
+        bool isLost = 5;
+    }
+}
+
+// Spot@55f87f62, reverse-engineered, not confirmed by Google.
+message UploadScansRequest {
+    bytes reportsEncryptedWithServerKey = 1;
+    string droidGuardResults = 2;
+}
+
+// Spot@55f87f62, reverse-engineered, not confirmed by Google.
+message RotateBleDeviceKeysRequest {
+    CanonicId canonicId = 1;
+    RotatedUserSecrets rotatedUserSecrets = 3;
+
+    message RotatedUserSecrets {
+        EncryptedUserSecrets encryptedUserSecrets = 1;
+        PublicKeyIdList publicKeyIdList = 2;
+        int32 pairDate = 3;
+        bytes ringKey = 4;
+        bytes recoveryKey = 5;
+        bytes unwantedTrackingKey = 6;
+    }
+}
+
+// Spot@55f87f62, reverse-engineered, not confirmed by Google.
+message UpdateBleDeviceRequest {
+    UpdateBleDeviceValue value = 1;
+    UpdateBleDeviceScope scope = 2;
+
+    message UpdateBleDeviceValue {
+        CanonicId canonicId = 1;
+        DeviceDescription description = 2;
+        EncryptedUserSecrets encryptedUserSecrets = 19;
+        LostModeValue lostMode = 32;
+
+        message LostModeValue {
+            bool enableLostMode = 1;
+        }
+    }
+
+    message UpdateBleDeviceScope {
+        string scope = 1;
+    }
+}
+
+// Spot@55f87f62, reverse-engineered, not confirmed by Google. Own devices use canonicDeviceId, foreign devices truncatedEid.
+message TrackerIdentifier {
+    bytes truncatedEid = 6;
+    bytes canonicDeviceId = 7;
+}
+
+// Spot@55f87f62, reverse-engineered, not confirmed by Google.
+message GetScannedDeviceInfoRequest {
+    TrackerIdentifier identifier = 1;
+    string languageTag = 3; // For example "en-us".
+}
+
+// Spot@55f87f62, reverse-engineered, not confirmed by Google.
+message GetScannedDeviceInfoResponse {
+    int32 trackableComponent = 2;
+    string manufacturerName = 5;
+    repeated DeviceComponentInformation deviceComponentsInformation = 6;
+    string modelName = 9;
+    string disableTrackerInstructionsUrl = 10;
+    repeated string enableOwnerInformationModeInstructions = 12;
+}
+
+// Spot@55f87f62, reverse-engineered, not confirmed by Google.
+message GooglePublicKeys {
+    EciesAeadHkdfPublicKeys eciesAeadHkdfPublicKeys = 1;
+    EcdsaPublicKeys ecdsaPublicKeys = 2;
+
+    message EciesAeadHkdfPublicKeys {
+        repeated EciesAeadHkdfPublicKey keys = 2;
+
+        message EciesAeadHkdfPublicKey {
+            EciesAeadHkdfPublicKeyInformation keyInformation = 1;
+            int32 keyIdentifier = 3;
+
+            message EciesAeadHkdfPublicKeyInformation {
+                string name = 1;
+                EciesAeadHkdfPublicKeyMaterial material = 2;
+
+                message EciesAeadHkdfPublicKeyMaterial {
+                    bytes x = 3;
+                    bytes y = 4;
+                }
+            }
+        }
+    }
+
+    message EcdsaPublicKeys {
+    }
+}
+
+// Spot@55f87f62, reverse-engineered, not confirmed by Google.
+message FastPairGetObservedDeviceRequest {
+    int32 fastPairModelId = 1;
+    string language = 3;
+    FastPairGetObservedDeviceRequestMetadata metadata = 6;
+
+    message FastPairGetObservedDeviceRequestMetadata {
+        FastPairGetObservedDeviceRequestMetadataPlayServices playServices = 2;
+
+        message FastPairGetObservedDeviceRequestMetadataPlayServices {
+            int32 version = 1;
+        }
+    }
+}
+
+// Spot@55f87f62, reverse-engineered, not confirmed by Google.
+message FastPairGetObservedDeviceResponse {
+    FastPairGetObservedDeviceResponseDeviceInformation deviceInformation = 1;
+
+    message FastPairGetObservedDeviceResponseDeviceInformation {
+        int32 fastPairModelId = 1;
+        string deviceImage = 4;
+        string modelName = 5;
+        FastPairAntiSpoofingKeys keys = 9;
+        string manufacturerName = 19;
+
+        message FastPairAntiSpoofingKeys {
+            bytes publicKey = 2;
+        }
+    }
 }

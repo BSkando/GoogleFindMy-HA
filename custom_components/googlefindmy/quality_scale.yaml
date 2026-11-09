@@ -25,6 +25,8 @@ rules:
       status: done
       evidence:
         - "custom_components/googlefindmy/__init__.py:async_setup_entry"
+        - "custom_components/googlefindmy/services.py:_async_authorize_device_call"
+        - "tests/test_services_permissions.py:test_read_only_user_is_rejected"
     - id: appropriate-polling
       status: done
       evidence:
@@ -33,7 +35,7 @@ rules:
     - id: brands
       status: done
       evidence:
-        - "custom_components/googlefindmy/icon.png"
+        - "custom_components/googlefindmy/brand/icon.png"
         - "custom_components/googlefindmy/icons.json"
     - id: common-modules
       status: done
@@ -216,6 +218,7 @@ rules:
       status: done
       evidence:
         - "custom_components/googlefindmy/device_tracker.py:_scan_available_trackers_from_coordinator"
+        - "tests/test_ble_battery_sensor_setup.py:test_registry_entry_no_data"
     - id: entity-category
       status: done
       evidence:
@@ -269,6 +272,9 @@ rules:
     - id: stale-devices
       status: done
       evidence:
+        - "custom_components/googlefindmy/coordinator/helpers/registry.py:plan_stale_device_removals"
+        - "custom_components/googlefindmy/coordinator/registry.py:RegistryOperations._remove_stale_devices"
+        - "tests/test_stale_device_removal.py"
         - "custom_components/googlefindmy/__init__.py:async_remove_config_entry_device"
 
   platinum:

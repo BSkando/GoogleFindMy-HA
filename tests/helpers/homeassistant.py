@@ -13,7 +13,6 @@ from unittest.mock import Mock
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import Platform
-from homeassistant.core import ServiceCall
 
 from custom_components.googlefindmy import UnknownEntry
 from custom_components.googlefindmy.const import (
@@ -25,6 +24,7 @@ from custom_components.googlefindmy.const import (
 from custom_components.googlefindmy.ha_typing import CloudDiscoveryRuntime
 
 from .config_flow import attach_config_entries_flow_manager
+from .service_doubles import FakeServiceRegistry
 
 __all__ = [
     "FakeConfigEntry",
@@ -576,23 +576,6 @@ async def deferred_subentry_entry_id_assignment(
     _assign_if_present(subentry, "entry_id", entry_id)
     if registered_entry is not None:
         manager.add_entry(registered_entry)
-
-
-class FakeServiceRegistry:
-    """Store registered service handlers for direct invocation in tests."""
-
-    def __init__(self) -> None:
-        self.handlers: dict[tuple[str, str], Callable[[ServiceCall], Any]] = {}
-
-    def async_register(
-        self,
-        domain: str,
-        service: str,
-        handler: Callable[[ServiceCall], Any],
-    ) -> None:
-        """Register a handler keyed by ``(domain, service)``."""
-
-        self.handlers[(domain, service)] = handler
 
 
 def runtime_subentry_manager(

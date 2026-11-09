@@ -262,11 +262,7 @@
         "title": "Actualizar credenciales (opcional)",
         "description": "Actualiza tus credenciales. Los valores existentes no se muestran por seguridad.\n\nPega el contenido completo de un nuevo **secrets.json** (generado ejecutando GoogleFindMyTools).\n\nUna vez enviadas, las credenciales se validan y se almacenan; la integración se recarga sin cambiar los nombres de tus entidades.",
         "data": {
-          "new_secrets_json": "Nuevo secrets.json (contenido completo)",
-          "subentry": "Grupo de funciones"
-        },
-        "data_description": {
-          "subentry": "Aplica las actualizaciones de credenciales al grupo de funciones seleccionado. Consulta la guía [Subentradas y grupos de funciones]({subentries_docs_url}) para conocer los detalles del flujo de trabajo."
+          "new_secrets_json": "Nuevo secrets.json (contenido completo)"
         }
       },
       "settings": {
@@ -287,7 +283,6 @@
           "map_view_token_expiration": "Activar caducidad del token de la vista de mapa",
           "map_view_enabled": "Activar la vista de mapa",
           "contributor_mode": "Modo de contribución de ubicaciones",
-          "subentry": "Grupo de funciones",
           "secrets_extra_watch_paths": "Rutas de vigilancia adicionales de secrets.json (una por línea)"
         },
         "data_description": {
@@ -300,7 +295,6 @@
           "map_view_token_expiration": "Si está activado, los tokens de la vista de mapa caducan tras 1 semana. Si está desactivado (por defecto), no caducan.",
           "map_view_enabled": "Activado por defecto. Si está desactivado, las solicitudes a la vista de mapa se rechazan como con un token inválido y se borran los enlaces de dispositivo. No renueva los enlaces existentes; si uno pudo filtrarse, usa 'Activar caducidad del token de la vista de mapa' (hasta dos semanas si ya estaba activada).",
           "contributor_mode": "Elige cómo contribuye tu dispositivo a la red de Google (Todas las zonas por defecto para aportes colaborativos o solo Zonas de alto tránsito).",
-          "subentry": "Guarda estas opciones en el grupo de funciones seleccionado. Consulta [Subentradas y grupos de funciones]({subentries_docs_url}) para ver ejemplos.",
           "secrets_extra_watch_paths": "Opcional. Rutas absolutas adicionales a archivos secrets.json que la integración debe vigilar para recogerlos automáticamente, una por línea. Déjalo vacío para vigilar solo las ubicaciones predeterminadas."
         }
       },
@@ -371,7 +365,7 @@
   "services": {
     "locate_device": {
       "name": "Localizar dispositivo",
-      "description": "Obtiene la ubicación actual de un dispositivo de Google Find My.",
+      "description": "Obtiene la ubicación actual de un dispositivo de Google Find My. Cuando la invoca un usuario, esta acción requiere permiso de control sobre las entidades del dispositivo; las automatizaciones y los scripts sin contexto de usuario no se ven afectados.",
       "fields": {
         "device_id": {
           "name": "Dispositivo",
@@ -381,7 +375,7 @@
     },
     "play_sound": {
       "name": "Reproducir sonido",
-      "description": "Reproduce un sonido en un dispositivo de Google Find My.",
+      "description": "Reproduce un sonido en un dispositivo de Google Find My. Cuando la invoca un usuario, esta acción requiere permiso de control sobre las entidades del dispositivo; las automatizaciones y los scripts sin contexto de usuario no se ven afectados.",
       "fields": {
         "device_id": {
           "name": "Dispositivo",
@@ -391,7 +385,7 @@
     },
     "stop_sound": {
       "name": "Detener sonido",
-      "description": "Detiene el sonido en un dispositivo de Google Find My.",
+      "description": "Detiene el sonido en un dispositivo de Google Find My. Cuando la invoca un usuario, esta acción requiere permiso de control sobre las entidades del dispositivo; las automatizaciones y los scripts sin contexto de usuario no se ven afectados.",
       "fields": {
         "device_id": {
           "name": "Dispositivo",
@@ -401,17 +395,17 @@
     },
     "refresh_device_urls": {
       "name": "Actualizar URL de los dispositivos",
-      "description": "Actualiza las URL de configuración de los dispositivos de Google Find My para que apunten a la vista de mapa integrada.",
+      "description": "Actualiza las URL de configuración de los dispositivos de Google Find My para que apunten a la vista de mapa integrada. Solo para administradores cuando la invoca un usuario.",
       "fields": {}
     },
     "rebuild_device_registry": {
       "name": "Reconstruir registro de dispositivos",
-      "description": "Mantenimiento: reconstruye los enlaces del registro de dispositivos para los hubs de Google Find My y elimina los rastreadores vinculados incorrectamente a la entrada principal.",
+      "description": "Mantenimiento: reconstruye los enlaces del registro de dispositivos para los hubs de Google Find My y elimina los rastreadores vinculados incorrectamente a la entrada principal. Solo para administradores cuando la invoca un usuario.",
       "fields": {}
     },
     "locate_external": {
       "name": "Localizar dispositivo (externo)",
-      "description": "Localiza un dispositivo usando el asistente externo; delega en la localización normal.",
+      "description": "Localiza un dispositivo usando el asistente externo; delega en la localización normal. Cuando la invoca un usuario, esta acción requiere permiso de control sobre las entidades del dispositivo; las automatizaciones y los scripts sin contexto de usuario no se ven afectados.",
       "fields": {
         "device_id": {
           "name": "Dispositivo",
@@ -425,7 +419,7 @@
     },
     "rebuild_registry": {
       "name": "Reconstruir / Migrar registro",
-      "description": "Mantenimiento: ejecutar una migración suave de datos→opciones o reconstruir entidades/dispositivos de esta integración.",
+      "description": "Mantenimiento: ejecutar una migración suave de datos→opciones o reconstruir entidades/dispositivos de esta integración. Solo para administradores cuando la invoca un usuario.",
       "fields": {
         "mode": {
           "name": "Modo",
@@ -434,6 +428,44 @@
         "device_ids": {
           "name": "Dispositivos (opcional)",
           "description": "Limita la operación a dispositivos concretos. Déjalo vacío para dirigirte a todos los dispositivos de Google Find My."
+        }
+      }
+    },
+    "read_beacon_state": {
+      "name": "Read Beacon State",
+      "description": "Diagnostic: connects to a tracker over Bluetooth, reads its FMDN state and returns it as the response. It sends read requests only and runs only when called; administrators only. The first access to a Provider that was never accessed before makes it choose an owner account key until factory reset, so use it on trackers that are already set up.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "Select a Google Find My device (or pass a canonical ID via Developer Tools)."
+        },
+        "address": {
+          "name": "Bluetooth address (optional)",
+          "description": "Connect to this address instead of searching for a Fast Pair advertisement that matches the device's account key. The address is not checked against any key."
+        },
+        "timeout": {
+          "name": "Timeout (optional)",
+          "description": "Time limit in seconds, 5 to 120, for the key lookup and again for connection and reads. Cleanup may add a few seconds."
+        },
+        "include_raw_response": {
+          "name": "Incluir respuesta sin procesar (opcional)",
+          "description": "Devuelve también la respuesta sin procesar del estado de aprovisionamiento en hexadecimal. Contiene el EID actual completo del rastreador; trata la salida en consecuencia."
+        },
+        "search_seconds": {
+          "name": "Ventana de búsqueda de EID (opcional)",
+          "description": "Segundos a cada lado del reloj del rastreador para buscar, segundo a segundo, el contador de un EID. 0 la desactiva. Se ejecuta al cerrarse la conexión, añade hasta 5 minutos y carga la CPU mientras tanto."
+        },
+        "search_eid": {
+          "name": "EID que buscar (opcional)",
+          "description": "Un EID visto en un anuncio, 20 o 32 bytes en hexadecimal. Se busca además del EID que informa el rastreador y del que anuncia la dirección elegida. Solo se usa con una búsqueda."
+        },
+        "identity_form": {
+          "name": "Identidad para conectar (opcional)",
+          "description": "A qué identidad del rastreador conectarse: cualquiera, el localizador que envía la trama FMDN o el dispositivo de audio que anuncia Common Audio. Se ignora si se indica una dirección."
+        },
+        "derivation_windows": {
+          "name": "Ventana de búsqueda de derivaciones (opcional)",
+          "description": "Ventanas de rotación de 1024 s que se buscan a cada lado del reloj del rastreador, probando otras formas de clave y de bloque contra los EID buscados. 0 la desactiva. Se ejecuta después de cerrar la conexión, añade hasta 5 minutos y carga la CPU mientras tanto."
         }
       }
     }
@@ -830,7 +862,7 @@
       "message": "El dispositivo {device_id} no se encontró o no pertenece a esta integración."
     },
     "no_active_entry": {
-      "message": "No hay ninguna entrada activa de Google Find My Device. Entradas activas: {active_count}/{total_count}. Activa una de las entradas configuradas ({entries}) o añade una cuenta nueva y vuelve a intentarlo."
+      "message": "No hay ninguna entrada activa de Google Find My Device. Entradas activas: {active_count}/{total_count}. Activa una de las entradas configuradas o añade una cuenta nueva y vuelve a intentarlo."
     },
     "locate_failed": {
       "message": "No se pudo localizar el dispositivo {device_id}: {error}"
@@ -859,11 +891,77 @@
     "stop_sound_uncorrelated": {
       "message": "Stop Sound para {device_id} se envió, pero no se pudo asociar al timbre en curso: se inició desde otro lugar, o la clave que tiene esta instancia es demasiado antigua para garantizarla. Puede que Google no consiga asociar la detención al timbre, así que el dispositivo podría seguir sonando. Pulsa el botón del rastreador o espera a que el timbre termine."
     },
+    "stop_sound_no_cancel_key": {
+      "message": "Stop Sound para {device_id} se envió, pero esta instancia no tiene ninguna clave de un timbre en este dispositivo. Probablemente el timbre se inició desde otro lugar, por ejemplo en la app Find Hub, así que puede que Google no consiga asociar la detención y el dispositivo siga sonando. Detenlo donde se inició, pulsa el botón del rastreador o espera a que el timbre termine."
+    },
+    "stop_sound_cancel_key_aged": {
+      "message": "Stop Sound para {device_id} se envió con la clave del último timbre que inició esta instancia, pero esa clave tiene más de 30 minutos y no puede garantizar el timbre actual, así que el dispositivo podría seguir sonando. Pulsa el botón del rastreador o espera a que el timbre termine."
+    },
+    "stop_sound_cancel_key_foreign": {
+      "message": "Stop Sound para {device_id} se envió con el request UUID indicado, pero no pertenece a ningún timbre iniciado por esta instancia, así que nada garantiza que la detención corresponda al timbre en curso y el dispositivo podría seguir sonando. Deja vacío el request UUID para usar la clave propia de esta instancia, pulsa el botón del rastreador o espera a que el timbre termine."
+    },
     "missing_token_cache": {
       "message": "Falta la caché de tokens. Proporciona la TokenCache específica de la entrada (por ejemplo, entry.runtime_data.token_cache)."
     },
     "missing_namespace": {
       "message": "Falta el espacio de nombres. Pasa el espacio de nombres específico de la entrada o el ID de ConfigEntry para mantener aislados los metadatos en caché."
+    },
+    "device_list_rate_limited": {
+      "message": "Google está limitando temporalmente las solicitudes de la lista de dispositivos. La integración lo volverá a intentar automáticamente."
+    },
+    "device_list_server_error": {
+      "message": "La lista de dispositivos no está disponible temporalmente (error del servidor {status}). La integración lo volverá a intentar automáticamente."
+    },
+    "device_list_rejected": {
+      "message": "El servidor rechazó la solicitud de la lista de dispositivos (HTTP {status})."
+    },
+    "device_list_decode_failed": {
+      "message": "No se pudo descodificar la respuesta de Google a la solicitud de la lista de dispositivos."
+    },
+    "device_list_logic_error": {
+      "message": "Google informó de un error al obtener la lista de dispositivos."
+    },
+    "multi_entry_guard": {
+      "message": "Hay varias entradas de Google Find My Device activas, pero esta solicitud no estaba asociada a ninguna de ellas. La integración lo volverá a intentar automáticamente."
+    },
+    "device_list_failed": {
+      "message": "No se pudo obtener la lista de dispositivos."
+    },
+    "device_list_network_error": {
+      "message": "Error de red al obtener la lista de dispositivos."
+    },
+    "device_list_unexpected_error": {
+      "message": "Error inesperado al obtener la lista de dispositivos."
+    },
+    "cold_start_empty_device_list": {
+      "message": "La lista de dispositivos estaba vacía justo después del inicio. Se considera temporal, y la integración lo volverá a intentar automáticamente."
+    },
+    "update_unexpected_error": {
+      "message": "Error inesperado durante la actualización ({error_type})."
+    },
+    "locate_timeout": {
+      "message": "La solicitud de localización del dispositivo {device_id} superó el tiempo de espera."
+    },
+    "locate_not_accepted": {
+      "message": "No se aceptó la solicitud de localización de ningún dispositivo en este ciclo ({not_accepted} no aceptadas, {rejected} rechazadas)."
+    },
+    "locate_all_rejected": {
+      "message": "El servidor rechazó la solicitud de localización de todos los dispositivos ({rejected}) en este ciclo."
+    },
+    "beacon_keys_unavailable": {
+      "message": "No key material is available for this device."
+    },
+    "beacon_invalid_address": {
+      "message": "The address is not a valid Bluetooth address."
+    },
+    "beacon_invalid_eid": {
+      "message": "El EID debe tener 20 o 32 bytes en hexadecimal."
+    },
+    "beacon_bluetooth_unavailable": {
+      "message": "The Bluetooth integration is not loaded."
+    },
+    "beacon_diagnostic_busy": {
+      "message": "Another beacon diagnostic is running. Try again when it has finished."
     }
   },
   "system_health": {

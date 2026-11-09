@@ -18,6 +18,13 @@ message LocationReport {
 
 message SemanticLocation {
   string locationName = 1;
+  int32 status = 5; // Spot@55f87f62
+  bytes semanticLocationIdentifier = 7; // Spot@55f87f62 form: SemanticLocation.SemanticLocationIdentifier
+
+  // Spot@55f87f62, reverse-engineered, not confirmed by Google.
+  message SemanticLocationIdentifier {
+    string uuid = 2;
+  }
 }
 
 enum Status {

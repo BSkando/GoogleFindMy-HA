@@ -12,6 +12,7 @@ import logging
 import math
 import os
 import subprocess
+from collections.abc import Iterable
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -86,6 +87,23 @@ _visible_device_names_by_entry: dict[str, set[str]] = {}
 # untouched (CQS). The coordinator reads it per poll via get_canonicless_counts.
 _canonicless_counts_by_entry: dict[str, dict[str, int]] = {}
 
+# Names of the devices dropped for lack of a canonical id on the LAST main poll,
+# per entry scope and regardless of class, each with the number of drops under it
+# (two devices can share a name). The stale-device removal reads them: a tracker
+# that Google still lists, only without a canonical id, is still in the account and
+# must not be removed as missing, and the count tells a new drop from one that was
+# already there. Each drop is keyed by ``(name, kind)``, the kind being the class of
+# the device Google reports (CANONICLESS_KIND_*), so a phone and a tracker of one
+# name that swap roles in one listing do not cancel out. Written and cleared together
+# with the tally above; read via get_canonicless_name_counts.
+_canonicless_name_counts_by_entry: dict[str, dict[tuple[str, str], int]] = {}
+
+#: Kinds of a canonicless drop, from the device type Google reports for the device
+#: (``identifierInformation.type``) and whether it carries an ``information`` block.
+CANONICLESS_KIND_ANDROID = "android"
+CANONICLESS_KIND_NO_INFORMATION = "no_information"
+CANONICLESS_KIND_TRACKER = "tracker"
+
 
 def get_canonicless_counts(entry_id: str) -> dict[str, int]:
     """Return the last main-poll canonicless drop tally for an entry scope.
@@ -103,6 +121,21 @@ def get_canonicless_counts(entry_id: str) -> dict[str, int]:
     return dict(counts)
 
 
+def get_canonicless_name_counts(entry_id: str) -> dict[tuple[str, str], int]:
+    """Return the names dropped for lack of a canonical id on the last main poll.
+
+    Args:
+        entry_id: The entry scope (``cache.entry_id`` or ``"<no-entry>"``).
+
+    Returns:
+        Each ``(raw device name, kind)`` with the number of drops under it,
+        the kind being one of the ``CANONICLESS_KIND_*`` values; empty for an
+        entry without a recorded main poll. A copy, so callers cannot change
+        the recorded tally.
+    """
+    return dict(_canonicless_name_counts_by_entry.get(entry_id, {}))
+
+
 def _reset_canonicless_warning_state(entry_id: str | None = None) -> None:
     """Clear the canonicless-device warning guard and the visibility-transition map.
 
@@ -117,10 +150,12 @@ def _reset_canonicless_warning_state(entry_id: str | None = None) -> None:
         _last_canonicless_count_by_entry.clear()
         _visible_device_names_by_entry.clear()
         _canonicless_counts_by_entry.clear()
+        _canonicless_name_counts_by_entry.clear()
         return
     _last_canonicless_count_by_entry.pop(entry_id, None)
     _visible_device_names_by_entry.pop(entry_id, None)
     _canonicless_counts_by_entry.pop(entry_id, None)
+    _canonicless_name_counts_by_entry.pop(entry_id, None)
 
 
 _text_format_module: Any | None = None
@@ -169,6 +204,63 @@ def _unknown_field_numbers(message: Message) -> list[int]:
     return sorted(numbers)
 
 
+def _usable_id_count(entries: Iterable[object] | None) -> int:
+    """Count the entries with a non-empty string ``id``, the row loop's entry test.
+
+    Takes the container as the row loop does: iterates it, without asking for its
+    truth value or length.
+    """
+    if entries is None:
+        return 0
+    count = 0
+    for entry in entries:
+        value = getattr(entry, "id", None)
+        if isinstance(value, str) and value:
+            count += 1
+    return count
+
+
+def _identifier_structure(device: object) -> tuple[str, bool, int, int]:
+    """Shape of a device's identifier block.
+
+    Returns the enum name of ``identifierInformation.type``, whether
+    ``phoneInformation`` is set, and the usable ID count of both branches (phone
+    branch, generic branch). Type name, presence and counts only, never the IDs,
+    so the line can go into a public issue. Never raises an ``Exception``: test
+    doubles lack fields, and an enum value newer than the vendored schema has no
+    name.
+    ``BaseException`` (cancellation, shutdown) propagates.
+    """
+    try:
+        info = getattr(device, "identifierInformation", None)
+        type_value = getattr(info, "type", None)
+        if isinstance(type_value, int) and not isinstance(type_value, bool):
+            try:
+                type_name = DeviceUpdate_pb2.IdentifierInformationType.Name(type_value)
+            except ValueError:
+                type_name = f"UNRECOGNIZED({int.__repr__(type_value)})"
+        else:
+            type_name = "<absent>"
+        phone = getattr(info, "phoneInformation", None)
+        # On a real message, reading an unset sub-message returns a default
+        # instance, so presence comes from HasField; doubles signal it by the
+        # attribute itself.
+        has_phone = bool(
+            info.HasField("phoneInformation")
+            if isinstance(info, Message)
+            else phone is not None
+        )
+        phone_ids = _usable_id_count(
+            getattr(getattr(phone, "canonicIds", None), "canonicId", None)
+        )
+        generic_ids = _usable_id_count(
+            getattr(getattr(info, "canonicIds", None), "canonicId", None)
+        )
+    except Exception:
+        return ("<unreadable>", False, -1, -1)
+    return (type_name, has_phone, phone_ids, generic_ids)
+
+
 class _DecryptLocationsCallable(Protocol):
     """Runtime signature for the decrypt helper imported lazily."""
 
@@ -183,6 +275,69 @@ class _DecryptLocationsCallable(Protocol):
 # --------------------------------------------------------------------------------------
 # Pretty printer helpers (dev tooling)
 # --------------------------------------------------------------------------------------
+
+
+# Fields that hold or wrap key material, tracker secrets or personal data of the
+# phone or the account. Developer output shows at most their length; the
+# integration never logs them. `tests/test_decoder_spot_schema.py` fails on a new
+# field whose name reads like a secret or like personal data and that is neither
+# listed here nor explained there. Only scalar fields count: `phoneInformation`
+# on `IdentitfierInformation` is a message that holds the canonical ids, and a
+# message of a listed name shows its fields one by one.
+_SECRET_PROTO_FIELDS: frozenset[str] = frozenset(
+    {
+        "contactInfo",
+        "cookieValue",
+        "droidGuardResults",
+        "email",
+        "encryptedEIK",
+        "infoMessage",
+        "encryptedPrivateKeyWrapper",
+        "imei",
+        "inviteeKey",
+        "inviterKey",
+        "keyRotationInformation",
+        "phoneInformation",
+        "phoneNumber",
+        "privateKey",
+        "recoveryKey",
+        "reportsEncryptedWithServerKey",
+        "ringKey",
+        "sharingKeys",
+        "unwantedTrackingKey",
+        "updateForAccount",
+    }
+)
+
+
+_SECRET_MESSAGE_FIELD = "gcmRegistrationId"  # The FCM push token of this client.
+
+
+def _clear_secret_fields(message: Message) -> None:
+    """Remove the scalar fields of ``_SECRET_PROTO_FIELDS``, also in sub-messages.
+
+    ``gcmRegistrationId`` is removed as a whole: its only field is a plain ``id``.
+    """
+    for field, value in message.ListFields():
+        if field.message_type is None:
+            if field.name in _SECRET_PROTO_FIELDS:
+                message.ClearField(field.name)
+        elif field.name == _SECRET_MESSAGE_FIELD:
+            message.ClearField(field.name)
+        elif isinstance(value, Message):
+            _clear_secret_fields(value)
+        else:
+            items = value.values() if hasattr(value, "values") else value
+            for item in items:
+                _clear_secret_fields(item)
+
+
+def _redacted_copy(message: Message) -> Message:
+    """Return a copy of ``message`` without secret fields for developer output."""
+    copy = type(message)()
+    copy.CopyFrom(message)
+    _clear_secret_fields(copy)
+    return copy
 
 
 def custom_message_formatter(
@@ -216,11 +371,20 @@ def custom_message_formatter(
             display_tz_name = "UTC"
 
     for field, value in message.ListFields():
-        if field.type == field.TYPE_BYTES:
-            hex_value = binascii.hexlify(value).decode("utf-8")
-            lines.append(f'{indent}{field.name}: "{hex_value}"')
+        if field.name == _SECRET_MESSAGE_FIELD:
+            lines.append(f"{indent}{field.name}: <redacted>")
+        elif field.message_type is None and field.name in _SECRET_PROTO_FIELDS:
+            size = len(value) if hasattr(value, "__len__") else 1
+            lines.append(f"{indent}{field.name}: <redacted len={size}>")
+        elif field.type == field.TYPE_BYTES:
+            # Repeated bytes fields hold a container of values.
+            for item in [value] if isinstance(value, bytes) else value:
+                hex_value = binascii.hexlify(item).decode("utf-8")
+                lines.append(f'{indent}{field.name}: "{hex_value}"')
         elif field.type == field.TYPE_MESSAGE:
-            if field.label == field.LABEL_REPEATED:
+            # The upb descriptor of current runtimes has no `label`, so repeated
+            # is read from the value (see `_unknown_field_numbers`).
+            if not isinstance(value, Message):
                 for sub_message in value:
                     if field.message_type.name == "Time":
                         # seconds (+ optional nanos) -> float seconds
@@ -349,6 +513,25 @@ def parse_device_list_protobuf(
 # --------------------------------------------------------------------------------------
 
 
+def trackable_components_of(registration: object) -> int | None:
+    """Return ``DeviceCapabilities.trackableComponents`` of a registration.
+
+    ``capabilities`` is declared ``bytes`` because foreign content must not fail
+    the device list (see ``ProtoDecoders/AGENTS.md``). This is the only reader:
+    it returns ``None`` for anything but a positive count and logs no content.
+    """
+    raw = getattr(registration, "capabilities", None)
+    if not isinstance(raw, bytes) or not raw:
+        return None
+    capabilities = DeviceUpdate_pb2.DeviceCapabilities()
+    try:
+        capabilities.ParseFromString(raw)
+    except DecodeError:
+        return None
+    count = capabilities.trackableComponents
+    return count if count > 0 else None
+
+
 def get_canonic_ids(
     device_list: DeviceUpdate_pb2.DevicesList,
 ) -> list[tuple[str, str]]:
@@ -425,6 +608,7 @@ _DEVICE_STUB_KEYS: tuple[str, ...] = (
     "fast_pair_model_id",
     "manufacturer",
     "model",
+    "trackable_components",
     "latitude",
     "longitude",
     "altitude",
@@ -458,6 +642,7 @@ def _build_device_stub(device_name: str, canonic_id: str) -> dict[str, Any]:
         "fast_pair_model_id": None,
         "manufacturer": None,
         "model": None,
+        "trackable_components": None,
         "latitude": None,
         "longitude": None,
         "altitude": None,
@@ -999,6 +1184,8 @@ def get_devices_with_location(
     canonicless_total = 0
     canonicless_benign = 0
     canonicless_warn = 0
+    # Names and kinds behind those drops, for the stale-device removal (S-R3d).
+    canonicless_names: dict[tuple[str, str], int] = {}
 
     # Names emitted (visible) in THIS run, captured to rebuild the visibility-transition
     # map after the loop. Compared against the previous run's set, never the running one.
@@ -1063,6 +1250,27 @@ def get_devices_with_location(
                     len(unknown_numbers),
                 )
 
+            if emit_canonicless_diagnostics and not _usable_id_count(canonic_ids):
+                # Structure only, never ID values; the device name stays at
+                # DEBUG. Which identifier branch Google filled for a device
+                # whose read entries yield no row in the loop below
+                # (BSkando/GoogleFindMy-HA#224, hypothesis "ID in the other
+                # branch"). Not on the capability probe pass, like the other
+                # canonicless output.
+                id_type, has_phone_info, phone_ids, generic_ids = _identifier_structure(
+                    device
+                )
+                _LOGGER.debug(
+                    "Device '%s' IDENTIFIER STRUCTURE: type=%s, "
+                    "has_phoneInformation=%s, phoneInformation.canonicIds=%d, "
+                    "canonicIds=%d",
+                    device_name,
+                    id_type,
+                    has_phone_info,
+                    phone_ids,
+                    generic_ids,
+                )
+
         # Try decryption ONCE per device; share across all its canonic IDs
         location_candidates: list[dict[str, Any]] = []
         encrypted_identity_key = None
@@ -1071,6 +1279,7 @@ def get_devices_with_location(
         fast_pair_model_id: str | None = None
         manufacturer: str | None = None
         model: str | None = None
+        trackable_components: int | None = None
         pair_date: int | None = None
         secrets_creation_date: int | None = None
         encrypted_account_key: str | None = None
@@ -1105,11 +1314,26 @@ def get_devices_with_location(
             except Exception as err:
                 # Defensive: decryption issues must not break the whole list, but log
                 # the root cause so users can debug key or parsing mismatches.
+                # The device list is refreshed without a user action (every
+                # DEVICE_LIST_POLL_INTERVAL), so records at INFO and above name the
+                # device by its canonical IDs and the display name goes to a DEBUG
+                # companion (AGENTS.md section 5 (b)).
+                ids_text = (
+                    ", ".join(
+                        str(getattr(canonic_id, "id", "")) for canonic_id in canonic_ids
+                    )
+                    or "<none>"
+                )
                 _LOGGER.warning(
-                    "Failed to decrypt location for device '%s': %s",
-                    device_name or "<unknown>",
+                    "Failed to decrypt location for device with IDs %s: %s",
+                    ids_text,
                     err,
                     exc_info=err,
+                )
+                _LOGGER.debug(
+                    "Decrypt failure above concerns '%s' (IDs: %s)",
+                    device_name or "<unknown>",
+                    ids_text,
                 )
                 location_candidates = []
 
@@ -1149,6 +1373,8 @@ def get_devices_with_location(
             if isinstance(raw_model, str):
                 raw_model = raw_model.strip()
                 model = raw_model or None
+
+            trackable_components = trackable_components_of(registration)
 
             # Anchor timestamps used for relative EID timebases
             # - pairDate is a scalar proto3 field: default 0 means "unset"
@@ -1234,11 +1460,18 @@ def get_devices_with_location(
                     ids_str,
                 )
             else:
-                # For tracker devices that should have keys but don't, log at WARNING
+                # For tracker devices that should have keys but don't, log at WARNING.
+                # This runs on every unattended device list refresh, so the WARNING
+                # names the device by its canonical IDs and the display name goes to
+                # a DEBUG companion (AGENTS.md section 5 (b)).
                 _LOGGER.warning(
-                    "DEBUG STRUCTURE: Missing Key for '%s' (IDs: %s)",
+                    "DEBUG STRUCTURE: Missing Key for device (IDs: %s)",
+                    ids_str or "<none>",
+                )
+                _LOGGER.debug(
+                    "Missing-key device above is '%s' (IDs: %s)",
                     device_name,
-                    ids_str,
+                    ids_str or "<none>",
                 )
 
                 # Level 1
@@ -1308,6 +1541,7 @@ def get_devices_with_location(
             row["fast_pair_model_id"] = fast_pair_model_id
             row["manufacturer"] = manufacturer
             row["model"] = model
+            row["trackable_components"] = trackable_components
             row["pair_date"] = pair_date
             row["secrets_creation_date"] = secrets_creation_date
             row["encrypted_account_key"] = encrypted_account_key
@@ -1344,12 +1578,13 @@ def get_devices_with_location(
             # probe pass (emit_canonicless_diagnostics=False) skips this whole branch, so
             # it neither logs nor advances the count. Severity tracks actionability: a
             # benign class (an Android phone, or a reduced listing with no 'information'
-            # block such as a Bluetooth accessory) drops as expected for its class and is
-            # located -- if at all -- via the Locate flow, so it only logs at DEBUG. It
-            # becomes warn-worthy only when it is tracker-shaped (has an 'information'
-            # block and is not Android) OR when it was visible in the previous run and is
-            # now gone (a real regression). The per-device name stays at DEBUG (AGENTS.md
-            # privacy guidance); the default-visible tier is the count WARNING below.
+            # block such as a Bluetooth accessory) is not warn-worthy for its class (a
+            # guess from the payload shape, see the else branch below), so it only logs at
+            # DEBUG. It becomes warn-worthy only when it is tracker-shaped (has an
+            # 'information' block and is not Android) OR when it was visible in the
+            # previous run and is now gone (a real regression). The per-device name stays
+            # at DEBUG (AGENTS.md privacy guidance); the default-visible tier is the count
+            # WARNING below.
             # has_information_block is recomputed locally because the binding above lives
             # inside the `if not encrypted_identity_key:` block and is not in scope when a
             # key was present.
@@ -1361,6 +1596,15 @@ def get_devices_with_location(
             # class (no was_visible component). Deliberately decoupled from the
             # warn_worthy logic below so the aggregate is deterministic per poll.
             canonicless_total += 1
+            if device_name:
+                if is_android_device:
+                    kind = CANONICLESS_KIND_ANDROID
+                elif not has_information_block:
+                    kind = CANONICLESS_KIND_NO_INFORMATION
+                else:
+                    kind = CANONICLESS_KIND_TRACKER
+                key = (device_name, kind)
+                canonicless_names[key] = canonicless_names.get(key, 0) + 1
             if benign:
                 canonicless_benign += 1
             else:
@@ -1378,15 +1622,21 @@ def get_devices_with_location(
                     device_name or "<unnamed>",
                 )
             else:
-                # Benign class, expected for this device type and not actionable: log at
-                # DEBUG with no remediation hint (no "reload"/"findable again") so the line
-                # is not mistaken for a problem the user can fix.
+                # Benign class (an Android phone, or a listing without an
+                # 'information' block): not warn-worthy, so DEBUG only and no
+                # remediation hint ("reload"/"findable again"). The class is
+                # inferred from the payload shape and can be wrong: a device that
+                # Find My Device locates or rings on its own also lands here
+                # (BSkando/GoogleFindMy-HA#224, a Wear OS watch), so the line asks
+                # for a report with the IDENTIFIER STRUCTURE line logged above.
                 _LOGGER.debug(
-                    "Device '%s' was returned without a canonical ID in this listing and "
-                    "is not shown as its own entity. This is expected for this device "
-                    "class (phones and Bluetooth accessories are located via the owner's "
-                    "Locate flow, not as standalone Find My Device entries); no action is "
-                    "required.",
+                    "Device '%s' was returned without a canonical ID in this listing "
+                    "and is not shown as its own entity. This is common for Android "
+                    "phones (located via the owner's Locate flow) and for accessories "
+                    "listed without an 'information' block. If this device is not a "
+                    "phone or tablet and Find My Device can locate or ring it on its "
+                    "own, please open an issue and include the 'IDENTIFIER STRUCTURE' "
+                    "line for it.",
                     device_name or "<unnamed>",
                 )
 
@@ -1410,6 +1660,7 @@ def get_devices_with_location(
             "benign": canonicless_benign,
             "warn": canonicless_warn,
         }
+        _canonicless_name_counts_by_entry[entry_scope] = canonicless_names
 
         if canonicless_count:
             # Default-visible aggregate: report only how many devices are affected, never
@@ -1444,7 +1695,7 @@ def get_devices_with_location(
 
 
 def print_location_report_upload_protobuf(hex_string: str) -> None:
-    msg = parse_location_report_upload_protobuf(hex_string)
+    msg = _redacted_copy(parse_location_report_upload_protobuf(hex_string))
     try:
         s = _get_text_format().MessageToString(
             msg, message_formatter=custom_message_formatter
@@ -1455,7 +1706,7 @@ def print_location_report_upload_protobuf(hex_string: str) -> None:
 
 
 def print_device_update_protobuf(hex_string: str) -> None:
-    msg = parse_device_update_protobuf(hex_string)
+    msg = _redacted_copy(parse_device_update_protobuf(hex_string))
     try:
         s = _get_text_format().MessageToString(
             msg, message_formatter=custom_message_formatter
@@ -1466,7 +1717,7 @@ def print_device_update_protobuf(hex_string: str) -> None:
 
 
 def print_device_list_protobuf(hex_string: str) -> None:
-    msg = parse_device_list_protobuf(hex_string)
+    msg = _redacted_copy(parse_device_list_protobuf(hex_string))
     try:
         s = _get_text_format().MessageToString(
             msg, message_formatter=custom_message_formatter

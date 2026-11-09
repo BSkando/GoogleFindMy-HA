@@ -5,6 +5,7 @@ coordinator.py for improved testability and maintainability (Phase 7).
 
 Contents:
 - normalize_device_type(): Normalize device type to int
+- normalize_component_count(): Normalize a component count to a positive int
 - normalize_fast_pair_model_id(): Normalize Fast Pair model ID
 - lookup_prio(): Priority lookup across multiple sources
 - lookup_prio_with_source(): Priority lookup with source label
@@ -30,6 +31,7 @@ __all__ = [
     "extract_timestamp_from_keys",
     "lookup_prio",
     "lookup_prio_with_source",
+    "normalize_component_count",
     "normalize_device_type",
     "normalize_fast_pair_model_id",
     "normalize_identity_timestamp",
@@ -69,6 +71,17 @@ def normalize_device_type(value: Any) -> int | None:
     if isinstance(value, str) and value.isdigit():
         return int(value)
     return None
+
+
+def normalize_component_count(value: Any) -> int | None:
+    """Return ``value`` if it is a positive ``int``, otherwise ``None``.
+
+    Bools and strings are rejected: the count comes from a decoded protobuf
+    field, so anything else in a row means the row was not built from one.
+    """
+    if type(value) is not int or value <= 0:
+        return None
+    return value
 
 
 # ---------------------------------------------------------------------------

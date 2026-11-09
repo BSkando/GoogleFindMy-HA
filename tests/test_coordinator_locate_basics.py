@@ -16,7 +16,7 @@ import asyncio
 import logging
 import math
 import time
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from aiohttp import ClientConnectionError
@@ -966,8 +966,9 @@ class TestAsyncStopSoundGating:
         outcome = await coord.async_stop_sound("dev-1")
         assert outcome is StopSoundOutcome.CANCELLED
         coord.api.async_stop_sound.assert_awaited_once_with("dev-1", "cached-uuid")
-        # successful stop removes the uuid
-        assert "dev-1" not in coord._sound_request_uuids
+        # A correlated stop keeps the key for a repeated press
+        # (IRR-CA-STOP-KEEPS-CANCEL-KEY).
+        assert coord._sound_request_uuids["dev-1"] == "cached-uuid"
 
     async def test_explicit_uuid_does_not_drop_our_own_cached_key(
         self, coord: LocateStub
@@ -992,15 +993,16 @@ class TestAsyncStopSoundGating:
     ) -> None:
         """Passing back our own live key is the one provable caller claim.
 
-        It is not a foreign key at all, so it correlates and is spent -- the
-        verdict follows the proof, not the presence of an argument.
+        It is not a foreign key at all, so it correlates -- the verdict follows
+        the proof, not the presence of an argument. Like an implicit correlated
+        stop it leaves the key in place (IRR-CA-STOP-KEEPS-CANCEL-KEY).
         """
 
         coord._sound_request_uuids["dev-1"] = "cached-uuid"
         outcome = await coord.async_stop_sound("dev-1", request_uuid="cached-uuid")
         assert outcome is StopSoundOutcome.CANCELLED
         coord.api.async_stop_sound.assert_awaited_once_with("dev-1", "cached-uuid")
-        assert "dev-1" not in coord._sound_request_uuids
+        assert coord._sound_request_uuids["dev-1"] == "cached-uuid"
 
     async def test_missing_uuid_reports_uncorrelated(self, coord: LocateStub) -> None:
         outcome = await coord.async_stop_sound("dev-1")
@@ -1330,15 +1332,18 @@ class TestStopBreaksSelfInflictedCooldown:
 
 
 class TestCorrelationPredicateIsShared:
-    """The cooldown gate and the outcome/pop branch must read ONE definition.
+    """The cooldown gate, the outcome and the stop delay must read ONE definition.
 
-    ``_stop_would_be_correlated`` was extracted precisely because two decisions
-    depend on the same question -- may this stop break a self-inflicted push
-    cooldown, and may an accepted stop spend the cached key -- and a second,
-    inline re-derivation at either site is free to drift away from the first.
-    These two tests bind the sites to the predicate by making the predicate
-    disagree with the raw cache state: an inline re-derivation would read the
-    cache and answer the opposite, so it cannot pass.
+    ``_stop_would_be_correlated`` was extracted precisely because several
+    decisions depend on the same question -- may this stop break a
+    self-inflicted push cooldown, is an accepted stop CANCELLED, and may it be
+    held back until STOP_SOUND_MIN_DELAY_AFTER_PLAY_S -- and a second, inline
+    re-derivation at any site is free to drift away from the first. (The
+    second decision used to be "may an accepted stop spend the cached key";
+    a stop no longer spends it, IRR-CA-STOP-KEEPS-CANCEL-KEY.) These two tests
+    bind the sites to the predicate by making the predicate disagree with the
+    raw cache state: an inline re-derivation would read the cache and answer
+    the opposite, so it cannot pass.
     """
 
     async def test_gate_follows_the_predicate_against_the_raw_cache(
@@ -1355,21 +1360,27 @@ class TestCorrelationPredicateIsShared:
         coord.api.async_stop_sound.assert_not_called()
         coord._stop_would_be_correlated.assert_called_once_with("dev-1", None)
 
-    async def test_outcome_and_pop_follow_the_predicate_against_the_raw_cache(
-        self, coord: LocateStub
+    async def test_outcome_and_delay_follow_the_predicate_against_the_raw_cache(
+        self, coord: LocateStub, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Predicate says yes while the cached key has aged past the limit."""
 
         coord._api_push_ready.return_value = True
         coord._sound_request_uuids["dev-1"] = "uuid-old"
         coord._sound_request_timestamps["dev-1"] = time.time() - 3600.0
+        coord._sound_play_accepted_at = {"dev-1": ("uuid-old", time.monotonic() - 3.0)}
+        sleep = AsyncMock(return_value=None)
+        monkeypatch.setattr(
+            "custom_components.googlefindmy.coordinator.locate.asyncio.sleep", sleep
+        )
         coord._stop_would_be_correlated = MagicMock(return_value=True)
         coord.api.async_stop_sound.return_value = SoundDispatchOutcome.ACCEPTED
 
         outcome = await coord.async_stop_sound("dev-1")
 
         assert outcome is StopSoundOutcome.CANCELLED
-        assert "dev-1" not in coord._sound_request_uuids
+        sleep.assert_awaited_once()
+        assert coord._sound_request_uuids["dev-1"] == "uuid-old"
 
 
 _ = DEFAULT_MIN_POLL_INTERVAL  # silence unused-import lint when production no-ops

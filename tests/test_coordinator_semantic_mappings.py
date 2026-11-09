@@ -15,7 +15,7 @@ from homeassistant.config_entries import ConfigEntryAuthFailed
 from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.googlefindmy._reauth_reason import ReauthReasonCode
-from custom_components.googlefindmy.const import OPT_SEMANTIC_LOCATIONS
+from custom_components.googlefindmy.const import DOMAIN, OPT_SEMANTIC_LOCATIONS
 from custom_components.googlefindmy.coordinator import (
     CryptoStatus,
     GoogleFindMyCoordinator,
@@ -1752,6 +1752,12 @@ async def test_the_surfaced_error_names_which_counter_fired() -> None:
     assert "1 not accepted" in message, message
     # Not the rejection wording: that guard must not have claimed this cycle.
     assert "was rejected by" not in message, message
+    assert recorded[-1].translation_domain == DOMAIN
+    assert recorded[-1].translation_key == "locate_not_accepted"
+    assert recorded[-1].translation_placeholders == {
+        "not_accepted": "1",
+        "rejected": "0",
+    }
 
 
 @pytest.mark.asyncio
@@ -1962,6 +1968,9 @@ async def test_an_all_rejected_cycle_still_uses_the_rejection_wording() -> None:
     message = str(recorded[-1])
     assert "Every device (2) was rejected by" in message, message
     assert "not accepted" not in message, message
+    assert recorded[-1].translation_domain == DOMAIN
+    assert recorded[-1].translation_key == "locate_all_rejected"
+    assert recorded[-1].translation_placeholders == {"rejected": "2"}
 
 
 @pytest.mark.asyncio

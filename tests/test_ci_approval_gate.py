@@ -2,10 +2,10 @@
 """Lock the approval gate of the CI workflow.
 
 Pull request runs of ``ci.yml`` pass the job ``approval_gate``, bound to the
-environment ``ci-freigabe``, before any test job starts. Where the environment
-has a required reviewer, the run waits for a manual approval, so the Home
-Assistant test load only happens when it is wanted; where it has no protection
-rules, the gate passes without waiting for approval. Pushes to ``main`` run
+environment ``home-assistant-tests``, before any test job starts. Where the
+environment has a required reviewer, the run waits for a manual approval, so the
+Home Assistant test load only happens when it is wanted; where it has no
+protection rules, the gate passes without waiting for approval. Pushes to ``main`` run
 without the gate.
 The contract is documented in the root ``AGENTS.md``
 (bullet "PR CI passes an approval gate").
@@ -26,8 +26,8 @@ The gate only works as a whole. Each check below guards one link:
   workflow sets no ``defaults`` or ``env`` that the check step would inherit.
 
 Repository-neutral: the test checks the shape of ``ci.yml``, not the protection
-rules of ``ci-freigabe``, so it holds in every repository that carries the
-workflow, with or without a required reviewer.
+rules of ``home-assistant-tests``, so it holds in every repository that carries
+the workflow, with or without a required reviewer.
 
 Conditions are compared as whole expressions (whitespace removed), not as
 substrings: an appended ``|| always()`` or ``|| github.event_name == ...`` keeps
@@ -111,12 +111,12 @@ def _condition(name: str, job: dict[str, Any]) -> str:
 
 
 def test_gate_job_waits_for_environment_on_pull_requests() -> None:
-    """The gate job is bound to ci-freigabe and only runs for pull requests."""
+    """The gate job is bound to home-assistant-tests and runs for pull requests only."""
 
     jobs = _jobs()
     assert GATE in jobs, "ci.yml must define the approval_gate job"
     gate = jobs[GATE]
-    assert gate.get("environment") == "ci-freigabe"
+    assert gate.get("environment") == "home-assistant-tests"
     assert (
         _condition(GATE, gate).replace(" ", "") == "github.event_name=='pull_request'"
     )

@@ -262,11 +262,7 @@
         "title": "עדכון אישורים (אופציונלי)",
         "description": "עדכן את האישורים שלך. ערכים קיימים אינם מוצגים מטעמי אבטחה.\n\nהדבק את התוכן המלא של קובץ **secrets.json** חדש (שנוצר על ידי הרצת GoogleFindMyTools).\n\nלאחר השליחה, האישורים מאומתים ונשמרים; השילוב נטען מחדש מבלי לשנות את שמות הישויות שלך.",
         "data": {
-          "new_secrets_json": "secrets.json חדש (תוכן מלא)",
-          "subentry": "קבוצת תכונות"
-        },
-        "data_description": {
-          "subentry": "החל את עדכוני האישורים על קבוצת התכונות שנבחרה. יש לעיין במדריך [תת-רשומות וקבוצות תכונות]({subentries_docs_url}) לפרטים על תהליך העבודה."
+          "new_secrets_json": "secrets.json חדש (תוכן מלא)"
         }
       },
       "settings": {
@@ -287,7 +283,6 @@
           "map_view_token_expiration": "אפשר תפוגת טוקן לתצוגת מפה",
           "map_view_enabled": "אפשר תצוגת מפה",
           "contributor_mode": "מצב תרומת מיקומים",
-          "subentry": "קבוצת תכונות",
           "secrets_extra_watch_paths": "נתיבי מעקב נוספים ל-secrets.json (אחד בכל שורה)"
         },
         "data_description": {
@@ -300,7 +295,6 @@
           "map_view_token_expiration": "כאשר מופעל, טוקני תצוגת מפה פגים לאחר שבוע. כאשר מושבת (ברירת מחדל), הטוקנים לא פגים.",
           "map_view_enabled": "מופעל כברירת מחדל. כאשר מושבת, בקשות לתצוגת המפה נדחות כמו טוקן לא תקין וקישורי המכשירים נמחקים. לא מחליף קישורים קיימים; אם קישור דלף, השתמשו ב'אפשר תפוגת טוקן לתצוגת מפה' (עד כשבועיים אם כבר הופעל).",
           "contributor_mode": "יש לבחור כיצד ההתקן שלך תורם לרשת של Google (כל האזורים כברירת מחדל לדיווח מקור-קהל, או רק אזורים בעלי תנועה גבוהה).",
-          "subentry": "אחסון אפשרויות אלה בקבוצת התכונות שנבחרה. יש לעיין ב[תת-רשומות וקבוצות תכונות]({subentries_docs_url}) לדוגמאות.",
           "secrets_extra_watch_paths": "אופציונלי. נתיבים מוחלטים נוספים לקבצי secrets.json שהשילוב אמור לעקוב אחריהם לצורך איסוף אוטומטי, אחד בכל שורה. יש להשאיר ריק כדי לעקוב אחר מיקומי ברירת המחדל בלבד."
         }
       },
@@ -371,7 +365,7 @@
   "services": {
     "locate_device": {
       "name": "איתור התקן",
-      "description": "קבלת המיקום הנוכחי של התקן Google Find My.",
+      "description": "קבלת המיקום הנוכחי של התקן Google Find My. כאשר משתמש מפעיל פעולה זו, נדרשת לו הרשאת שליטה על הישויות של ההתקן; אוטומציות וסקריפטים ללא הקשר משתמש אינם מושפעים.",
       "fields": {
         "device_id": {
           "name": "התקן",
@@ -381,7 +375,7 @@
     },
     "play_sound": {
       "name": "השמעת צליל",
-      "description": "השמע צליל על התקן Google Find My.",
+      "description": "השמע צליל על התקן Google Find My. כאשר משתמש מפעיל פעולה זו, נדרשת לו הרשאת שליטה על הישויות של ההתקן; אוטומציות וסקריפטים ללא הקשר משתמש אינם מושפעים.",
       "fields": {
         "device_id": {
           "name": "התקן",
@@ -391,7 +385,7 @@
     },
     "stop_sound": {
       "name": "עצור צליל",
-      "description": "עצור את הצליל על התקן Google Find My.",
+      "description": "עצור את הצליל על התקן Google Find My. כאשר משתמש מפעיל פעולה זו, נדרשת לו הרשאת שליטה על הישויות של ההתקן; אוטומציות וסקריפטים ללא הקשר משתמש אינם מושפעים.",
       "fields": {
         "device_id": {
           "name": "התקן",
@@ -401,17 +395,17 @@
     },
     "refresh_device_urls": {
       "name": "רענון כתובות התקנים",
-      "description": "רענון כתובות התצורה של התקני Google Find My כך שיפנו לתצוגת המפה המשולבת.",
+      "description": "רענון כתובות התצורה של התקני Google Find My כך שיפנו לתצוגת המפה המשולבת. למנהלים בלבד כאשר הפעולה מופעלת על ידי משתמש.",
       "fields": {}
     },
     "rebuild_device_registry": {
       "name": "בניית רישום ההתקנים מחדש",
-      "description": "תחזוקה: בנייה מחדש של קישורי רישום ההתקנים עבור רכזות Google Find My והסרת התקני גשש המקושרים בטעות לרשומה ההורה.",
+      "description": "תחזוקה: בנייה מחדש של קישורי רישום ההתקנים עבור רכזות Google Find My והסרת התקני גשש המקושרים בטעות לרשומה ההורה. למנהלים בלבד כאשר הפעולה מופעלת על ידי משתמש.",
       "fields": {}
     },
     "locate_external": {
       "name": "איתור התקן (חיצוני)",
-      "description": "איתור התקן באמצעות עוזר חיצוני; מאציל לפעולת האיתור הרגילה.",
+      "description": "איתור התקן באמצעות עוזר חיצוני; מאציל לפעולת האיתור הרגילה. כאשר משתמש מפעיל פעולה זו, נדרשת לו הרשאת שליטה על הישויות של ההתקן; אוטומציות וסקריפטים ללא הקשר משתמש אינם מושפעים.",
       "fields": {
         "device_id": {
           "name": "התקן",
@@ -425,7 +419,7 @@
     },
     "rebuild_registry": {
       "name": "בנייה מחדש / העברת רישום",
-      "description": "תחזוקה: הרצת העברה רכה של נתונים→אפשרויות או בנייה מחדש ישויות/התקנים עבור שילוב זה.",
+      "description": "תחזוקה: הרצת העברה רכה של נתונים→אפשרויות או בנייה מחדש ישויות/התקנים עבור שילוב זה. למנהלים בלבד כאשר הפעולה מופעלת על ידי משתמש.",
       "fields": {
         "mode": {
           "name": "מצב",
@@ -434,6 +428,44 @@
         "device_ids": {
           "name": "התקנים (אופציונלי)",
           "description": "הגבלת הפעולה להתקנים ספציפיים. יש להשאיר ריק כדי לפנות לכל התקני Google Find My."
+        }
+      }
+    },
+    "read_beacon_state": {
+      "name": "Read Beacon State",
+      "description": "Diagnostic: connects to a tracker over Bluetooth, reads its FMDN state and returns it as the response. It sends read requests only and runs only when called; administrators only. The first access to a Provider that was never accessed before makes it choose an owner account key until factory reset, so use it on trackers that are already set up.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "Select a Google Find My device (or pass a canonical ID via Developer Tools)."
+        },
+        "address": {
+          "name": "Bluetooth address (optional)",
+          "description": "Connect to this address instead of searching for a Fast Pair advertisement that matches the device's account key. The address is not checked against any key."
+        },
+        "timeout": {
+          "name": "Timeout (optional)",
+          "description": "Time limit in seconds, 5 to 120, for the key lookup and again for connection and reads. Cleanup may add a few seconds."
+        },
+        "include_raw_response": {
+          "name": "כלול תגובה גולמית (אופציונלי)",
+          "description": "מחזיר גם את התגובה הגולמית של מצב ההקצאה בהקסדצימלי. היא כוללת את ה-EID הנוכחי המלא של המכשיר, יש לטפל בפלט בהתאם."
+        },
+        "search_seconds": {
+          "name": "חלון חיפוש EID (אופציונלי)",
+          "description": "שניות מכל צד של שעון המכשיר לחיפוש, שנייה אחר שנייה, של המונה מאחורי EID. הערך 0 מכבה. החיפוש רץ אחרי סגירת החיבור, מוסיף עד 5 דקות ומעמיס על המעבד בזמן הזה."
+        },
+        "search_eid": {
+          "name": "EID לחיפוש (אופציונלי)",
+          "description": "EID שנראה בפרסום, 20 או 32 בתים בהקסדצימלי. מחופש בנוסף ל-EID שהמכשיר מדווח ול-EID שהכתובת שנבחרה מפרסמת. בשימוש רק עם חיפוש."
+        },
+        "identity_form": {
+          "name": "זהות לחיבור (אופציונלי)",
+          "description": "לאיזו זהות של המכשיר להתחבר: כלשהי, המאתר ששולח את מסגרת FMDN, או התקן השמע שמכריז על Common Audio. מתעלמים מכך כאשר צוינה כתובת."
+        },
+        "derivation_windows": {
+          "name": "חלון חיפוש גזירות (אופציונלי)",
+          "description": "חלונות סיבוב של 1024 שניות לחיפוש בכל צד של שעון המכשיר, תוך ניסיון צורות מפתח ובלוק אחרות מול ה-EID המבוקשים. 0 מכבה אותו. הוא רץ אחרי סגירת החיבור, מוסיף עד 5 דקות ומעמיס על המעבד בינתיים."
         }
       }
     }
@@ -830,7 +862,7 @@
       "message": "ההתקן {device_id} לא נמצא או אינו חלק משילוב זה."
     },
     "no_active_entry": {
-      "message": "אין רשומת Google Find My Device פעילה זמינה. רשומות פעילות: {active_count}/{total_count}. יש להפעיל אחת מהרשומות המוגדרות ({entries}) או להוסיף חשבון חדש, ולנסות שוב."
+      "message": "אין רשומת Google Find My Device פעילה זמינה. רשומות פעילות: {active_count}/{total_count}. יש להפעיל אחת מהרשומות המוגדרות או להוסיף חשבון חדש, ולנסות שוב."
     },
     "locate_failed": {
       "message": "איתור ההתקן {device_id} נכשל: {error}"
@@ -859,11 +891,77 @@
     "stop_sound_uncorrelated": {
       "message": "הפקודה Stop Sound עבור {device_id} נשלחה, אך לא ניתן היה לשייך אותה לצלצול הפעיל: הצלצול הופעל ממקום אחר, או שהמפתח שברשות מופע זה ישן מכדי להסתמך עליו. ייתכן ש-Google לא תצליח לשייך את העצירה לצלצול, ולכן המכשיר עלול להמשיך לצלצל. לחצו על הכפתור שבתגית או המתינו לסיום הצלצול."
     },
+    "stop_sound_no_cancel_key": {
+      "message": "הפקודה Stop Sound עבור {device_id} נשלחה, אך למופע זה אין מפתח לצלצול במכשיר הזה. כנראה שהצלצול הופעל ממקום אחר, למשל באפליקציית Find Hub, ולכן ייתכן ש-Google לא תצליח לשייך את העצירה והמכשיר ימשיך לצלצל. עצרו אותו במקום שבו הופעל, לחצו על הכפתור שבתגית או המתינו לסיום הצלצול."
+    },
+    "stop_sound_cancel_key_aged": {
+      "message": "הפקודה Stop Sound עבור {device_id} נשלחה עם המפתח של הצלצול האחרון שהפעיל מופע זה, אך המפתח ישן מ-30 דקות ואינו יכול להבטיח את הצלצול הנוכחי, ולכן המכשיר עלול להמשיך לצלצל. לחצו על הכפתור שבתגית או המתינו לסיום הצלצול."
+    },
+    "stop_sound_cancel_key_foreign": {
+      "message": "הפקודה Stop Sound עבור {device_id} נשלחה עם ה-request UUID שסופק, אך הוא אינו שייך לצלצול שהפעיל מופע זה, ולכן אין הוכחה שהעצירה תואמת את הצלצול הפעיל והמכשיר עלול להמשיך לצלצל. השאירו את ה-request UUID ריק כדי להשתמש במפתח של מופע זה, לחצו על הכפתור שבתגית או המתינו לסיום הצלצול."
+    },
     "missing_token_cache": {
       "message": "מטמון הטוקן חסר. יש לספק TokenCache ייעודי לרשומה (לדוגמה, entry.runtime_data.token_cache)."
     },
     "missing_namespace": {
       "message": "מרחב שמות חסר. יש להעביר את מרחב השמות הייעודי לרשומה או את מזהה ה-ConfigEntry כדי לשמור על בידוד של מטא-נתונים מאוחסנים."
+    },
+    "device_list_rate_limited": {
+      "message": "Google מגביל זמנית את הבקשות לרשימת המכשירים. השילוב ינסה שוב באופן אוטומטי."
+    },
+    "device_list_server_error": {
+      "message": "רשימת המכשירים אינה זמינה זמנית (שגיאת שרת {status}). השילוב ינסה שוב באופן אוטומטי."
+    },
+    "device_list_rejected": {
+      "message": "השרת דחה את הבקשה לרשימת המכשירים (HTTP {status})."
+    },
+    "device_list_decode_failed": {
+      "message": "לא ניתן היה לפענח את התשובה של Google לבקשה לרשימת המכשירים."
+    },
+    "device_list_logic_error": {
+      "message": "Google דיווח על שגיאה בעת אחזור רשימת המכשירים."
+    },
+    "multi_entry_guard": {
+      "message": "מספר רשומות של Google Find My Device פעילות, אך בקשה זו לא שויכה לאף אחת מהן. השילוב ינסה שוב באופן אוטומטי."
+    },
+    "device_list_failed": {
+      "message": "לא ניתן היה לאחזר את רשימת המכשירים."
+    },
+    "device_list_network_error": {
+      "message": "שגיאת רשת בעת אחזור רשימת המכשירים."
+    },
+    "device_list_unexpected_error": {
+      "message": "שגיאה בלתי צפויה בעת אחזור רשימת המכשירים."
+    },
+    "cold_start_empty_device_list": {
+      "message": "רשימת המכשירים הייתה ריקה מיד לאחר ההפעלה. מצב זה נחשב זמני, והשילוב ינסה שוב באופן אוטומטי."
+    },
+    "update_unexpected_error": {
+      "message": "שגיאה בלתי צפויה במהלך העדכון ({error_type})."
+    },
+    "locate_timeout": {
+      "message": "תם הזמן הקצוב לבקשת המיקום עבור המכשיר {device_id}."
+    },
+    "locate_not_accepted": {
+      "message": "במחזור זה לא התקבלה בקשת מיקום של אף מכשיר ({not_accepted} לא התקבלו, {rejected} נדחו)."
+    },
+    "locate_all_rejected": {
+      "message": "השרת דחה במחזור זה את בקשת המיקום עבור כל המכשירים ({rejected})."
+    },
+    "beacon_keys_unavailable": {
+      "message": "No key material is available for this device."
+    },
+    "beacon_invalid_address": {
+      "message": "The address is not a valid Bluetooth address."
+    },
+    "beacon_invalid_eid": {
+      "message": "ה-EID חייב להיות 20 או 32 בתים בהקסדצימלי."
+    },
+    "beacon_bluetooth_unavailable": {
+      "message": "The Bluetooth integration is not loaded."
+    },
+    "beacon_diagnostic_busy": {
+      "message": "Another beacon diagnostic is running. Try again when it has finished."
     }
   },
   "system_health": {

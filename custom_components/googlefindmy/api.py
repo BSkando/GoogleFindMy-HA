@@ -66,6 +66,7 @@ from .const import (
     CONTRIBUTOR_MODE_HIGH_TRAFFIC,
     CONTRIBUTOR_MODE_IN_ALL_AREAS,
     DEFAULT_CONTRIBUTOR_MODE,
+    DOMAIN,
     PlaySoundResult,
     SoundDispatchOutcome,
 )
@@ -1115,7 +1116,11 @@ class GoogleFindMyAPI:
 
         except NovaRateLimitError as err:
             _LOGGER.warning("Device list temporarily rate-limited: %s", _short_err(err))
-            raise UpdateFailed(_short_err(err)) from err
+            raise UpdateFailed(
+                _short_err(err),
+                translation_domain=DOMAIN,
+                translation_key="device_list_rate_limited",
+            ) from err
 
         except NovaHTTPError as err:
             # Map 401/403 explicitly to ConfigEntryAuthFailed
@@ -1133,7 +1138,12 @@ class GoogleFindMyAPI:
                 err.status,
                 _short_err(err),
             )
-            raise UpdateFailed(_short_err(err)) from err
+            raise UpdateFailed(
+                _short_err(err),
+                translation_domain=DOMAIN,
+                translation_key="device_list_server_error",
+                translation_placeholders={"status": str(err.status)},
+            ) from err
 
         except NovaAuthError as err:
             # Branch on the STATUS, never on the type. The transport raises this
@@ -1149,7 +1159,14 @@ class GoogleFindMyAPI:
                     getattr(err, "status", "unknown"),
                     _short_err(err),
                 )
-                raise UpdateFailed(_short_err(err)) from err
+                raise UpdateFailed(
+                    _short_err(err),
+                    translation_domain=DOMAIN,
+                    translation_key="device_list_rejected",
+                    translation_placeholders={
+                        "status": str(getattr(err, "status", "unknown"))
+                    },
+                ) from err
 
             # Mirror the location path's base handler: a permanent credential
             # failure (NovaAuthPermanentError subclass, or a base NovaAuthError
@@ -1176,7 +1193,11 @@ class GoogleFindMyAPI:
         except NovaProtobufDecodeError as err:
             # Protobuf decode failures indicate corrupted response or protocol mismatch
             _LOGGER.error("Failed to decode device list response: %s", _short_err(err))
-            raise UpdateFailed(_short_err(err)) from err
+            raise UpdateFailed(
+                _short_err(err),
+                translation_domain=DOMAIN,
+                translation_key="device_list_decode_failed",
+            ) from err
 
         except NovaLogicError as err:
             # Logic errors from Google (e.g., invalid device ID, permission denied)
@@ -1185,7 +1206,11 @@ class GoogleFindMyAPI:
                 err.code,
                 err.message or "Unknown",
             )
-            raise UpdateFailed(_short_err(err)) from err
+            raise UpdateFailed(
+                _short_err(err),
+                translation_domain=DOMAIN,
+                translation_key="device_list_logic_error",
+            ) from err
 
         # Normalize gpsoauth/ADM "BadAuthentication" style failures to ConfigEntryAuthFailed
         except (RuntimeError, ValueError) as err:
@@ -1226,12 +1251,20 @@ class GoogleFindMyAPI:
 
                 # Still raise UpdateFailed so the coordinator/flow can keep semantics,
                 # and the flow can recognize the guard by message content.
-                raise UpdateFailed(_short_err(msg)) from err
+                raise UpdateFailed(
+                    _short_err(msg),
+                    translation_domain=DOMAIN,
+                    translation_key="multi_entry_guard",
+                ) from err
 
             _LOGGER.warning(
                 "Failed to get basic device list (runtime/value): %s", _short_err(err)
             )
-            raise UpdateFailed(_short_err(err)) from err
+            raise UpdateFailed(
+                _short_err(err),
+                translation_domain=DOMAIN,
+                translation_key="device_list_failed",
+            ) from err
 
         except ClientError as err:
             # Minimal-invasive change: do not degrade to empty success; signal transient failure.
@@ -1239,7 +1272,9 @@ class GoogleFindMyAPI:
                 "Failed to get basic device list (async, network): %s", _short_err(err)
             )
             raise UpdateFailed(
-                f"Network error fetching device list: {_short_err(err)}"
+                f"Network error fetching device list: {_short_err(err)}",
+                translation_domain=DOMAIN,
+                translation_key="device_list_network_error",
             ) from err
 
         except Exception as err:
@@ -1248,7 +1283,9 @@ class GoogleFindMyAPI:
                 "Failed to get basic device list (async): %s", _short_err(err)
             )
             raise UpdateFailed(
-                f"Unexpected error fetching device list: {_short_err(err)}"
+                f"Unexpected error fetching device list: {_short_err(err)}",
+                translation_domain=DOMAIN,
+                translation_key="device_list_unexpected_error",
             ) from err
 
     def get_basic_device_list(self) -> list[dict[str, Any]]:
@@ -1451,11 +1488,18 @@ class GoogleFindMyAPI:
 
         except NovaAuthPermanentError as err:
             # Permanent auth failure (AAS token invalid) - immediate reauth required
+            # This path also runs on every poll cycle, so records at INFO and above
+            # name the device by id and the display name goes to a DEBUG companion
+            # (AGENTS.md section 5 (b)).
             _LOGGER.error(
-                "Permanent authentication failure for %s (%s): %s. Re-authentication required.",
-                device_name,
+                "Permanent authentication failure for device %s: %s. Re-authentication required.",
                 device_id,
                 _short_err(err),
+            )
+            _LOGGER.debug(
+                "Location lookup failure for device %s concerns %s",
+                device_id,
+                device_name,
             )
             exc = ConfigEntryAuthFailed(_short_err(err))
             exc.reauth_code = ReauthReasonCode.NOVA_AUTH_PERMANENT
@@ -1517,20 +1561,28 @@ class GoogleFindMyAPI:
             # Re-raise so coordinator can track consecutive failures before triggering reauth.
             if err.is_permanent:
                 _LOGGER.error(
-                    "Permanent authentication failure for %s (%s): %s",
-                    device_name,
+                    "Permanent authentication failure for device %s: %s",
                     device_id,
                     _short_err(err),
+                )
+                _LOGGER.debug(
+                    "Location lookup failure for device %s concerns %s",
+                    device_id,
+                    device_name,
                 )
                 exc = ConfigEntryAuthFailed(_short_err(err))
                 exc.reauth_code = ReauthReasonCode.NOVA_AUTH_PERMANENT
                 raise exc from err
 
             _LOGGER.warning(
-                "Transient authentication error for %s (%s): %s. May resolve in next poll cycle.",
-                device_name,
+                "Transient authentication error for device %s: %s. May resolve in next poll cycle.",
                 device_id,
                 _short_err(err),
+            )
+            _LOGGER.debug(
+                "Location lookup failure for device %s concerns %s",
+                device_id,
+                device_name,
             )
             # Re-raise to let coordinator track consecutive failures
             raise
@@ -1539,60 +1591,84 @@ class GoogleFindMyAPI:
             # Map 401/403 to ConfigEntryAuthFailed; other HTTP errors are transient here.
             if getattr(err, "status", None) in (401, 403):
                 _LOGGER.error(
-                    "Authentication failed (HTTP %s) while getting location for %s (%s): %s",
+                    "Authentication failed (HTTP %s) while getting location for device %s: %s",
                     err.status,
-                    device_name,
                     device_id,
                     _short_err(err),
+                )
+                _LOGGER.debug(
+                    "Location lookup failure for device %s concerns %s",
+                    device_id,
+                    device_name,
                 )
                 exc = ConfigEntryAuthFailed(_short_err(err))
                 exc.reauth_code = ReauthReasonCode.HTTP_401_AFTER_REFRESH
                 raise exc from err
             _LOGGER.warning(
-                "Server error (%s) while getting location for %s (%s): %s",
+                "Server error (%s) while getting location for device %s: %s",
                 err.status,
-                device_name,
                 device_id,
                 _short_err(err),
+            )
+            _LOGGER.debug(
+                "Location lookup failure for device %s concerns %s",
+                device_id,
+                device_name,
             )
             return {}
 
         except NovaRateLimitError as err:
             _LOGGER.warning(
-                "Location request rate-limited for %s (%s): %s",
-                device_name,
+                "Location request rate-limited for device %s: %s",
                 device_id,
                 _short_err(err),
+            )
+            _LOGGER.debug(
+                "Location lookup failure for device %s concerns %s",
+                device_id,
+                device_name,
             )
             return {}
 
         except NovaProtobufDecodeError as err:
             # Protobuf decode failures indicate corrupted response or protocol mismatch
             _LOGGER.error(
-                "Failed to decode location response for %s (%s): %s",
-                device_name,
+                "Failed to decode location response for device %s: %s",
                 device_id,
                 _short_err(err),
+            )
+            _LOGGER.debug(
+                "Location lookup failure for device %s concerns %s",
+                device_id,
+                device_name,
             )
             return {}
 
         except NovaLogicError as err:
             # Logic errors from Google (e.g., invalid device ID, permission denied)
             _LOGGER.error(
-                "Nova API Logic Error for %s (%s): Code %s - %s",
-                device_name,
+                "Nova API Logic Error for device %s: Code %s - %s",
                 device_id,
                 err.code,
                 err.message or "Unknown",
+            )
+            _LOGGER.debug(
+                "Location lookup failure for device %s concerns %s",
+                device_id,
+                device_name,
             )
             return {}
 
         except ClientError as err:
             _LOGGER.error(
-                "Network error while getting async location for %s (%s): %s",
-                device_name,
+                "Network error while getting async location for device %s: %s",
                 device_id,
                 _short_err(err),
+            )
+            _LOGGER.debug(
+                "Location lookup failure for device %s concerns %s",
+                device_id,
+                device_name,
             )
             return {}
 
@@ -1656,19 +1732,27 @@ class GoogleFindMyAPI:
                 )
                 return {}
             _LOGGER.error(
-                "Runtime error while getting async location for %s (%s): %s",
-                device_name,
+                "Runtime error while getting async location for device %s: %s",
                 device_id,
                 _short_err(err),
+            )
+            _LOGGER.debug(
+                "Location lookup failure for device %s concerns %s",
+                device_id,
+                device_name,
             )
             return {}
 
         except Exception as err:
             _LOGGER.error(
-                "Failed to get async location for %s (%s): %s",
-                device_name,
+                "Failed to get async location for device %s: %s",
                 device_id,
                 _short_err(err),
+            )
+            _LOGGER.debug(
+                "Location lookup failure for device %s concerns %s",
+                device_id,
+                device_name,
             )
             return {}
 
@@ -1875,9 +1959,9 @@ class GoogleFindMyAPI:
             ringing. The pre-/post-dispatch split is classified in-band on the
             raised NovaError (`NovaError.dispatched`), stamped uniformly at the
             transport's retry-loop choke point for every exit. See
-            IRR-CA-CANCEL-KEY-ON-SUCCESS-ONLY. On the Stop side the drop branch
-            is additionally bound to "the cancel key was our own and fresh", so
-            a foreign key passed in by a service call never evicts our handle.
+            IRR-CA-CANCEL-KEY-ON-SUCCESS-ONLY. On the Stop side the key is not
+            dropped at all (IRR-CA-STOP-KEEPS-CANCEL-KEY): neither our own key
+            nor a foreign key passed in by a service call evicts our handle.
 
             `ACCEPTED` means Nova accepted the submission (HTTP 200). This is
             NOT a confirmation that the device received or executed the command: no

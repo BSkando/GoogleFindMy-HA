@@ -18,7 +18,7 @@ Codex review finding on PR #1208:
 * noVNC must stay bound to loopback by default (earlier finding), so the
   fixed-password session is not exposed on the LAN during sign-in.
 * A context-level ``.dockerignore`` must be an ALLOWLIST (ignore the whole
-  build context, re-include only the two paths the Dockerfile COPYs) so that
+  build context, re-include only the two paths the Dockerfile copies) so that
   EVERY secret location -- ``docker-login/data`` AND the legacy
   ``Auth/secrets.json`` AND any future token/cache path -- stays out of the
   ``--build`` context, not just the one path a denylist happens to name. A bare
@@ -598,7 +598,7 @@ def test_dockerignore_is_allowlist_excluding_every_secret_path() -> None:
     ``Auth/secrets.json`` default of ``main.py::_resolve_secrets_path`` (and any
     future token/cache location) would still be uploaded with the ``--build``
     context. An allowlist -- ignore ``*``, then re-include only the paths the
-    Dockerfile COPYs -- structurally keeps every secret out at once.
+    Dockerfile copies -- structurally keeps every secret out at once.
     """
 
     rules = _dockerignore_rules()
@@ -1910,11 +1910,39 @@ def test_login_sh_never_reassigns_ifs() -> None:
     assert _ifs_reassignments(_read("login.sh")) == [], "login.sh reassigns IFS"
 
 
+# Forms that set or unset IFS without the text ``IFS=``: builtins that take a
+# variable name (``printf -v``, ``read``, ``mapfile``/``readarray``,
+# ``getopts``, ``unset``), a declaration without a value (``local IFS`` and
+# ``declare IFS`` make it unset in that scope), a loop variable, and the
+# assigning expansions ``${IFS:=…}``/``${IFS=…}``. ``$IFS`` and ``${IFS…}``
+# read the variable and are not names here.
+# The name may be quoted (``read -r "IFS"``, ``printf -v 'IFS'``); the shell
+# removes the quotes before the builtin sees the name.
+_IFS_WORD = r"""(?:(?<![A-Za-z0-9_${'"])IFS|"IFS"|'IFS')(?![A-Za-z0-9_=])"""
+_IFS_NAME_FORMS = re.compile(
+    r"|".join(
+        (
+            rf"\bprintf\b[^;|&]*?\s-v\s*{_IFS_WORD}",
+            rf"\b(?:read|mapfile|readarray|unset)\b[^;|&]*?\s{_IFS_WORD}",
+            rf"\bgetopts\s+\S+\s+{_IFS_WORD}",
+            rf"\b(?:local|declare|typeset)\b[^;|&=]*?\s{_IFS_WORD}",
+            rf"\b(?:for|select)\s+{_IFS_WORD}",
+            r"\$\{IFS:?=",
+        )
+    )
+)
+
+
 def _ifs_reassignments(script: str) -> list[str]:
-    """Return the lines of ``script`` that assign or append to ``IFS``.
+    """Return the lines of ``script`` that assign, append to or unset ``IFS``.
 
     The allowed ``IFS= read`` prefix is removed first, per occurrence, so a
-    second assignment on the same line is still reported.
+    second assignment on the same line is still reported. Besides ``IFS=`` and
+    ``IFS+=`` (also behind ``local``/``export``), the forms of
+    ``_IFS_NAME_FORMS`` count. Not seen: a nameref (``declare -n ref=IFS``
+    followed by ``ref=…``), a variable name held in another variable
+    (``printf -v "$var"``), text run through ``eval`` that hides the word, and
+    a sourced file.
     """
 
     found = []
@@ -1922,7 +1950,7 @@ def _ifs_reassignments(script: str) -> list[str]:
         if line.lstrip().startswith("#"):
             continue
         rest = re.sub(r"(?<![A-Za-z0-9_])IFS= read\b", "", line)
-        if re.search(r"(?<![A-Za-z0-9_])IFS\+?=", rest):
+        if re.search(r"(?<![A-Za-z0-9_])IFS\+?=", rest) or _IFS_NAME_FORMS.search(rest):
             found.append(f"{number}: {line.strip()}")
     return found
 
@@ -1938,6 +1966,27 @@ def _ifs_reassignments(script: str) -> list[str]:
         ("IFS+=:", True),
         ("while IFS= read -r a; do IFS=:; done", True),
         ("saved_ifs=$IFS", False),
+        ("printf -v IFS %s :", True),
+        ("printf '%s' \"$IFS\"", False),
+        ("read -r IFS <<< :", True),
+        ("read -r a b IFS", True),
+        ('read -r line <<< "$IFS"', False),
+        ("mapfile -t IFS < list", True),
+        ("readarray IFS < list", True),
+        ("getopts ab IFS", True),
+        ("unset IFS", True),
+        ("unset -v a IFS", True),
+        (': "${IFS:=:}"', True),
+        (': "${IFS=:}"', True),
+        ('echo "${IFS:-default}"', False),
+        ("local IFS", True),
+        ("declare IFS", True),
+        ("for IFS in a b; do :; done", True),
+        ("select IFS in a b; do :; done", True),
+        ('read -r "IFS" <<< :', True),
+        ("printf -v 'IFS' %s :", True),
+        ('unset "IFS"', True),
+        ('echo "IFS is fine"', False),
     ],
 )
 def test_ifs_reassignment_check_sees_every_form(line: str, flagged: bool) -> None:

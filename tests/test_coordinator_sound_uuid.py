@@ -302,18 +302,20 @@ async def test_async_stop_sound_sends_expired_cached_uuid_uncorrelated() -> None
     assert result is StopSoundOutcome.UNCORRELATED
     # ... but it IS the key that goes on the wire, not None.
     assert api_calls == [("device-1", "uuid-expired")]
-    # And it is not spent: only a provably correlated cancel pops a key
-    # (IRR-CA-POP-ON-CORRELATED-CANCEL-ONLY).
+    # And it is not spent: no stop spends a key
+    # (IRR-CA-STOP-KEEPS-CANCEL-KEY).
     assert coordinator._sound_request_uuids == {"device-1": "uuid-expired"}  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
-async def test_fresh_cancel_key_is_reported_cancelled_and_spent() -> None:
+async def test_fresh_cancel_key_is_reported_cancelled_and_kept() -> None:
     """Counterpart to the aged-key case: a fresh key proves correlation.
 
     Same setup, only the timestamp differs. This pins that the aged-key
-    behaviour above is driven by the age and by nothing else, and that the
-    CANCELLED path still spends the key it used.
+    behaviour above is driven by the age and by nothing else. The CANCELLED
+    path used to spend the key it used; it now keeps it, because HTTP 200 does
+    not prove the tracker executed the stop and a repeated press needs the
+    same handle (IRR-CA-STOP-KEEPS-CANCEL-KEY).
     """
 
     coordinator = GoogleFindMyCoordinator.__new__(GoogleFindMyCoordinator)
@@ -342,7 +344,7 @@ async def test_fresh_cancel_key_is_reported_cancelled_and_spent() -> None:
 
     assert result is StopSoundOutcome.CANCELLED
     assert api_calls == [("device-1", "uuid-fresh")]
-    assert coordinator._sound_request_uuids == {}  # type: ignore[attr-defined]
+    assert coordinator._sound_request_uuids == {"device-1": "uuid-fresh"}  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
@@ -417,7 +419,8 @@ async def test_async_stop_sound_uses_cached_uuid() -> None:
     result = await coordinator.async_stop_sound("device-1")
 
     assert result is StopSoundOutcome.CANCELLED
-    assert coordinator._sound_request_uuids == {}  # type: ignore[attr-defined]
+    # Kept for a repeated press (IRR-CA-STOP-KEEPS-CANCEL-KEY).
+    assert coordinator._sound_request_uuids == {"device-1": "uuid-1"}  # type: ignore[attr-defined]
     assert api_calls == [("device-1", "uuid-1")]
 
 
@@ -489,7 +492,7 @@ async def test_blank_request_uuid_falls_back_to_the_cached_cancel_key() -> None:
 
         assert sent == ["cached-key"], blank
         assert outcome is StopSoundOutcome.CANCELLED, blank
-        assert coordinator._sound_request_uuids == {}  # type: ignore[attr-defined]
+        assert coordinator._sound_request_uuids == {"device-1": "cached-key"}  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
@@ -566,13 +569,14 @@ async def test_blank_uuid_falls_through_to_the_aged_cached_key() -> None:
 
 @pytest.mark.asyncio
 async def test_a_play_landing_during_the_stop_keeps_its_fresh_key() -> None:
-    """The cancel key is spent by VALUE, so an interleaved Play is not evicted.
+    """An interleaved Play keeps the fresher key it stored during the stop.
 
-    The key is read before the Nova round trip and popped after it. A Play that
-    lands in between stores a fresher key for the same device; popping by
-    device id would then throw away the handle of a ring that just started --
-    the exact eviction the used_own_fresh_key gate exists to prevent, reached
-    through an interleaving instead of through a foreign UUID.
+    The key is read before the Nova round trip. A Play that lands in between
+    stores a fresher key for the same device, and nothing after the round trip
+    may evict it -- that would throw away the handle of a ring that just
+    started. This used to be guarded by popping the spent key by VALUE; since a
+    stop spends no key at all (IRR-CA-STOP-KEEPS-CANCEL-KEY), the test pins the
+    same outcome without a pop, so a reintroduced pop by device id fails here.
     """
 
     coordinator = GoogleFindMyCoordinator.__new__(GoogleFindMyCoordinator)

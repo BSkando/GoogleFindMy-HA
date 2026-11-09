@@ -1421,3 +1421,85 @@ def test_repair_issue_skipped_for_a_hass_without_start_state(
         device_tracker._async_track_frozen_attributes_issue(SimpleNamespace(), entry)
     assert entry.on_unload == []
     assert "Held-attributes repair issue not scheduled" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_redelivered_report_is_reported_not_changed(
+    hass: HomeAssistant,
+    use_real_homeassistant_modules: None,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """The same report arriving again must not make the tracker look fresher.
+
+    The rows come from the real ``update_device_cache``: an older fix, then a
+    report that is fused with it, then the very same report once more. The
+    second row is fed through the tracker and the real state machine; it must
+    be a report, not a change, or ``person`` would rank the tracker by a write
+    that carried no new location.
+    """
+
+    from homeassistant.const import EVENT_STATE_CHANGED, EVENT_STATE_REPORTED
+    from homeassistant.core import callback
+    from homeassistant.util import dt as dt_util
+
+    from custom_components.googlefindmy.coordinator import GoogleFindMyCoordinator
+
+    now = dt_util.utcnow().timestamp()
+    cache = GoogleFindMyCoordinator.__new__(GoogleFindMyCoordinator)
+    cache._device_location_data = {}
+    cache._device_names = {}
+    cache._device_update_history = {}
+    cache.increment_stat = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+    cache._is_on_hass_loop = lambda: True  # type: ignore[method-assign]
+    report = {
+        "latitude": 48.1003,
+        "longitude": 11.5,
+        # 50 m on both sides overlaps the ~33 m step, so the report is fused.
+        "accuracy": 50.0,
+        "status": "coordinate",
+    }
+    cache.update_device_cache(
+        "dev-1", {**report, "latitude": 48.1, "last_seen": now - 60}
+    )
+    cache.update_device_cache("dev-1", {**report, "last_seen": now - 30})
+    fused = dict(cache._device_location_data["dev-1"])
+    assert fused["status"] == "Fused (Weighted)"
+    cache.update_device_cache("dev-1", {**report, "last_seen": now - 30})
+    redelivered = dict(cache._device_location_data["dev-1"])
+
+    identity = {"id": "dev-1", "device_id": "dev-1", "name": "Pixel"}
+    entity = _tracker({**fused, **identity})
+    events: list[str] = []
+
+    @callback
+    def _record(event: Event) -> None:
+        events.append(event.event_type)
+
+    hass.bus.async_listen(EVENT_STATE_CHANGED, _record)
+    hass.bus.async_listen(
+        EVENT_STATE_REPORTED, _record, event_filter=callback(lambda _data: True)
+    )
+
+    def _write() -> None:
+        hass.states.async_set(
+            entity.entity_id,
+            "not_home",
+            _published(entity),
+            force_update=entity.force_update,
+        )
+
+    _write()
+    await hass.async_block_till_done()
+    first = hass.states.get(entity.entity_id)
+    assert first is not None
+    first_updated = first.last_updated
+    events.clear()
+
+    freezer.tick(30)
+    entity.coordinator.row = {**redelivered, **identity}
+    _write()
+    await hass.async_block_till_done()
+    second = hass.states.get(entity.entity_id)
+    assert second is not None
+    assert events == [EVENT_STATE_REPORTED]
+    assert second.last_updated == first_updated

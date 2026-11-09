@@ -34,7 +34,7 @@ CONFIG_ENTRY_VERSION: int = 2
 # NOTE: no ": str" annotation on purpose -- semantic-release's version_variables
 # regex only matches `NAME = "x"`, not `NAME: str = "x"`. Re-adding the annotation
 # would silently skip this file on the automated version bump.
-INTEGRATION_VERSION = "1.15.23"
+INTEGRATION_VERSION = "1.15.35"
 
 # --------------------------------------------------------------------------------------
 # Sound dispatch outcome (API -> coordinator boundary)
@@ -153,6 +153,24 @@ class PlaySoundResult:
 # Stop Sound outcome
 # --------------------------------------------------------------------------------------
 
+# Earliest point, in seconds after Nova ACCEPTED our own play, at which a stop
+# for that play is put on the wire. An earlier stop is held back until then.
+#
+# Measured, not derived, and with a stated limit. In a live series against a
+# moto tag 2 (2026-10-17/18) a stop that reached the tracker around the moment
+# its ring was about to start left the tracker silent -- no BLE advertisements
+# until a long press on its button -- in two of two runs (stops 11.8 s and
+# 9.4 s after acceptance, ring not yet started). Stops 11.6 s or later after
+# acceptance, with the ring already running, went through in four of four. The
+# ring itself started 5.6 to 10.3 s after acceptance in the runs where it was
+# heard. Twelve seconds clears every start that was heard, but not every start:
+# in one of the failed runs the ring had still not begun 11.8 s after
+# acceptance. It is a boundary drawn from six runs on one tracker model, not a
+# protocol constant, and Nova queues commands, so a ring may start later than
+# any value here. Waiting for a confirmed start would be the stronger rule; no
+# such signal is decoded yet.
+STOP_SOUND_MIN_DELAY_AFTER_PLAY_S: Final = 12.0
+
 
 class StopSoundOutcome(StrEnum):
     """Outcome of a Stop Sound attempt.
@@ -235,6 +253,40 @@ class StopSoundOutcome(StrEnum):
     wrong for most of it. Routing ``NOT_SENT`` to ``SUPPRESSED`` would answer a
     missing token with an unbounded "try again shortly".
     """
+
+
+class StopSoundUncorrelatedReason(StrEnum):
+    """Why a stop is ``StopSoundOutcome.UNCORRELATED``; selects the user message.
+
+    The outcome stays ONE state on purpose: every member below means "submitted,
+    effect unproven", and the service layer reports each of them as an error,
+    never as success (BSkando#195). What differs is what the user can do about
+    it, so each member has its own message instead of one text that lists every
+    cause and fits none.
+
+    Decided by ``classify_stop_correlation`` on the coordinator, from the same
+    state ``async_stop_sound`` reads before anything is sent. A key that this
+    integration sent earlier is NOT a member: since IRR-CA-STOP-KEEPS-CANCEL-KEY
+    a stop does not spend the key, so a repeated stop with our own fresh key is
+    ``CANCELLED`` again.
+    """
+
+    NO_KEY = "no_key"
+    """No key was supplied and this instance holds none for the device.
+
+    The ring was started elsewhere (the Find Hub app, another installation), or
+    by this instance so long ago that a reload dropped its key.
+    """
+
+    AGED_KEY = "aged_key"
+    """The key at hand is this instance's own, but older than SOUND_UUID_MAX_AGE_S.
+
+    It is still sent (it may be the handle on the audible ring), but it cannot
+    vouch for that ring.
+    """
+
+    FOREIGN_KEY = "foreign_key"
+    """The caller supplied a key that is not this instance's cached key."""
 
 
 # --------------------------------------------------------------------------------------

@@ -63,7 +63,7 @@ def test_nested_fcm_token_normalized() -> None:
     """Whitelisted keys nested under fcm_credentials are normalized too."""
     bundle = {
         "fcm_credentials": {
-            "installation": {"token": " inst alled "},
+            "installation": {"token": " inst alled "},  # codespell:ignore alled
             "fcm": {"registration": {"token": "reg\nistration"}},
         }
     }
@@ -515,7 +515,7 @@ async def test_d2_seeding_warning_names_rotation_outage_when_owner_present(
     assert warnings, "Expected a missing-shared_key warning to be emitted"
     message = warnings[0]
     # The corrected wording now surfaces the rotation-driven late outage.
-    assert "rotat" in message.lower()
+    assert "rotat" in message.lower()  # codespell:ignore rotat
     assert "will fail" in message
 
 
@@ -543,7 +543,7 @@ async def test_d2_seeding_warning_names_total_outage_when_owner_missing(
     assert "No location can be decrypted" in message
     # The total-outage variant must not claim a (non-existent) rotation grace
     # period.
-    assert "rotat" not in message.lower()
+    assert "rotat" not in message.lower()  # codespell:ignore rotat
 
 
 @pytest.mark.asyncio
@@ -746,7 +746,6 @@ async def test_credentials_step_blocks_when_shared_missing(
     The error lands in the new_secrets_json field slot (not base) and no entry
     update / reload is performed.
     """
-    from custom_components.googlefindmy.const import TRACKER_SUBENTRY_KEY
     from tests.test_options_flow_credentials_cache import (
         _DummyEntry,
         _DummyHass,
@@ -781,7 +780,7 @@ async def test_credentials_step_blocks_when_shared_missing(
         payload["owner_key"] = "AABBCC"
 
     result = await flow.async_step_credentials(
-        {"new_secrets_json": json.dumps(payload), "subentry": TRACKER_SUBENTRY_KEY}
+        {"new_secrets_json": json.dumps(payload)}
     )
     if inspect.isawaitable(result):
         result = await result
@@ -798,7 +797,6 @@ async def test_credentials_step_accepts_when_shared_present(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """async_step_credentials accepts a shared_key refresh and finalizes."""
-    from custom_components.googlefindmy.const import TRACKER_SUBENTRY_KEY
     from tests.test_options_flow_credentials_cache import (
         _DummyEntry,
         _DummyHass,
@@ -838,7 +836,7 @@ async def test_credentials_step_accepts_when_shared_present(
     }
 
     result = await flow.async_step_credentials(
-        {"new_secrets_json": json.dumps(payload), "subentry": TRACKER_SUBENTRY_KEY}
+        {"new_secrets_json": json.dumps(payload)}
     )
     if inspect.isawaitable(result):
         result = await result
@@ -861,7 +859,6 @@ async def test_credentials_step_shared_present_but_no_token_is_invalid_token(
     shared_key is present) but the candidate-token check then rejects the bundle
     with ``invalid_token`` in the base slot.
     """
-    from custom_components.googlefindmy.const import TRACKER_SUBENTRY_KEY
     from tests.test_options_flow_credentials_cache import (
         _DummyEntry,
         _DummyHass,
@@ -895,7 +892,7 @@ async def test_credentials_step_shared_present_but_no_token_is_invalid_token(
     }
 
     result = await flow.async_step_credentials(
-        {"new_secrets_json": json.dumps(payload), "subentry": TRACKER_SUBENTRY_KEY}
+        {"new_secrets_json": json.dumps(payload)}
     )
     if inspect.isawaitable(result):
         result = await result

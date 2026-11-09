@@ -1018,10 +1018,6 @@ def _stub_homeassistant() -> None:
     class CoreState:  # minimal CoreState stub
         running = "running"
 
-    class ServiceCall:  # pragma: no cover - stub for service handlers
-        def __init__(self, data=None):
-            self.data = data or {}
-
     class Event(SimpleNamespace):
         """Minimal Event stub carrying type and data payload."""
 
@@ -1048,7 +1044,6 @@ def _stub_homeassistant() -> None:
 
     core_module.CoreState = CoreState
     core_module.HomeAssistant = HomeAssistant
-    core_module.ServiceCall = ServiceCall
     core_module.Event = Event
     core_module.State = State
     core_module.CALLBACK_TYPE = Callable[[], None]
@@ -1057,13 +1052,59 @@ def _stub_homeassistant() -> None:
     exceptions_module = ModuleType("homeassistant.exceptions")
 
     class HomeAssistantError(Exception):
-        pass
+        """Stubbed HomeAssistantError accepting the core translation metadata.
+
+        Mirrors ``homeassistant.exceptions.HomeAssistantError.__init__``: the
+        three translation arguments are stored as attributes, and without a
+        message but with domain and key the key becomes the only argument. The
+        core then looks the key up in the translation cache of the running
+        instance; the stub renders the raw key, which is what the core returns
+        when nothing is cached. That is the least favourable case, so a wrapper
+        that builds its text from such an exception shows the raw key in tests
+        too. ``ServiceValidationError`` below keeps its own ``__str__``
+        (``"domain:key"``); see its docstring.
+        ``tests/test_exception_stub_translation_parity.py`` holds the mirror.
+        The class defaults match the core, so a subclass that skips
+        ``super().__init__`` still reads ``None`` and ``False``.
+        """
+
+        generate_message: bool = False
+        translation_domain: str | None = None
+        translation_key: str | None = None
+        translation_placeholders: Mapping[str, Any] | None = None
+
+        def __init__(
+            self,
+            *args: Any,
+            translation_domain: str | None = None,
+            translation_key: str | None = None,
+            translation_placeholders: Mapping[str, Any] | None = None,
+        ) -> None:
+            if not args and translation_key and translation_domain:
+                self.generate_message = True
+                args = (translation_key,)
+            super().__init__(*args)
+            self.translation_domain = translation_domain
+            self.translation_key = translation_key
+            self.translation_placeholders = translation_placeholders
 
     class ConfigEntryNotReady(HomeAssistantError):
-        pass
+        """Stubbed ConfigEntryNotReady falling back to its cause like the core.
+
+        The core's ``IntegrationError.__str__`` returns ``str(self.__cause__)``
+        when the exception carries no message.
+        """
+
+        def __str__(self) -> str:
+            return super().__str__() or str(self.__cause__)
 
     class ServiceValidationError(HomeAssistantError):
-        """Stubbed ServiceValidationError carrying translation metadata."""
+        """Stubbed ServiceValidationError carrying translation metadata.
+
+        Unlike the base stub (and the core), a key without a message renders
+        as ``"domain:key"`` here; tests assert on that form (``tests/AGENTS.md``,
+        string representation contract), so it stays.
+        """
 
         def __init__(
             self,
@@ -1109,6 +1150,11 @@ def _stub_homeassistant() -> None:
     exceptions_module.ServiceValidationError = ServiceValidationError
     exceptions_module.ConfigEntryAuthFailed = ConfigEntryAuthFailed
     sys.modules["homeassistant.exceptions"] = exceptions_module
+    from tests.helpers.service_doubles import install_service_auth_stubs
+
+    install_service_auth_stubs(
+        core_module=core_module, exceptions_module=exceptions_module
+    )
 
     helpers_pkg = sys.modules.setdefault(
         "homeassistant.helpers", ModuleType("homeassistant.helpers")
@@ -1753,8 +1799,17 @@ def _stub_homeassistant() -> None:
     sys.modules["homeassistant.helpers.storage"] = storage_module
     setattr(helpers_pkg, "storage", storage_module)
 
-    class UpdateFailed(Exception):
-        pass
+    class UpdateFailed(HomeAssistantError):
+        """Stubbed UpdateFailed; like the core it is a ``HomeAssistantError``."""
+
+        def __init__(
+            self,
+            *args: Any,
+            retry_after: float | None = None,
+            **kwargs: Any,
+        ) -> None:
+            super().__init__(*args, **kwargs)
+            self.retry_after = retry_after
 
     update_coordinator_module = sys.modules["homeassistant.helpers.update_coordinator"]
     update_coordinator_module.UpdateFailed = UpdateFailed
@@ -1898,6 +1953,7 @@ def _stub_homeassistant() -> None:
 
         __slots__ = (
             "entity_id",
+            "domain",
             "platform",
             "unique_id",
             "config_entry_id",
@@ -1916,6 +1972,9 @@ def _stub_homeassistant() -> None:
             config_entry_subentry_id: str | None,
         ) -> None:
             self.entity_id = entity_id
+            # Home Assistant derives the entity domain from the entity_id;
+            # ``platform`` names the integration that owns the entry.
+            self.domain = entity_id.split(".", 1)[0]
             self.platform = platform
             self.unique_id = unique_id
             self.config_entry_id = config_entry_id
@@ -1933,9 +1992,16 @@ def _stub_homeassistant() -> None:
         def async_get(self, entity_id: str) -> _StubEntityRegistryEntry | None:
             return self.entities.get(entity_id)
 
-        def async_get_entity_id(self, platform: str, unique_id: str) -> str | None:
+        def async_get_entity_id(
+            self, domain: str, platform: str, unique_id: str
+        ) -> str | None:
+            """Return the entity_id for ``(domain, platform, unique_id)`` like HA."""
             for entity_id, entry in self.entities.items():
-                if entry.platform == platform and entry.unique_id == unique_id:
+                if (
+                    entry.domain == domain
+                    and entry.platform == platform
+                    and entry.unique_id == unique_id
+                ):
                     return entity_id
             return None
 
@@ -2045,6 +2111,7 @@ def _stub_homeassistant() -> None:
     def _entity_base() -> type:
         class _EntityBase:  # pragma: no cover - stub behaviour
             _attr_has_entity_name = True
+            _context = None
 
             def __init__(self, *_args, **_kwargs) -> None:
                 self.entity_id = None
@@ -2102,10 +2169,58 @@ def _stub_homeassistant() -> None:
     sensor_module = ModuleType("homeassistant.components.sensor")
 
     class SensorEntity(_entity_base()):  # pragma: no cover - stub
-        pass
+        @property
+        def native_unit_of_measurement(self) -> str | None:
+            """Mirror ``SensorEntity.native_unit_of_measurement`` from HA."""
+            if hasattr(self, "_attr_native_unit_of_measurement"):
+                return self._attr_native_unit_of_measurement
+            if hasattr(self, "entity_description"):
+                return getattr(
+                    self.entity_description, "native_unit_of_measurement", None
+                )
+            return None
+
+    @dataclass
+    class SensorExtraStoredData:  # pragma: no cover - stub
+        """Mirror ``SensorExtraStoredData`` (value and unit) from HA."""
+
+        native_value: Any
+        native_unit_of_measurement: str | None
+
+        def as_dict(self) -> dict[str, Any]:
+            return {
+                "native_value": self.native_value,
+                "native_unit_of_measurement": self.native_unit_of_measurement,
+            }
+
+        @classmethod
+        def from_dict(cls, restored: dict[str, Any]) -> Any:
+            try:
+                native_value = restored["native_value"]
+                native_unit_of_measurement = restored["native_unit_of_measurement"]
+            except KeyError:
+                return None
+            return cls(native_value, native_unit_of_measurement)
 
     class RestoreSensor(SensorEntity):  # pragma: no cover - stub
+        @property
+        def extra_restore_state_data(self) -> SensorExtraStoredData:
+            """Mirror ``RestoreSensor.extra_restore_state_data`` from HA."""
+            return SensorExtraStoredData(
+                self.native_value, self.native_unit_of_measurement
+            )
+
         async def async_get_last_sensor_data(self):
+            """Derive value and unit from the extra data, as HA does."""
+            extra = await self.async_get_last_extra_data()
+            if extra is None:
+                return None
+            return SensorExtraStoredData.from_dict(extra.as_dict())
+
+        async def async_get_last_extra_data(self):
+            return None
+
+        async def async_get_last_state(self):
             return None
 
     class SensorEntityDescription:  # pragma: no cover - stub
@@ -2124,6 +2239,7 @@ def _stub_homeassistant() -> None:
 
     sensor_module.SensorEntity = SensorEntity
     sensor_module.RestoreSensor = RestoreSensor
+    sensor_module.SensorExtraStoredData = SensorExtraStoredData
     sensor_module.SensorEntityDescription = SensorEntityDescription
     sensor_module.SensorDeviceClass = SensorDeviceClass
     sensor_module.SensorStateClass = SensorStateClass

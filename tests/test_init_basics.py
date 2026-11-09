@@ -416,7 +416,8 @@ class TestDefaultButtonSubentryIdentifierBasics:
         result = _default_button_subentry_identifier({})
 
         assert result == _DEFAULT_SUBENTRY_IDENTIFIER
-        assert result == "core_tracking"  # empirisch: __init__.py Z. 4951
+        # The literal value of _DEFAULT_SUBENTRY_IDENTIFIER in __init__.py.
+        assert result == "core_tracking"
 
     def test_skips_non_string_identifier(self) -> None:
         """Non-string identifiers must not satisfy the truthy/type guard."""

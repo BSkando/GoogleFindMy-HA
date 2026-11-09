@@ -74,7 +74,7 @@ def test_gpsoauth_invalid_credential_vocabulary_always_matches() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _perform_oauth_sync: the generic except-Exception call site (Z.222)
+# _perform_oauth_sync: the generic ``except Exception`` call site
 # ---------------------------------------------------------------------------
 
 

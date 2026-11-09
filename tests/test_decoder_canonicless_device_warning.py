@@ -10,9 +10,10 @@ operator to ignore the signal (alert fatigue). These tests pin a severity policy
 tracks *handling relevance*:
 
 * **Benign classes** (Android phones and reduced-listing Bluetooth accessories such as
-  Pixel Buds) drop as expected for their device class, are located -- if at all -- via
-  the owner's Locate flow, and therefore produce **only a DEBUG line**, never a WARNING,
-  as long as they were not previously visible.
+  Pixel Buds) are not warn-worthy for their device class and therefore produce **only a
+  DEBUG line**, never a WARNING, as long as they were not previously visible. The class
+  is a guess from the payload shape (a Wear OS watch can land in it, BSkando#224), so
+  that line asks for an issue instead of saying no action is required.
 * **Warn-worthy drops** still raise the de-duplicated, count-only WARNING:
   a tracker-shaped device (has an ``information`` block, not Android) that lacks a
   canonical ID, OR any device that was visible in the previous run and now disappears
@@ -35,6 +36,7 @@ from __future__ import annotations
 
 import copy
 import logging
+from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
@@ -263,6 +265,89 @@ def test_never_visible_benign_device_no_warning(
         decoder.get_devices_with_location(device_list, cache=cache)
 
     assert _canonicless_warnings(caplog) == []
+
+
+@pytest.mark.parametrize(
+    "make_device",
+    [
+        pytest.param(
+            lambda: _make_phone_device(name="Benign Device", canonic_ids=[]),
+            id="android-phone",
+        ),
+        pytest.param(
+            lambda: _make_buds_device(name="Benign Device"),
+            id="no-information-block",
+        ),
+    ],
+)
+def test_benign_debug_line_asks_for_a_report_instead_of_no_action(
+    caplog: pytest.LogCaptureFixture,
+    make_device: Callable[[], SimpleNamespace],
+) -> None:
+    """The benign DEBUG line must not wave the drop off as needing no action.
+
+    The benign class is inferred from the payload shape. A Wear OS watch that Find My
+    Device locates and rings on its own arrives without an ``information`` block and
+    lands in the same class (BSkando/GoogleFindMy-HA#224). The line therefore names the
+    common cases, excludes phones and tablets, and asks for an issue with the
+    ``IDENTIFIER STRUCTURE`` line instead of promising that nothing needs to be done.
+    The tier and the count stay as before: one DEBUG line, no WARNING, no remediation.
+    """
+    device_list = SimpleNamespace(deviceMetadata=[make_device()])
+
+    with caplog.at_level(logging.DEBUG, logger="custom_components.googlefindmy"):
+        results = decoder.get_devices_with_location(
+            device_list, cache=None, emit_canonicless_diagnostics=True
+        )
+
+    assert results == []
+    assert _canonicless_warnings(caplog) == []
+
+    records = [
+        rec
+        for rec in caplog.records
+        if "canonical ID" in rec.getMessage() and "Benign Device" in rec.getMessage()
+    ]
+    assert len(records) == 1
+    assert records[0].levelno == logging.DEBUG
+    line = records[0].getMessage()
+    for forbidden in (
+        "no action is required",
+        "phones and Bluetooth accessories",
+        "reload",
+        "findable again",
+    ):
+        assert forbidden not in line
+    for required in (
+        "open an issue",
+        "'IDENTIFIER STRUCTURE'",
+        "not a phone or tablet",
+        "on its own",
+    ):
+        assert required in line
+
+
+def test_warn_worthy_debug_line_carries_no_report_request(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The warn-worthy DEBUG line keeps its remediation and asks for no issue."""
+    device_list = SimpleNamespace(
+        deviceMetadata=[_make_tracker_device(name="Garage Tracker")]
+    )
+    cache = SimpleNamespace(entry_id="entry-A")
+
+    with caplog.at_level(logging.DEBUG, logger="custom_components.googlefindmy"):
+        decoder.get_devices_with_location(
+            device_list, cache=cache, emit_canonicless_diagnostics=True
+        )
+
+    lines = [
+        line for line in _canonicless_debug_lines(caplog) if "Garage Tracker" in line
+    ]
+    assert len(lines) == 1
+    assert "reload the integration" in lines[0]
+    assert "open an issue" not in lines[0]
+    assert "IDENTIFIER STRUCTURE" not in lines[0]
 
 
 # ----------------------------------------------------------------------------------------
@@ -606,21 +691,31 @@ def test_missing_key_diagnostics_emitted_on_main_pass(
 
     The companion to T5: gating the dump must not silence it on the main poll
     (emit_canonicless_diagnostics=True), where the tracker-shaped keyless device is a real
-    signal worth surfacing.
+    signal worth surfacing. The WARNING names the device by its canonical IDs only; the
+    display name goes to a DEBUG companion, because this path runs on every unattended
+    device list refresh (AGENTS.md section 5 (b)).
     """
     device_list = SimpleNamespace(
         deviceMetadata=[_make_tracker_device(name="Keyless Tracker")]
     )
     cache = SimpleNamespace(entry_id="entry-A")
 
-    with caplog.at_level(logging.WARNING, logger="custom_components.googlefindmy"):
+    with caplog.at_level(logging.DEBUG, logger="custom_components.googlefindmy"):
         decoder.get_devices_with_location(
             device_list, cache=cache, emit_canonicless_diagnostics=True
         )
 
     warnings = _missing_key_warnings(caplog)
     assert len(warnings) == 1
-    assert "Keyless Tracker" in warnings[0]
+    assert "Keyless Tracker" not in warnings[0]
+    companions = [
+        rec.getMessage()
+        for rec in caplog.records
+        if rec.levelno == logging.DEBUG
+        and rec.getMessage().startswith("Missing-key device above is")
+    ]
+    assert len(companions) == 1
+    assert "Keyless Tracker" in companions[0]
 
 
 # ----------------------------------------------------------------------------------------

@@ -86,7 +86,11 @@ async def test_button_records_last_pressed_on_press() -> None:
 
     assert button._attr_last_pressed is not None
     service_call.assert_awaited_once_with(
-        DOMAIN, SERVICE_PLAY_SOUND, {"device_id": "device-1"}, blocking=True
+        DOMAIN,
+        SERVICE_PLAY_SOUND,
+        {"device_id": "device-1"},
+        blocking=True,
+        context=button._context,
     )
 
 
@@ -128,7 +132,11 @@ async def test_locate_button_does_not_claim_success(
         await button.async_press()
 
     service_call.assert_awaited_once_with(
-        DOMAIN, SERVICE_LOCATE_DEVICE, {"device_id": "device-1"}, blocking=False
+        DOMAIN,
+        SERVICE_LOCATE_DEVICE,
+        {"device_id": "device-1"},
+        blocking=False,
+        context=button._context,
     )
     assert "Successfully" not in caplog.text
     assert "outcome not awaited" in caplog.text

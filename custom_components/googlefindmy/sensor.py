@@ -16,10 +16,12 @@ Best practices:
 from __future__ import annotations
 
 import logging
+import math
 import time
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, Self, cast
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -29,6 +31,7 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_LATITUDE, ATTR_LONGITUDE, PERCENTAGE
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -68,10 +71,10 @@ from .entity import (
 from .entity import (
     subentry_type as _subentry_type,
 )
-from .ha_typing import RestoreSensor, SensorEntity, callback
+from .ha_typing import RestoreSensor, SensorEntity, SensorExtraStoredData, callback
 
 if TYPE_CHECKING:
-    from .eid_resolver import GoogleFindMyEIDResolver
+    from .eid_resolver import BLEBatteryState, GoogleFindMyEIDResolver
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -158,6 +161,62 @@ BLE_BATTERY_DESCRIPTION = SensorEntityDescription(
     # No icon: SensorDeviceClass.BATTERY provides dynamic icons automatically
     # based on percentage value (mdi:battery, mdi:battery-20, mdi:battery-alert).
 )
+
+# Longest span after the last BLE sighting for which the battery sensor still
+# shows a value: 7 days, the span of Home Assistant's ``STATE_EXPIRATION``. Wall
+# clock seconds, the unit of ``BLEBatteryState.observed_at_wall``.
+BLE_BATTERY_RESTORE_MAX_AGE_S = 7 * 24 * 3600
+
+# A sighting time may lie this far in the future (clock skew between the BLE
+# scanner and Home Assistant); anything later is invalid, otherwise a stored
+# future date would keep a value beyond the 7-day limit.
+BLE_BATTERY_FUTURE_TOLERANCE_S = 300
+
+
+def _sighting_within_limit(observed_wall: float) -> bool:
+    """Return True if a sighting time is neither too old nor in the future."""
+    age = time.time() - observed_wall
+    return -BLE_BATTERY_FUTURE_TOLERANCE_S <= age <= BLE_BATTERY_RESTORE_MAX_AGE_S
+
+
+def _coerce_observation_wall(raw: Any) -> float | None:
+    """Return ``raw`` as a finite wall-clock timestamp, or ``None``."""
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    value = float(raw)
+    return value if math.isfinite(value) else None
+
+
+@dataclass
+class BLEBatteryExtraStoredData(SensorExtraStoredData):
+    """Restore data of the BLE battery sensor: value, unit and sighting time.
+
+    ``last_observation_wall`` is the wall-clock time of the BLE sighting the
+    value came from. It survives a restart, so the 7-day limit
+    (``BLE_BATTERY_RESTORE_MAX_AGE_S``) keeps counting from the sighting, not
+    from the restart.
+    """
+
+    last_observation_wall: float | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the sensor restore data plus the sighting time."""
+        data = super().as_dict()
+        data["last_observation_wall"] = self.last_observation_wall
+        return data
+
+    @classmethod
+    def from_dict(cls, restored: dict[str, Any]) -> Self | None:
+        """Read the restore data; an invalid sighting time becomes ``None``."""
+        base = SensorExtraStoredData.from_dict(restored)
+        if base is None:
+            return None
+        return cls(
+            base.native_value,
+            base.native_unit_of_measurement,
+            _coerce_observation_wall(restored.get("last_observation_wall")),
+        )
+
 
 # NOTE:
 # - Translation keys are aligned with en.json (entity.sensor.*), keeping the set in sync.
@@ -616,30 +675,49 @@ async def async_setup_entry(
                         )
                     )
 
-                # --- BLE Battery sensor (when resolver has data) ---
-                if dev_id not in known_battery_ids and resolver is not None:
+                # --- BLE Battery sensor (when the entity registry already
+                # holds it, or when the resolver has data) ---
+                if dev_id not in known_battery_ids:
                     battery_state = None
-                    try:
-                        battery_state = resolver.get_ble_battery_state(dev_id)
-                    except Exception:  # noqa: BLE001
-                        pass
-                    if battery_state is not None:
-                        battery_entity = GoogleFindMyBLEBatterySensor(
-                            coordinator,
-                            device,
-                            subentry_key=tracker_scope.subentry_key,
-                            subentry_identifier=tracker_identifier,
+                    if resolver is not None:
+                        try:
+                            battery_state = resolver.get_ble_battery_state(dev_id)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    battery_entity = GoogleFindMyBLEBatterySensor(
+                        coordinator,
+                        device,
+                        subentry_key=tracker_scope.subentry_key,
+                        subentry_identifier=tracker_identifier,
+                    )
+                    bat_uid = getattr(battery_entity, "unique_id", None)
+                    in_registry = (
+                        isinstance(bat_uid, str)
+                        and er.async_get(hass).async_get_entity_id(
+                            "sensor", DOMAIN, bat_uid
                         )
-                        bat_uid = getattr(battery_entity, "unique_id", None)
-                        if isinstance(bat_uid, str) and bat_uid not in added_unique_ids:
-                            added_unique_ids.add(bat_uid)
-                            known_battery_ids.add(dev_id)
-                            entities.append(battery_entity)
+                        is not None
+                    )
+                    if (
+                        (battery_state is not None or in_registry)
+                        and isinstance(bat_uid, str)
+                        and bat_uid not in added_unique_ids
+                    ):
+                        added_unique_ids.add(bat_uid)
+                        known_battery_ids.add(dev_id)
+                        entities.append(battery_entity)
+                        if battery_state is not None:
                             _LOGGER.info(
                                 "BLE battery sensor created for device=%s "
                                 "(battery=%s%%)",
                                 dev_id,
                                 battery_state.battery_pct,
+                            )
+                        else:
+                            _LOGGER.debug(
+                                "BLE battery sensor created from entity registry "
+                                "for device=%s",
+                                dev_id,
                             )
 
             return entities
@@ -1893,15 +1971,25 @@ class GoogleFindMyBLEBatterySensor(GoogleFindMyDeviceEntity, RestoreSensor):
     dynamic icons and HA battery grouping.
 
     Behavior:
-    - Created dynamically when the EID resolver first decodes battery data.
-    - Restores state across HA restarts via RestoreSensor.
-    - Available as long as the coordinator considers the device present.
+    - Created at setup when the entity registry already holds its unique_id,
+      otherwise on the first decoded battery data from the EID resolver. A new
+      device without BLE data gets no battery sensor.
+    - Restores state across HA restarts via RestoreSensor, together with the
+      wall-clock time of the last BLE sighting.
+    - Shows a value only while the last BLE sighting is at most 7 days old
+      (``BLE_BATTERY_RESTORE_MAX_AGE_S``), for a restored value as well as for
+      resolver data, at restore time and while running. A restored value
+      without a sighting time is discarded, and a sighting time more than
+      ``BLE_BATTERY_FUTURE_TOLERANCE_S`` in the future counts as invalid.
+    - Available while the coordinator considers the device present; while it
+      is absent, only as long as a value within the age limit is known.
     - Reads battery state directly from the EID resolver (no coordinator proxy).
     """
 
     _attr_has_entity_name = True
     _attr_entity_registry_enabled_default = True
     entity_description = BLE_BATTERY_DESCRIPTION
+    _last_observation_wall: float | None = None
 
     _unrecorded_attributes = frozenset(
         {
@@ -1938,6 +2026,7 @@ class GoogleFindMyBLEBatterySensor(GoogleFindMyDeviceEntity, RestoreSensor):
             separator="_",
         )
         self._attr_native_value: int | None = None
+        self._last_observation_wall = None
 
     def _get_resolver(self) -> GoogleFindMyEIDResolver | None:
         """Return the EID resolver from hass.data, or None."""
@@ -1948,24 +2037,50 @@ class GoogleFindMyBLEBatterySensor(GoogleFindMyDeviceEntity, RestoreSensor):
             "GoogleFindMyEIDResolver | None", domain_data.get(DATA_EID_RESOLVER)
         )
 
-    @property
-    def native_value(self) -> int | None:
-        """Return battery percentage from resolver, or restored value."""
+    def _fresh_resolver_state(self) -> BLEBatteryState | None:
+        """Return the resolver state if its sighting is at most 7 days old."""
         resolver = self._get_resolver()
         if resolver is None or self._device_id is None:
-            return self._attr_native_value
+            return None
         state = resolver.get_ble_battery_state(self._device_id)
+        if state is None or not _sighting_within_limit(state.observed_at_wall):
+            return None
+        return state
+
+    def _restored_value_if_fresh(self) -> int | None:
+        """Return the cached value if its sighting is at most 7 days old."""
+        wall = self._last_observation_wall
+        if (
+            self._attr_native_value is None
+            or wall is None
+            or not _sighting_within_limit(wall)
+        ):
+            return None
+        return self._attr_native_value
+
+    @property
+    def native_value(self) -> int | None:
+        """Return battery percentage from resolver, or restored value.
+
+        Both count only while their BLE sighting is at most 7 days old
+        (``BLE_BATTERY_RESTORE_MAX_AGE_S``); resolver data older than that
+        counts as no data, and then the restored value under the same limit
+        applies.
+        """
+        state = self._fresh_resolver_state()
         if state is None:
-            return self._attr_native_value
+            return self._restored_value_if_fresh()
         return state.battery_pct
 
     @property
     def available(self) -> bool:
         """Return True when the coordinator considers the device present.
 
-        No BLE staleness TTL — the last decoded battery level is shown as
-        long as the coordinator's TTL-smoothed presence holds.  This avoids
-        flapping for trackers that transmit the flags byte infrequently.
+        No BLE staleness TTL for presence — availability follows the
+        coordinator's TTL-smoothed presence, which avoids flapping for trackers
+        that transmit the flags byte infrequently. The value itself is limited:
+        while the device is absent, the sensor stays available only with a value
+        whose BLE sighting is at most 7 days old.
         """
         if not super().available:
             return False
@@ -1981,12 +2096,33 @@ class GoogleFindMyBLEBatterySensor(GoogleFindMyDeviceEntity, RestoreSensor):
                 if present:
                     return True
                 # Presence expired → available only with a restored value
-                return self._attr_native_value is not None
+                return self._restored_value_if_fresh() is not None
         except Exception:  # noqa: BLE001
             pass
 
         # Unknown presence → available if we have any known value
-        return self._attr_native_value is not None
+        return self._restored_value_if_fresh() is not None
+
+    @property
+    def extra_restore_state_data(self) -> BLEBatteryExtraStoredData:
+        """Return value, unit and the time of the last BLE sighting.
+
+        Value and sighting time always come from the same source: the fresh
+        resolver state if there is one, otherwise the cached value with its
+        own sighting time.
+        """
+        state = self._fresh_resolver_state()
+        if state is not None:
+            return BLEBatteryExtraStoredData(
+                state.battery_pct,
+                self.native_unit_of_measurement,
+                state.observed_at_wall,
+            )
+        return BLEBatteryExtraStoredData(
+            self._restored_value_if_fresh(),
+            self.native_unit_of_measurement,
+            self._last_observation_wall,
+        )
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
@@ -2014,12 +2150,12 @@ class GoogleFindMyBLEBatterySensor(GoogleFindMyDeviceEntity, RestoreSensor):
 
         self.refresh_device_label_from_coordinator(log_prefix="BLEBattery")
 
-        # Update cached native_value from resolver for restore persistence
-        resolver = self._get_resolver()
-        if resolver is not None and self._device_id is not None:
-            state = resolver.get_ble_battery_state(self._device_id)
-            if state is not None:
-                self._attr_native_value = state.battery_pct
+        # Update cached native_value and sighting time from resolver data
+        # within the age limit, for restore persistence
+        state = self._fresh_resolver_state()
+        if state is not None:
+            self._attr_native_value = state.battery_pct
+            self._last_observation_wall = state.observed_at_wall
 
         self.async_write_ha_state()
 
@@ -2046,8 +2182,55 @@ class GoogleFindMyBLEBatterySensor(GoogleFindMyDeviceEntity, RestoreSensor):
         except (ValueError, TypeError):
             return
 
+        observed_wall = await self._async_restored_observation_wall()
+        if observed_wall is None:
+            _LOGGER.debug(
+                "Discarding restored BLE battery value for device=%s: "
+                "no BLE sighting time stored",
+                self._device_id,
+            )
+            return
+
+        if (
+            self._last_observation_wall is not None
+            and observed_wall <= self._last_observation_wall
+        ):
+            # A coordinator update during setup already cached a newer sighting.
+            return
+
         self._attr_native_value = restored_pct
+        self._last_observation_wall = observed_wall
         self.async_write_ha_state()
+
+    async def _async_restored_observation_wall(self) -> float | None:
+        """Return the stored time of the last BLE sighting, or ``None``.
+
+        Reads ``last_observation_wall`` from the extra restore data; states
+        saved before that field existed fall back to the
+        ``last_ble_observation`` attribute of the restored state.
+        """
+        extra = await self.async_get_last_extra_data()
+        if extra is not None:
+            stored = BLEBatteryExtraStoredData.from_dict(extra.as_dict())
+            if stored is not None and stored.last_observation_wall is not None:
+                return stored.last_observation_wall
+
+        last_state = await self.async_get_last_state()
+        attributes = getattr(last_state, "attributes", None)
+        raw = (
+            attributes.get("last_ble_observation")
+            if isinstance(attributes, Mapping)
+            else None
+        )
+        if not isinstance(raw, str):
+            return None
+        try:
+            observed = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+        if observed.tzinfo is None:
+            observed = observed.replace(tzinfo=UTC)
+        return observed.timestamp()
 
     @property
     def device_info(self) -> DeviceInfo:

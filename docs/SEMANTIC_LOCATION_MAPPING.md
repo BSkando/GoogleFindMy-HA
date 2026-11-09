@@ -53,4 +53,3 @@ Semantic names currently surface in a few places:
 - Start with the Home zone defaults, then refine the coordinates/radius to the actual device position.
 - Keep semantic names short and consistent with Google's spelling to avoid near-duplicates.
 - Review mappings after moving hardware (for example, relocating a speaker) so the coordinates stay accurate.
-

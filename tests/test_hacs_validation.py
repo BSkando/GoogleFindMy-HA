@@ -224,13 +224,14 @@ def test_ci_tolerates_transient_hacs_regression() -> None:
     surgical = by_id["hacs_surgical"]
     verdict = by_id["hacs_verdict"]
 
-    # Primary run tolerates failure (so the classifier can decide) and keeps the
-    # original, narrower ignore list: the isolation must not be permanent.
+    # Primary run tolerates failure (so the classifier can decide) and ignores
+    # nothing: the isolation must not be permanent, and the HACS default
+    # repository submission requires a run without any ignore.
     assert primary.get("continue-on-error") is True, (
         "primary HACS run must set continue-on-error so the guard can classify"
     )
-    assert primary["with"]["ignore"].split() == ["topics", "issues"], (
-        "primary HACS run must keep the narrow ignore (isolation not permanent)"
+    assert "ignore" not in primary["with"], (
+        "primary HACS run must not ignore any check (isolation not permanent)"
     )
 
     # Fallback isolates exactly the two transient-prone validators and only runs
@@ -239,8 +240,6 @@ def test_ci_tolerates_transient_hacs_regression() -> None:
         "fallback HACS run must set continue-on-error"
     )
     assert set(surgical["with"]["ignore"].split()) == {
-        "topics",
-        "issues",
         "hacsjson",
         "integration_manifest",
     }, "fallback HACS run must isolate exactly hacsjson + integration_manifest"

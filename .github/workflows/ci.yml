@@ -20,27 +20,29 @@ concurrency:
 
 jobs:
   # Pull request runs pass the job approval_gate, bound to the environment
-  # "ci-freigabe", before any other job of this workflow starts. Where that
-  # environment has a required reviewer (jleinenbach/GoogleFindMy-HA), the
-  # run waits for a manual approval, so the Home Assistant test load only
-  # happens when it is wanted. Where it has no protection rules (GitHub
-  # creates a missing environment without rules when a job references it, as
-  # in BSkando/GoogleFindMy-HA), the gate passes without waiting for
-  # approval. Other pull request workflows are not gated (AGENTS.md). Pushes
-  # to main run without the gate. Guarded by tests/test_ci_approval_gate.py.
+  # "home-assistant-tests", before any other job of this workflow starts.
+  # Where that environment has a required reviewer
+  # (jleinenbach/GoogleFindMy-HA), the run waits for a manual approval, so
+  # the Home Assistant test load only happens when it is wanted. Where it has
+  # no protection rules (GitHub creates a missing environment without rules
+  # on the first run that references it), the gate passes without waiting
+  # for approval. Other pull request workflows are not gated (AGENTS.md).
+  # Pushes to main run without the gate. Guarded by
+  # tests/test_ci_approval_gate.py.
   approval_gate:
     name: CI approval gate
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    environment: ci-freigabe
+    environment: home-assistant-tests
     permissions: {}
     steps:
       - name: Record approval
-        run: echo "CI run approved in environment ci-freigabe."
+        run: echo "CI run approved in environment home-assistant-tests."
 
   hassfest:
     name: Hassfest validation
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: approval_gate
     # Every job states its condition explicitly: a skipped gate (push) must
     # not skip the jobs that depend on hassfest, and on a pull request only
@@ -149,6 +151,7 @@ jobs:
   hacs:
     name: HACS validation
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: hassfest
     if: ${{ !cancelled() && needs.hassfest.result == 'success' }}
     steps:
@@ -160,30 +163,21 @@ jobs:
 
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.14"
 
-      - name: Probe brands endpoint
-        id: brands_probe
-        run: |
-          set -u
-          if curl -sSfL https://brands.home-assistant.io/domains.json >/dev/null; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::warning ::brands.home-assistant.io unavailable; skipping HACS validation to avoid false negatives."
-          fi
-
+      # No brands CDN probe: the HACS brands check reads the local
+      # custom_components/googlefindmy/brand/icon.png and only falls back to
+      # brands.home-assistant.io when that file is missing, which
+      # tests/test_brand_assets.py rules out.
       - name: Run HACS validation
-        if: steps.brands_probe.outputs.available == 'true'
         id: hacs
         continue-on-error: true
         # Tracks the upstream branch on purpose (no maintained release tag); see AGENTS.md, Action pinning.
         uses: hacs/action@main
         with:
           category: integration
-          ignore: topics issues
 
       # Transient HACS regression guard (hacs/integration#5252): the action
       # intermittently fetches the raw hacs.json / manifest.json as None from
@@ -198,17 +192,16 @@ jobs:
       # the hassfest job (this job needs: hassfest) and hacs.json by the test job
       # (tests/test_hacs_validation.py). Any other failing check keeps this red.
       - name: Re-run HACS validation (isolate transient checks)
-        if: steps.brands_probe.outputs.available == 'true' && steps.hacs.outcome == 'failure'
+        if: steps.hacs.outcome == 'failure'
         id: hacs_surgical
         continue-on-error: true
         # Tracks the upstream branch on purpose (no maintained release tag); see AGENTS.md, Action pinning.
         uses: hacs/action@main
         with:
           category: integration
-          ignore: topics issues hacsjson integration_manifest
+          ignore: hacsjson integration_manifest
 
       - name: Classify HACS result
-        if: steps.brands_probe.outputs.available == 'true'
         id: hacs_verdict
         env:
           FIRST: ${{ steps.hacs.outcome }}
@@ -232,9 +225,7 @@ jobs:
           {
             echo "## HACS Validation"
             echo ""
-            if [ "${{ steps.brands_probe.outputs.available }}" != "true" ]; then
-              echo "⚠️ **Skipped** - brands.home-assistant.io unavailable"
-            elif [ "${{ steps.hacs_verdict.outputs.status }}" = "passed" ]; then
+            if [ "${{ steps.hacs_verdict.outputs.status }}" = "passed" ]; then
               echo "✅ **HACS validation passed**"
               echo ""
               echo "The integration meets HACS requirements."
@@ -252,6 +243,7 @@ jobs:
   translations:
     name: Translations validation
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: hassfest
     if: ${{ !cancelled() && needs.hassfest.result == 'success' }}
     steps:
@@ -262,7 +254,7 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || github.ref }}
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.14"
 
@@ -308,6 +300,7 @@ jobs:
   vendored_assets:
     name: Vendored assets freshness
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: hassfest
     if: ${{ !cancelled() && needs.hassfest.result == 'success' }}
     steps:
@@ -318,7 +311,7 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || github.ref }}
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.14"
 
@@ -349,12 +342,13 @@ jobs:
   lint:
     name: Lint (${{ matrix.check }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: hassfest
     if: ${{ !cancelled() && needs.hassfest.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
-        check: [ruff, mypy, codespell, bandit]
+        check: [ruff, mypy, codespell, bandit, pre-commit]
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -363,7 +357,7 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || github.ref }}
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.14"
 
@@ -378,7 +372,7 @@ jobs:
       # cached artefact is a complete virtualenv, so an interpreter-agnostic
       # prefix can restore a 3.13 `.venv` built before the lock moved to
       # `^3.14.2`; Poetry then adopts that interpreter as the project
-      # environment and `poetry install` refuses it, taking all four lint jobs
+      # environment and `poetry install` refuses it, taking all five lint jobs
       # down before they run. The `test` job already keys this way.
       - name: Cache Poetry dependencies
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -388,8 +382,29 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-py3.14-poetry-
 
+      - name: Cache pre-commit environments
+        if: matrix.check == 'pre-commit'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/pre-commit
+          key: ${{ runner.os }}-pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pre-commit-
+
       - name: Install dependencies
         run: poetry install --with dev,test
+
+      # Runs every hook of .pre-commit-config.yaml except mypy and pytest, which
+      # have jobs of their own, so a broken hook entry turns this check red.
+      - name: Run pre-commit
+        if: matrix.check == 'pre-commit'
+        id: precommit
+        run: |
+          set +e
+          SKIP=pytest,mypy poetry run pre-commit run --all-files --show-diff-on-failure 2>&1 | tee pre-commit_output.txt
+          EXIT_CODE=${PIPESTATUS[0]}
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+          exit $EXIT_CODE
 
       - name: Run Ruff
         if: matrix.check == 'ruff'
@@ -409,11 +424,13 @@ jobs:
         id: mypy
         run: |
           set +e
-          {
-            poetry run mypy --install-types --non-interactive --strict -p custom_components.googlefindmy
-            poetry run mypy --install-types --non-interactive --strict -p tests
-          } 2>&1 | tee mypy_output.txt
-          EXIT_CODE=${PIPESTATUS[0]}
+          # One pipeline per run: PIPESTATUS of a `{ ...; ...; } | tee` group only
+          # holds the status of its last command, which hid package failures.
+          poetry run mypy --install-types --non-interactive --strict -p custom_components.googlefindmy 2>&1 | tee mypy_output.txt
+          PACKAGE_EXIT=${PIPESTATUS[0]}
+          poetry run mypy --install-types --non-interactive --strict -p tests 2>&1 | tee -a mypy_output.txt
+          TESTS_EXIT=${PIPESTATUS[0]}
+          EXIT_CODE=$(( PACKAGE_EXIT > TESTS_EXIT ? PACKAGE_EXIT : TESTS_EXIT ))
           echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
           exit $EXIT_CODE
 
@@ -433,9 +450,9 @@ jobs:
         id: bandit
         run: |
           set +e
-          # Run bandit security scanner on custom_components and tests
+          # Run bandit on the integration and the developer scripts; tests/ is not a target (and is listed in exclude_dirs)
           # Exclude known false positives and test files that intentionally test security
-          poetry run bandit -r custom_components -c pyproject.toml -f txt 2>&1 | tee bandit_output.txt
+          poetry run bandit -r custom_components script -c pyproject.toml -f txt 2>&1 | tee bandit_output.txt
           EXIT_CODE=${PIPESTATUS[0]}
           echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
           exit $EXIT_CODE
@@ -448,8 +465,8 @@ jobs:
             echo ""
             if [ "${{ matrix.check }}" = "ruff" ]; then
               if [ -f ruff_output.txt ]; then
-                ISSUES=$(grep -c "^" ruff_output.txt 2>/dev/null || echo "0")
-                if [ "$ISSUES" = "0" ] || [ ! -s ruff_output.txt ]; then
+                # A clean run still prints "All checks passed!"; judge by exit code.
+                if [ "${{ steps.ruff.outputs.exit_code }}" = "0" ]; then
                   echo "✅ **No issues found**"
                 else
                   echo "❌ **Issues found:**"
@@ -461,11 +478,15 @@ jobs:
               fi
             elif [ "${{ matrix.check }}" = "mypy" ]; then
               if [ -f mypy_output.txt ]; then
-                ERRORS=$(grep -c "error:" mypy_output.txt 2>/dev/null || echo "0")
-                if [ "$ERRORS" = "0" ]; then
+                ERRORS=$(grep -c "error:" mypy_output.txt 2>/dev/null || true)
+                if [ "${{ steps.mypy.outputs.exit_code }}" = "0" ]; then
                   echo "✅ **No type errors found**"
                 else
-                  echo "❌ **$ERRORS type error(s) found:**"
+                  if [ "$ERRORS" = "0" ]; then
+                    echo "❌ **mypy failed without reporting a type error:**"
+                  else
+                    echo "❌ **$ERRORS type error(s) found:**"
+                  fi
                   echo ""
                   echo '```'
                   head -100 mypy_output.txt
@@ -486,13 +507,29 @@ jobs:
                   echo '```'
                 fi
               fi
+            elif [ "${{ matrix.check }}" = "pre-commit" ]; then
+              if [ -f pre-commit_output.txt ]; then
+                if [ "${{ steps.precommit.outputs.exit_code }}" = "0" ]; then
+                  echo "✅ **All hooks passed** (mypy and pytest run in their own jobs)"
+                else
+                  echo "❌ **A hook failed or rewrote files:**"
+                  echo ""
+                  echo '```'
+                  tail -100 pre-commit_output.txt
+                  echo '```'
+                fi
+              fi
             elif [ "${{ matrix.check }}" = "bandit" ]; then
               if [ -f bandit_output.txt ]; then
-                ISSUES=$(grep -c "Issue:" bandit_output.txt 2>/dev/null || echo "0")
-                if [ "$ISSUES" = "0" ]; then
+                ISSUES=$(grep -c "Issue:" bandit_output.txt 2>/dev/null || true)
+                if [ "${{ steps.bandit.outputs.exit_code }}" = "0" ]; then
                   echo "✅ **No security issues found**"
                 else
-                  echo "⚠️ **$ISSUES potential security issue(s) found:**"
+                  if [ "$ISSUES" = "0" ]; then
+                    echo "❌ **bandit failed without reporting an issue:**"
+                  else
+                    echo "⚠️ **$ISSUES potential security issue(s) found:**"
+                  fi
                   echo ""
                   echo '```'
                   cat bandit_output.txt
@@ -505,6 +542,7 @@ jobs:
   test:
     name: Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs:
       - hassfest
       - hacs
@@ -525,7 +563,7 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || github.ref }}
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -544,15 +582,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-py${{ matrix.python-version }}-poetry-
 
-      - name: Cache pre-commit environments
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/pre-commit
-          key: ${{ runner.os }}-pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pre-commit-
-
       - name: Install system dependencies
+        timeout-minutes: 5
         run: sudo apt-get update && sudo apt-get install -y libc-ares-dev
 
       - name: Install dependencies
@@ -589,6 +620,7 @@ jobs:
   test_legacy_python:
     name: Test (Python 3.13, ${{ matrix.label }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs:
       - hassfest
       - hacs
@@ -598,21 +630,27 @@ jobs:
       matrix:
         include:
           # The floor hacs.json actually declares. The stub constraints in the
-          # repository pin 2025.12.1, which is a speed-up for local runs and not
-          # a compatibility claim; testing there would leave the pre-2025.11
+          # repository pin the poetry.lock release (2026.10.3, Python 3.14 only),
+          # which is a speed-up for local runs and not a compatibility claim;
+          # testing there would leave the pre-2025.11
           # paths -- such as the `EntityCategory` import fallback in button.py --
           # unexercised by every axis. 0.13.278 is the plugin release that
-          # carries Home Assistant 2025.9.1.
+          # carries Home Assistant 2025.9.1. `floor` marks the axis that is
+          # checked against hacs.json and that needs the `pycares<5` cap.
           - label: "declared floor"
             ha_pin: "2025.9.1"
             plugin_pin: "0.13.278"
-          # The last Home Assistant line that still supports Python 3.13
-          # (2026.2.3). Without this axis the final three 3.13-era releases go
-          # untested. Both pins are dropped so pip resolves the newest release
-          # that satisfies the interpreter; `pycares<5` in the same file stays.
+            floor: true
+          # The last Home Assistant release that still supports Python 3.13:
+          # 2026.3.0 requires Python 3.14.2, so this pin is final. 0.13.316 is
+          # the last plugin release for Python 3.13 and requires exactly
+          # 2026.2.3. Left unpinned, pip's backtracking resolver settled on an
+          # older set instead (Home Assistant 2026.1.3, and 2025.10.4 once the
+          # pytest-asyncio pin was dropped), and the run still passed.
           - label: "last 3.13 line"
-            ha_pin: ""
-            plugin_pin: ""
+            ha_pin: "2026.2.3"
+            plugin_pin: "0.13.316"
+            floor: false
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -621,11 +659,12 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || github.ref }}
 
       - name: Set up Python 3.13
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
 
       - name: Install system dependencies
+        timeout-minutes: 5
         run: sudo apt-get update && sudo apt-get install -y libc-ares-dev
 
       # Deliberately lock-free: poetry.lock resolves the dev/test tree for
@@ -636,7 +675,7 @@ jobs:
       # Guards against silent drift: if someone raises the floor in hacs.json,
       # this axis would keep testing the old one and the label would lie.
       - name: Verify the pinned floor still matches hacs.json
-        if: matrix.ha_pin != ''
+        if: matrix.floor
         run: |
           set -euo pipefail
           declared="$(python -c 'import json;print(json.load(open("hacs.json"))["homeassistant"])')"
@@ -649,20 +688,30 @@ jobs:
       - name: Rewrite the stub constraints for this axis
         run: |
           set -euo pipefail
+          if [ -z "${{ matrix.ha_pin }}" ] || [ -z "${{ matrix.plugin_pin }}" ]; then
+            echo "::error::Every axis must pin both homeassistant and pytest-homeassistant-custom-component; an unpinned axis tests whatever pip happens to resolve."
+            exit 1
+          fi
           constraints=custom_components/googlefindmy/constraints-test-stubs.txt
           sed -i -E '/^(homeassistant|pytest-homeassistant-custom-component)==/d' "$constraints"
-          if [ -n "${{ matrix.ha_pin }}" ]; then
-            printf 'homeassistant==%s\n' "${{ matrix.ha_pin }}" >> "$constraints"
-            printf 'pytest-homeassistant-custom-component==%s\n' "${{ matrix.plugin_pin }}" >> "$constraints"
-            # The plugin release that carries an older Home Assistant also
-            # carries the pytest stack of its own era: 0.13.278 requires
-            # pytest-asyncio==1.1.0, while requirements-dev.txt pins 1.3.0.
-            # Keeping both makes the resolution impossible. Testing an old
-            # Home Assistant line means testing it with the test tooling that
-            # line shipped with, so the local pin steps aside on this axis.
-            sed -i -E '/^pytest-asyncio==/d' \
-              custom_components/googlefindmy/requirements-dev.txt
+          # The plugin release that carries an older Home Assistant also
+          # carries the pytest stack of its own era and pins it exactly:
+          # 0.13.278 requires pytest-asyncio==1.1.0 and 0.13.316 requires
+          # 1.3.0, while requirements-dev.txt pins the poetry.lock version
+          # (1.4.0). Keeping both makes the resolution impossible, so the local
+          # pin steps aside on every axis and the plugin pin decides.
+          sed -i -E '/^pytest-asyncio==/d' \
+            custom_components/googlefindmy/requirements-dev.txt
+          # Home Assistant 2025.9.1 pulls aiodns 3.5.0, which annotates with
+          # pycares 4 result types but sets no upper bound on pycares, so the
+          # floor axis caps it. The other axis must not: 2026.2.3 requires
+          # aiodns==4.0.0, which requires pycares>=5, as does the poetry.lock
+          # release in the repository file.
+          if [ "${{ matrix.floor }}" = "true" ]; then
+            printf 'pycares<5\n' >> "$constraints"
           fi
+          printf 'homeassistant==%s\n' "${{ matrix.ha_pin }}" >> "$constraints"
+          printf 'pytest-homeassistant-custom-component==%s\n' "${{ matrix.plugin_pin }}" >> "$constraints"
           echo "Constraints for this axis:"
           cat "$constraints"
 
@@ -672,25 +721,23 @@ jobs:
           pip install -r custom_components/googlefindmy/requirements-dev.txt
 
       # Printed, and asserted, so this job's claim about which Home Assistant
-      # line it exercised is measured rather than inferred from the matrix
-      # label. Without the assertion a future change to the constraints file
-      # could silently collapse both axes onto the same release.
-      - name: Report and verify the resolved Home Assistant version
+      # release it exercised is measured rather than inferred from the matrix
+      # label. A passing run only proves that the dependencies installed; this
+      # step proves that they are the ones the axis is named after.
+      - name: Report and verify the resolved Home Assistant and plugin versions
         run: |
           set -euo pipefail
           resolved="$(python -c 'from importlib.metadata import version; print(version("homeassistant"))')"
+          plugin="$(python -c 'from importlib.metadata import version; print(version("pytest-homeassistant-custom-component"))')"
           echo "homeassistant==${resolved}"
-          echo "pytest-homeassistant-custom-component==$(python -c 'from importlib.metadata import version; print(version("pytest-homeassistant-custom-component"))')"
-          if [ -n "${{ matrix.ha_pin }}" ]; then
-            if [ "${resolved}" != "${{ matrix.ha_pin }}" ]; then
-              echo "::error::The floor axis resolved to ${resolved}, not the pinned ${{ matrix.ha_pin }}."
-              exit 1
-            fi
-          else
-            if [ "${resolved}" = "2025.9.1" ]; then
-              echo "::error::The unpinned axis resolved to the declared floor (${resolved}); both axes are testing the same release."
-              exit 1
-            fi
+          echo "pytest-homeassistant-custom-component==${plugin}"
+          if [ "${resolved}" != "${{ matrix.ha_pin }}" ]; then
+            echo "::error::The ${{ matrix.label }} axis resolved Home Assistant ${resolved}, not the pinned '${{ matrix.ha_pin }}'."
+            exit 1
+          fi
+          if [ "${plugin}" != "${{ matrix.plugin_pin }}" ]; then
+            echo "::error::The ${{ matrix.label }} axis resolved pytest-homeassistant-custom-component ${plugin}, not the pinned '${{ matrix.plugin_pin }}'."
+            exit 1
           fi
 
       # No coverage gate here: coverage is measured once, by the `test` job on
@@ -787,9 +834,9 @@ jobs:
             fi
 
             if [ "${{ needs.lint.result }}" = "success" ]; then
-              echo "| Lint (ruff, mypy, codespell, bandit) | ✅ Pass |"
+              echo "| Lint (ruff, mypy, codespell, bandit, pre-commit) | ✅ Pass |"
             else
-              echo "| Lint (ruff, mypy, codespell, bandit) | ❌ Fail |"
+              echo "| Lint (ruff, mypy, codespell, bandit, pre-commit) | ❌ Fail |"
             fi
 
             if [ "${{ needs.test.result }}" = "success" ]; then

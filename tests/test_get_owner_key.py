@@ -42,6 +42,7 @@ Each ``RL-*`` test pins one member of the eight bug families distilled from the
 from __future__ import annotations
 
 import base64
+import logging
 from binascii import Error as BinasciiError
 from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
@@ -280,6 +281,58 @@ async def test_rl9_shared_key_called_with_username(
 
     assert info.key == KEY32
     mocks["shared"].assert_awaited_once_with(cache=cache, username=user)
+
+
+# === Account in log records only through _mask_email_for_logs ==============
+_GOK_LOGGER = gok.__name__
+
+
+async def test_retrieved_owner_key_record_masks_the_account(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The INFO record names the account only in the shared masked form.
+
+    ``AGENTS.md`` section 5 allows an account in a log only through the masking
+    helpers; the former ad-hoc mask kept the first three characters and the
+    last ten, which shows the whole domain and part of the local name.
+    """
+    _patch_retrieval(monkeypatch)
+    cache = _FakeCache()
+    user = "user@example.com"
+    caplog.set_level(logging.DEBUG, logger=_GOK_LOGGER)
+
+    await gok.async_get_owner_key(cache=cache, username=user)
+
+    own = [rec for rec in caplog.records if rec.name == _GOK_LOGGER]
+    info = [rec.getMessage() for rec in own if rec.levelno == logging.INFO]
+    assert any("u***@example.com" in message for message in info), info
+    for rec in own:
+        assert user not in rec.getMessage()
+        assert "use***" not in rec.getMessage()
+
+
+async def test_legacy_migration_record_masks_the_account(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The DEBUG records of the legacy migration name the account masked, too."""
+    _patch_retrieval(monkeypatch)
+    user = "legacy@example.com"
+    caplog.set_level(logging.DEBUG, logger=_GOK_LOGGER)
+    for seeded in ({"key": HEX64, "version": 3}, HEX64):
+        cache = _FakeCache()
+        cache.seed(_LEGACY_KEY, seeded)
+        caplog.clear()
+
+        await gok.async_get_owner_key(cache=cache, username=user)
+
+        migrated = [
+            rec.getMessage()
+            for rec in caplog.records
+            if rec.name == _GOK_LOGGER and "Migrated legacy" in rec.getMessage()
+        ]
+        assert migrated, type(seeded).__name__
+        assert all("l***@example.com" in message for message in migrated)
+        assert all(user not in message for message in migrated)
 
 
 # === RL-10: trailers-only / empty SPOT body -> ConfigEntryAuthFailed =======

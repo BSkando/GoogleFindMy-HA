@@ -117,11 +117,17 @@ pytest-homeassistant-custom-component` command to run for roughly five
 minutes in the hosted environment. Plan regression runs and shell work
 around that window so long installs finish before invoking `pytest`.
 
-When those stubs are active, remember that the entity registry fixture
-populates `hass.data["entity_registry"]`. Integration helpers under test
-should consult that cached instance before calling
-`entity_registry.async_get(...)` so recovery logic inspects the same
-registry object as the fixture.
+When those stubs are active, remember that the stub entity registry is
+cached on the hass double as `hass._entity_registry_stub`; the stub
+`entity_registry.async_get(hass)` creates it on first use and returns the
+same object afterwards. Integration code and tests reach it through
+`er.async_get(hass)`, so recovery logic inspects the same registry object as
+the fixture. Its `async_get_entity_id(domain, platform, unique_id)` has the
+Home Assistant signature: `domain` is the entity domain derived from the
+`entity_id` (as `RegistryEntry.domain` is in the core), and `platform` is
+the owning integration (`DOMAIN`), not the entity domain. The stub models
+active entries only; the core's trash (`deleted_entities`) is not modelled,
+which matches the core lookup, because `async_get_entity_id` never reads it.
 
 When patching Home Assistant network helpers, patch the module-level
 `get_url` import used by the integration (for example,
@@ -276,7 +282,7 @@ are installed. **Review this checklist on every single change under
    is the only thing that gets an un-ignored device its entity back) and
    settings (`async_step_settings`, which asks for its own reload since the
    handler stopped inheriting one from `OptionsFlowWithReload`, and asks only
-   when the submission actually changes the options or the selected subentry)
+   when the submission actually changes the options)
    schedule their reload through
    `config_flow._schedule_claimed_reload`, so their manager doubles must expose
    a **synchronous** `async_schedule_reload` recorder (the core method is a
@@ -397,6 +403,56 @@ are installed. **Review this checklist on every single change under
     outranks `default` in the rendered form. Resolve the binding
     (`cls.__mro__`, `inspect.getsourcefile`) before reasoning about which body
     runs; a stub file existing is not evidence that it is the one bound.
+11. **Service registry, service call and authorization doubles** —
+    `tests/test_service_doubles.py` pins the doubles in
+    [`tests/helpers/service_doubles.py`](helpers/service_doubles.py) against
+    the genuine core: the real `async_register_admin_service` registers
+    through `FakeServiceRegistry` (the admin wrapper is unwrapped to the
+    original handler, its schema and admin flag are recorded), a registry with
+    the old three-argument `async_register` is rejected by that helper, and the
+    stub `Unauthorized`/`UnknownUser` take the same keyword arguments as the
+    real classes. When Home Assistant changes the wrapper shape,
+    `unwrap_admin_handler` raises instead of passing a foreign `partial`
+    through; update the doubles and this test together.
+12. **Exception stubs with translation metadata** —
+    `tests/test_exception_stub_translation_parity.py` builds
+    `HomeAssistantError`, `UpdateFailed` and `ConfigEntryNotReady` from the
+    `conftest` stubs and from the core and compares the stored
+    `translation_domain`, `translation_key`, `translation_placeholders` and
+    `retry_after` plus `str()`. Features an older core lacks (`retry_after`
+    before 2026.1.3, class defaults of the translation fields before
+    2026.9.3, as measured) are skipped with a reason there and fail on any
+    core from that version on. A text argument wins, a key without text
+    renders the raw key (the core's result when no translation is cached),
+    and `ConfigEntryNotReady` without text falls back to `str(__cause__)`.
+    The stub `UpdateFailed` derives from the stub `HomeAssistantError` as in
+    the core, so `except HomeAssistantError` now also catches it in tests.
+    `ServiceValidationError` keeps its own `"domain:key"` rendering (see the
+    string representation contract below). Compare by construction, not by
+    `inspect.signature`: the translation arguments live only in
+    `HomeAssistantError.__init__`.
+
+13. **Entity registry and sensor restore stubs** — the `conftest` entity
+    registry answers `async_get_entity_id(domain, platform, unique_id)` like
+    the core and its entries carry `domain` derived from the `entity_id`;
+    `record_entity(..., platform=DOMAIN)` registers an entry owned by the
+    integration. The stub sensor module carries `SensorExtraStoredData`
+    (`as_dict`/`from_dict` for value and unit), the stub `SensorEntity`
+    exposes `native_unit_of_measurement` in the core's order
+    (`_attr_native_unit_of_measurement`, then the entity description, then
+    `None`), and the stub `RestoreSensor` exposes `extra_restore_state_data`,
+    `async_get_last_sensor_data`, `async_get_last_extra_data` and
+    `async_get_last_state`. As in the core, `async_get_last_sensor_data`
+    derives value and unit from `async_get_last_extra_data`
+    (`SensorExtraStoredData.from_dict(extra.as_dict())`); the other two
+    getters return `None`. Tests patch `async_get_last_extra_data` (and
+    `async_get_last_state` for legacy attributes), not
+    `async_get_last_sensor_data`, so value and sighting time come from one
+    stored record as in Home Assistant; patching `async_get_last_sensor_data`
+    stays for its own error paths. The date and `Decimal` encoding of the core's
+    `SensorExtraStoredData` is not modelled. When the core changes any of
+    these signatures, update the stubs together with
+    `tests/test_ble_battery_sensor_max_age.py`.
 
 Treat this checklist as a living document: if a new helper or guard
 becomes necessary, add it here and verify each item before completing
@@ -523,6 +579,35 @@ violation. Its docstring lists what it does not see, for example a write inside
 a function that is called at import time, other alias forms and indirect access
 such as `getattr(sys, "modules")`. The rule above covers those as well.
 
+### Fresh import of an integration module under real Home Assistant modules
+
+`custom_components.googlefindmy.*` is imported under the stubs and stays bound
+to them; `use_real_homeassistant_modules` swaps in the real Home Assistant
+modules but does not rebind integration modules that are already imported. A
+test that needs a module bound to the real classes (real `Unauthorized`, real
+registries, the real admin helper) imports it freshly inside a fixture, after
+the swap, and hands every `custom_components.googlefindmy.*` key the import
+creates to `monkeypatch`: pop the new module and `monkeypatch.setitem` it back,
+so `monkeypatch` removes it on teardown and no module bound to the real
+modules stays in `sys.modules` for later stub-world tests. A key that existed
+before is removed through `monkeypatch.delitem` and restored on teardown. This
+follows the rule above: `sys.modules` is only touched through `monkeypatch`, in
+a fixture, never at import time. `tests/test_services_permissions.py`
+(`_fresh_import`, `services_module`) is the reference, and
+`tests/test_services_permissions_teardown.py` sorts after it and checks from the
+stub world that `services` is bound to the stubs again.
+
+The same file also builds Home Assistant itself from a freshly imported
+`pytest_homeassistant_custom_component.common` instead of using the plugin's
+`hass` fixture. The plugin's fixture builds Home Assistant from the modules the
+plugin imported when it was loaded; after the swap the test and the freshly
+imported module use other copies, so enums differ by identity
+(`RegistryEntryDisabler`, `HassJobType`). Measured: an admin action registered
+through the fresh `async_register_admin_service` is then never run, because the
+plugin's core does not recognise the job type of the fresh `HassJob`. Build the
+instance from the same copy (`ha_common` and `hass` fixtures there) when a test
+crosses that boundary.
+
 ## No full-command-line process kills
 
 `pkill -f <pattern>` selects by matching the **full command line** of every
@@ -595,6 +680,31 @@ Home Assistant modules so the integration can be imported and exercised in
 isolation. The recent additions mirror enough of the `ConfigFlow` contract to
 support discovery update tests and follow the real integration's behavior
 closely enough for regression coverage.
+
+### Service registry, service call and authorization stubs
+
+Service registries that integration handlers are registered on, and service
+calls they are invoked with, come only from
+[`tests.helpers.service_doubles`](helpers/service_doubles.py); do not define a
+local class with `async_register` or a local service call double in a test
+module. The one exception is a deliberately incompatible registry that shows a
+rejected signature, such as the three-argument registry in
+`tests/test_service_doubles.py`. `FakeServiceRegistry.async_register` accepts the full Home Assistant
+signature (schema, `supports_response`, keyword arguments), stores the
+unwrapped handler in `handlers` (alias `registered`), the registered object in
+`raw_handlers`, the schema in `schemas` and admin registrations in
+`admin_services`. `FakeServiceCall(data=None, context=None, domain=..., service=...)`
+defaults to a `FakeContext` without `user_id`, which is how an automation
+calls a service. `tests/conftest.py` installs both as `homeassistant.core.ServiceCall`
+and `homeassistant.core.Context`, adds the stub `Unauthorized` and
+`UnknownUser` to `homeassistant.exceptions` through
+`install_service_auth_stubs`, and gives the stub entity base a `_context`
+attribute. Import the names from `tests.helpers.service_doubles` directly; apart
+from `FakeServiceRegistry`, which `tests.helpers` and
+`tests.helpers.homeassistant` keep exporting under its old name, they are not
+exported through `tests.helpers`. In the stub world the admin wrapper in
+`raw_handlers` raises the real `homeassistant.exceptions.Unauthorized`, not the
+stub class; test admin rejections under real Home Assistant modules.
 
 ### `ServiceValidationError` string representation contract
 
@@ -979,6 +1089,67 @@ of reporting a false positive
 (``::test_ap4_the_record_is_deduplicated_per_subentry_not_per_coordinator``
 carries both guards).
 
+## `eval` and `exec` in tests
+
+The security baseline in [`AGENTS.md`](../AGENTS.md) (section 11.2) says never
+to use `eval`/`exec`. This section is the only exception, and it holds for
+tests only. A test may reference `eval` or `exec` when all of the following hold:
+
+* **Source of the code.** The code it runs is either repository source (an
+  integration module inside the checkout, compiled without importing Home
+  Assistant) or code the test builds itself from constants written in the test
+  file (frozen forms, Hypothesis strategies over fixed parts). It never comes from
+  outside the checkout: no network data, no environment variables, no files outside
+  the repository, no user input.
+* **Listed site.** The reference stands in the table below, with the number of
+  references per function (qualified through classes and functions, as in
+  `Outer.inner`). `tests/test_guard_eval_exec_sites.py` pins the table against
+  every reference to `eval`/`exec` in every Python file git would commit (tracked,
+  or untracked and not ignored), not only under `tests/`: a new site, an extra
+  reference and a stale row each fail it. Adding a row needs a reason in the pull
+  request that meets the first condition.
+* **No `noqa`.** `S102` and `S307` are not enabled in this repository, so a
+  `# noqa` on such a call suppresses nothing and only suggests a review that never
+  took place. The reason lives in this section.
+
+Why an exception: the credential folding guard uses Python itself as its oracle.
+`ast.literal_eval` runs neither a comprehension nor a method, and an evaluator of
+our own would replace the oracle by the code under test. A subprocess per oracle
+call (permitted by section 11.2) was measured on 2026-11-02: one run of that file
+makes 12,778 oracle calls (a call of `_python_writes`, `_oracle_runs_to_the_member`
+or `_keys_held_after`, or an `eval`/`exec` in one of the listed tests) and takes
+about two minutes, and an interpreter start takes 8.6 ms with `-I -S` and 19.2 ms
+without flags (median of 30). A subprocess per oracle call would add about two to
+four minutes, so the run would take two to three times as long.
+
+| File | Function | References |
+|---|---|---|
+| `tests/helpers/ast_extract.py` | `compile_class_method_from_module` | 1 |
+| `tests/test_guard_credential_key_folding.py` | `_python_writes` | 1 |
+| `tests/test_guard_credential_key_folding.py` | `test_python_is_the_oracle_for_class_bases` | 2 |
+| `tests/test_guard_credential_key_folding.py` | `_oracle_runs_to_the_member` | 2 |
+| `tests/test_guard_credential_key_folding.py` | `_keys_held_after` | 1 |
+| `tests/test_guard_credential_key_folding.py` | `test_the_statement_loop_limit_writes_the_member_in_python` | 1 |
+| `tests/test_guard_credential_key_folding.py` | `test_a_target_over_a_builtin_call_stays_unknown` | 1 |
+
+The guard counts references, not calls, so neither an alias of the function nor
+one of its module can hide a later call. A reference is the bare name (`exec(…)`,
+`run = exec`), any attribute named `eval` or `exec` whatever object carries it
+(`builtins.exec`, `b.exec` after `import builtins as b`,
+`__import__("builtins").exec`, `sys.modules["builtins"].exec`), each keyword of a
+class pattern (`case object(exec=run)` reads the attribute), and each of the two
+names imported from `builtins`. A name that only binds or declares (`def exec`, a
+parameter, `except E as exec`, `case exec`, `import os as exec`) reads nothing and
+does not count; the guard pins this split for every name field of the grammar,
+so a new field fails it. It does not see a lookup by string such as
+`getattr(builtins, name)`, `builtins.__dict__["exec"]` or `vars(builtins)["exec"]`.
+
+One call is made without a reference and therefore stands outside the table:
+the battery in `_returns_an_iterable` (`tests/test_guard_credential_key_folding.py`)
+calls each builtin without a form through `getattr`, with constant stub arguments.
+`exec` is one of them (nine argument sets per run); `eval` has a form and is not.
+Frozen forms whose own text calls `eval` run through a listed site and add none.
+
 ## AST extraction helper
 
 The :mod:`tests.helpers.ast_extract` module exposes
@@ -1249,7 +1420,7 @@ branch, guard file excluded: `also` 231, `falls` 127, `probe` 121, `dies` 23, `d
 (the DER encoding in the credential tests), `mit` 5 (the MIT licence header), `wichtig` 1
 (the `WICHTIG-2` ticket label). Six further words sit at zero today and are kept out
 pre-emptively because each collides with an acronym this domain really uses: `des` (DES),
-`ist` (IST), `dem` (DEM), `aus` (AUS), `als` (ambient light sensor) and `vor` (VHF
+`ist` (IST), `dem` (DEM), `aus` (AUS), `als` (ambient light sensor) and `vor` (VHF <!-- codespell:ignore -->
 omnidirectional range). The subtraction happens in `_german_markers_in`, not merely in the comment: an
 earlier draft documented the exclusion without performing it. Without those numbers the list gets tidied up later and the
 guard starts crying wolf, which gets it switched off rather than obeyed. The cost is

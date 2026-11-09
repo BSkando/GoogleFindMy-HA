@@ -274,14 +274,14 @@ async def test_async_purge_unloaded_subentry_registrations_removes_registries() 
 
     ent_reg.record_entity(
         "device_tracker.tracker_one",
-        platform="device_tracker",
+        platform=DOMAIN,
         unique_id="entity-1",
         config_entry_id=parent_entry_id,
         config_entry_subentry_id=config_subentry_id,
     )
     ent_reg.record_entity(
         "device_tracker.tracker_two",
-        platform="device_tracker",
+        platform=DOMAIN,
         unique_id="entity-2",
         config_entry_id=parent_entry_id,
         config_entry_subentry_id="other-subentry",
@@ -340,7 +340,7 @@ async def test_async_unload_subentry_purges_never_loaded_platforms() -> None:
 
     ent_reg.record_entity(
         "device_tracker.tracker_one",
-        platform="device_tracker",
+        platform=DOMAIN,
         unique_id="entity-1",
         config_entry_id=parent_entry_id,
         config_entry_subentry_id=config_subentry_id,
@@ -606,13 +606,19 @@ async def test_async_unload_entry_preserves_registry_and_user_names(
     hass = _HassStub(entry, runtime_data, _RegistryTracker(), _RegistryTracker())
     hass.config_entries.async_forward_entry_unload = AsyncMock(return_value=True)
 
-    async def _noop_purge(*_: object, **__: object) -> tuple[int, int]:
+    # Record the purge instead of replacing it with a no-op: a reload of a
+    # loaded entry must not call it at all (the registry stubs here would not
+    # show a removal, so the call itself is the observable).
+    purge_calls: list[dict[str, object]] = []
+
+    async def _recording_purge(*_: object, **kwargs: object) -> tuple[int, int]:
+        purge_calls.append(dict(kwargs))
         return (0, 0)
 
     monkeypatch.setattr(
         integration,
         "_async_purge_unloaded_subentry_registrations",
-        _noop_purge,
+        _recording_purge,
     )
 
     device_registry = _DeviceRegistryStub()
@@ -641,6 +647,7 @@ async def test_async_unload_entry_preserves_registry_and_user_names(
     assert refreshed is not None
     assert refreshed.name_by_user == "Custom Label"
     assert refreshed.name == "API Name"
+    assert purge_calls == []
 
 
 async def test_async_unload_entry_passes_entry_to_fcm_release(

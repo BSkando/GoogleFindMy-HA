@@ -262,11 +262,7 @@
         "title": "Inloggegevens bijwerken (optioneel)",
         "description": "Werk je inloggegevens bij. Bestaande waarden worden om veiligheidsredenen niet getoond.\n\nPlak de volledige inhoud van een nieuwe **secrets.json** (gegenereerd door GoogleFindMyTools uit te voeren).\n\nZodra je verzendt, worden de inloggegevens gevalideerd en opgeslagen; de integratie wordt opnieuw geladen zonder je entiteitsnamen te wijzigen.",
         "data": {
-          "new_secrets_json": "Nieuwe secrets.json (volledige inhoud)",
-          "subentry": "Functiegroep"
-        },
-        "data_description": {
-          "subentry": "Pas de inloggegevensupdates toe op de geselecteerde functiegroep. Raadpleeg de gids [Subentries en functiegroepen]({subentries_docs_url}) voor details over de werkwijze."
+          "new_secrets_json": "Nieuwe secrets.json (volledige inhoud)"
         }
       },
       "settings": {
@@ -287,7 +283,6 @@
           "map_view_token_expiration": "Kaartweergave-tokenverloopdatum inschakelen",
           "map_view_enabled": "Kaartweergave inschakelen",
           "contributor_mode": "Locatiebijdragermodus",
-          "subentry": "Functiegroep",
           "secrets_extra_watch_paths": "Extra secrets.json-controlepaden (één per regel)"
         },
         "data_description": {
@@ -300,7 +295,6 @@
           "map_view_token_expiration": "Indien ingeschakeld, verlopen kaartweergavetokens na 1 week. Indien uitgeschakeld (standaard), verlopen tokens niet.",
           "map_view_enabled": "Standaard ingeschakeld. Indien uitgeschakeld worden kaartweergave-verzoeken geweigerd als bij een ongeldig token en worden apparaatlinks gewist. Vernieuwt bestaande links niet; als een link mogelijk is gelekt, gebruik 'Kaartweergave-tokenverloopdatum inschakelen' (tot twee weken indien al ingeschakeld).",
           "contributor_mode": "Kies hoe je apparaat bijdraagt aan het Google-netwerk (standaard Alle gebieden voor crowdsourced rapportage, of alleen drukbezochte gebieden).",
-          "subentry": "Sla deze opties op in de geselecteerde functiegroep. Zie [Subentries en functiegroepen]({subentries_docs_url}) voor voorbeelden.",
           "secrets_extra_watch_paths": "Optioneel. Extra absolute paden naar secrets.json-bestanden die de integratie moet bewaken voor automatische overname, één per regel. Laat leeg om alleen de standaardlocaties te bewaken."
         }
       },
@@ -371,7 +365,7 @@
   "services": {
     "locate_device": {
       "name": "Apparaat lokaliseren",
-      "description": "Verkrijg de huidige locatie van een Google Find My-apparaat.",
+      "description": "Verkrijg de huidige locatie van een Google Find My-apparaat. Wanneer een gebruiker deze actie aanroept, is toestemming voor bediening van de entiteiten van het apparaat vereist; automatiseringen en scripts zonder gebruikerscontext worden niet beïnvloed.",
       "fields": {
         "device_id": {
           "name": "Apparaat",
@@ -381,7 +375,7 @@
     },
     "play_sound": {
       "name": "Geluid afspelen",
-      "description": "Speel een geluid af op een Google Find My-apparaat.",
+      "description": "Speel een geluid af op een Google Find My-apparaat. Wanneer een gebruiker deze actie aanroept, is toestemming voor bediening van de entiteiten van het apparaat vereist; automatiseringen en scripts zonder gebruikerscontext worden niet beïnvloed.",
       "fields": {
         "device_id": {
           "name": "Apparaat",
@@ -391,7 +385,7 @@
     },
     "stop_sound": {
       "name": "Geluid stoppen",
-      "description": "Stop het geluid op een Google Find My-apparaat.",
+      "description": "Stop het geluid op een Google Find My-apparaat. Wanneer een gebruiker deze actie aanroept, is toestemming voor bediening van de entiteiten van het apparaat vereist; automatiseringen en scripts zonder gebruikerscontext worden niet beïnvloed.",
       "fields": {
         "device_id": {
           "name": "Apparaat",
@@ -401,17 +395,17 @@
     },
     "refresh_device_urls": {
       "name": "Apparaat-URL's vernieuwen",
-      "description": "Vernieuw de configuratie-URL's voor Google Find My-apparaten zodat ze naar de geïntegreerde kaartweergave verwijzen.",
+      "description": "Vernieuw de configuratie-URL's voor Google Find My-apparaten zodat ze naar de geïntegreerde kaartweergave verwijzen. Alleen voor beheerders wanneer een gebruiker deze actie aanroept.",
       "fields": {}
     },
     "rebuild_device_registry": {
       "name": "Apparaatregister opnieuw opbouwen",
-      "description": "Onderhoud: bouwt apparaatregisterkoppelingen voor Google Find My-hubs opnieuw op en verwijdert trackerapparaten die onjuist aan het bovenliggende item zijn gekoppeld.",
+      "description": "Onderhoud: bouwt apparaatregisterkoppelingen voor Google Find My-hubs opnieuw op en verwijdert trackerapparaten die onjuist aan het bovenliggende item zijn gekoppeld. Alleen voor beheerders wanneer een gebruiker deze actie aanroept.",
       "fields": {}
     },
     "locate_external": {
       "name": "Apparaat lokaliseren (extern)",
-      "description": "Lokaliseer een apparaat met de externe helper; delegeert naar de normale lokaliseeroperatie.",
+      "description": "Lokaliseer een apparaat met de externe helper; delegeert naar de normale lokaliseeroperatie. Wanneer een gebruiker deze actie aanroept, is toestemming voor bediening van de entiteiten van het apparaat vereist; automatiseringen en scripts zonder gebruikerscontext worden niet beïnvloed.",
       "fields": {
         "device_id": {
           "name": "Apparaat",
@@ -425,7 +419,7 @@
     },
     "rebuild_registry": {
       "name": "Register opnieuw opbouwen/migreren",
-      "description": "Onderhoud: Voer een zachte data→opties-migratie uit of bouw entiteiten/apparaten voor deze integratie opnieuw op.",
+      "description": "Onderhoud: Voer een zachte data→opties-migratie uit of bouw entiteiten/apparaten voor deze integratie opnieuw op. Alleen voor beheerders wanneer een gebruiker deze actie aanroept.",
       "fields": {
         "mode": {
           "name": "Modus",
@@ -434,6 +428,44 @@
         "device_ids": {
           "name": "Apparaten (optioneel)",
           "description": "Beperk de operatie tot specifieke apparaten. Laat leeg om alle Google Find My-apparaten te targeten."
+        }
+      }
+    },
+    "read_beacon_state": {
+      "name": "Read Beacon State",
+      "description": "Diagnostic: connects to a tracker over Bluetooth, reads its FMDN state and returns it as the response. It sends read requests only and runs only when called; administrators only. The first access to a Provider that was never accessed before makes it choose an owner account key until factory reset, so use it on trackers that are already set up.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "Select a Google Find My device (or pass a canonical ID via Developer Tools)."
+        },
+        "address": {
+          "name": "Bluetooth address (optional)",
+          "description": "Connect to this address instead of searching for a Fast Pair advertisement that matches the device's account key. The address is not checked against any key."
+        },
+        "timeout": {
+          "name": "Timeout (optional)",
+          "description": "Time limit in seconds, 5 to 120, for the key lookup and again for connection and reads. Cleanup may add a few seconds."
+        },
+        "include_raw_response": {
+          "name": "Ruwe respons opnemen (optioneel)",
+          "description": "Geeft ook de ruwe respons van de provisioningstatus terug als hexadecimale waarde. Deze bevat de volledige huidige EID van de tracker, ga daar zorgvuldig mee om."
+        },
+        "search_seconds": {
+          "name": "EID-zoekvenster (optioneel)",
+          "description": "Seconden aan weerszijden van de klok van de tracker om per seconde naar de teller van een EID te zoeken. 0 schakelt dit uit. Het zoeken loopt nadat de verbinding is gesloten, duurt tot 5 minuten langer en belast intussen de CPU."
+        },
+        "search_eid": {
+          "name": "Te zoeken EID (optioneel)",
+          "description": "Een EID uit een advertentie, 20 of 32 bytes als hexadecimale waarde. Wordt gezocht naast de EID die de tracker meldt en de EID die het gekozen adres uitzendt. Alleen gebruikt met een zoekopdracht."
+        },
+        "identity_form": {
+          "name": "Identiteit om mee te verbinden (optioneel)",
+          "description": "Met welke identiteit van de tracker wordt verbonden: elke, de locator die het FMDN-frame verstuurt, of het audioapparaat dat Common Audio aankondigt. Genegeerd als een adres is opgegeven."
+        },
+        "derivation_windows": {
+          "name": "Zoekvenster voor afleidingen (optioneel)",
+          "description": "Rotatievensters van 1024 s om aan elke kant van de klok van de tracker te doorzoeken, waarbij andere sleutel- en blokvormen tegen de gezochte EID's worden geprobeerd. 0 schakelt het uit. Het draait nadat de verbinding is gesloten, duurt tot 5 minuten langer en belast intussen de CPU."
         }
       }
     }
@@ -830,7 +862,7 @@
       "message": "Apparaat {device_id} kon niet worden gevonden of maakt geen deel uit van deze integratie."
     },
     "no_active_entry": {
-      "message": "Geen actief Google Find My Device-item beschikbaar. Actieve items: {active_count}/{total_count}. Schakel een van de geconfigureerde items ({entries}) in of voeg een nieuw account toe en probeer het opnieuw."
+      "message": "Geen actief Google Find My Device-item beschikbaar. Actieve items: {active_count}/{total_count}. Schakel een van de geconfigureerde items in of voeg een nieuw account toe en probeer het opnieuw."
     },
     "locate_failed": {
       "message": "Kan apparaat {device_id} niet lokaliseren: {error}"
@@ -859,11 +891,77 @@
     "stop_sound_uncorrelated": {
       "message": "Stop Sound voor {device_id} is verzonden, maar kon niet aan het lopende belsignaal worden gekoppeld: het is elders gestart, of de sleutel die deze installatie heeft is te oud om voor in te staan. Google kan de stop mogelijk niet koppelen, dus het apparaat kan blijven afspelen. Druk op de knop op de tracker of wacht tot het belsignaal vanzelf stopt."
     },
+    "stop_sound_no_cancel_key": {
+      "message": "Stop Sound voor {device_id} is verzonden, maar deze installatie heeft geen sleutel voor een belsignaal op dit apparaat. Het belsignaal is waarschijnlijk elders gestart, bijvoorbeeld in de app Find Hub, dus Google kan de stop mogelijk niet koppelen en het apparaat kan blijven afspelen. Stop het waar het gestart is, druk op de knop op de tracker of wacht tot het belsignaal vanzelf stopt."
+    },
+    "stop_sound_cancel_key_aged": {
+      "message": "Stop Sound voor {device_id} is verzonden met de sleutel van het laatste belsignaal dat deze installatie startte, maar die sleutel is ouder dan 30 minuten en kan niet instaan voor het huidige belsignaal, dus het apparaat kan blijven afspelen. Druk op de knop op de tracker of wacht tot het belsignaal vanzelf stopt."
+    },
+    "stop_sound_cancel_key_foreign": {
+      "message": "Stop Sound voor {device_id} is verzonden met de opgegeven request-UUID, maar die hoort bij geen enkel belsignaal dat deze installatie startte. Niets bewijst dat de stop bij het lopende belsignaal hoort, dus het apparaat kan blijven afspelen. Laat de request-UUID leeg om de eigen sleutel van deze installatie te gebruiken, druk op de knop op de tracker of wacht tot het belsignaal vanzelf stopt."
+    },
     "missing_token_cache": {
       "message": "Tokencache ontbreekt. Geef de item-specifieke TokenCache op (bijvoorbeeld entry.runtime_data.token_cache)."
     },
     "missing_namespace": {
       "message": "Namespace ontbreekt. Geef de item-specifieke namespace of ConfigEntry-ID door om gecachete metadata geïsoleerd te houden."
+    },
+    "device_list_rate_limited": {
+      "message": "Google beperkt tijdelijk de aanvragen voor de apparatenlijst. De integratie probeert het automatisch opnieuw."
+    },
+    "device_list_server_error": {
+      "message": "De apparatenlijst is tijdelijk niet beschikbaar (serverfout {status}). De integratie probeert het automatisch opnieuw."
+    },
+    "device_list_rejected": {
+      "message": "De server heeft de aanvraag voor de apparatenlijst geweigerd (HTTP {status})."
+    },
+    "device_list_decode_failed": {
+      "message": "Het antwoord van Google op de aanvraag voor de apparatenlijst kon niet worden gedecodeerd."
+    },
+    "device_list_logic_error": {
+      "message": "Google heeft een fout gemeld bij het ophalen van de apparatenlijst."
+    },
+    "multi_entry_guard": {
+      "message": "Er zijn meerdere Google Find My Device-items actief, maar deze aanvraag was aan geen van deze items gekoppeld. De integratie probeert het automatisch opnieuw."
+    },
+    "device_list_failed": {
+      "message": "De apparatenlijst kon niet worden opgehaald."
+    },
+    "device_list_network_error": {
+      "message": "Netwerkfout bij het ophalen van de apparatenlijst."
+    },
+    "device_list_unexpected_error": {
+      "message": "Onverwachte fout bij het ophalen van de apparatenlijst."
+    },
+    "cold_start_empty_device_list": {
+      "message": "De apparatenlijst was direct na het opstarten leeg. Dit wordt als tijdelijk beschouwd en de integratie probeert het automatisch opnieuw."
+    },
+    "update_unexpected_error": {
+      "message": "Onverwachte fout tijdens de update ({error_type})."
+    },
+    "locate_timeout": {
+      "message": "Er is een time-out opgetreden bij het locatieverzoek voor apparaat {device_id}."
+    },
+    "locate_not_accepted": {
+      "message": "In deze ronde is het locatieverzoek van geen enkel apparaat geaccepteerd ({not_accepted} niet geaccepteerd, {rejected} geweigerd)."
+    },
+    "locate_all_rejected": {
+      "message": "De server heeft het locatieverzoek in deze ronde voor alle apparaten ({rejected}) geweigerd."
+    },
+    "beacon_keys_unavailable": {
+      "message": "No key material is available for this device."
+    },
+    "beacon_invalid_address": {
+      "message": "The address is not a valid Bluetooth address."
+    },
+    "beacon_invalid_eid": {
+      "message": "De EID moet 20 of 32 bytes als hexadecimale waarde zijn."
+    },
+    "beacon_bluetooth_unavailable": {
+      "message": "The Bluetooth integration is not loaded."
+    },
+    "beacon_diagnostic_busy": {
+      "message": "Another beacon diagnostic is running. Try again when it has finished."
     }
   },
   "system_health": {

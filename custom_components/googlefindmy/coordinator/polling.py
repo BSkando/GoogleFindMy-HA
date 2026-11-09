@@ -48,6 +48,7 @@ from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from .._reauth_reason import ReauthReasonCode
 from ..Auth.fcm_receiver_ha import CRASH_LOOP_FATAL_PREFIX
+from ..Auth.log_safety import describe_exception
 from ..const import (
     DEVICE_LIST_POLL_INTERVAL,
     DOMAIN,
@@ -69,6 +70,7 @@ from ..NovaApi.nova_request import (
     NovaAuthPermanentError,
     is_credential_rejection,
 )
+from ..ProtoDecoders import decoder
 from ..SpotApi.GetEidInfoForE2eeDevices.get_eid_info_request import (
     SpotApiEmptyResponseError,
 )
@@ -1307,6 +1309,11 @@ class PollingOperations(_MixinBase):
                 use_cached_list = not list_due and bool(self._last_device_list)
 
             filtered_devices: list[dict[str, Any]]
+            # Set only below, for a list fetched in this cycle that is not empty.
+            # Cached, deferred and accepted-empty lists prove nothing about which
+            # devices left the account (stale-device rules S-R1, S-R2).
+            fresh_list_ids: set[str] | None = None
+            dropped_candidates = 0
             if use_cached_list:
                 filtered_devices = list(self._last_device_list)
                 self._set_api_status(ApiStatus.OK)
@@ -1381,6 +1388,7 @@ class PollingOperations(_MixinBase):
                     dev_id_raw = candidate.get("id")
                     if not isinstance(dev_id_raw, str) or not dev_id_raw.strip():
                         _LOGGER.debug("Skipping device without valid id: %r", candidate)
+                        dropped_candidates += 1
                         continue
                     dev_id = dev_id_raw.strip()
                     if dev_id in _logged_ids:
@@ -1418,6 +1426,7 @@ class PollingOperations(_MixinBase):
                     self._empty_list_streak = 0
                     self._last_device_list = list(filtered_devices)
                     self._last_list_poll_mono = list_check_mono
+                    fresh_list_ids = {dev["id"] for dev in filtered_devices}
 
             # Presence TTL derives from the effective poll cadence
             effective_interval = max(
@@ -1453,7 +1462,9 @@ class PollingOperations(_MixinBase):
             # Cold-start guard: if the very first seen list is empty, treat it as transient
             if not filtered_devices and self._last_nonempty_wall == 0.0:
                 raise UpdateFailed(
-                    "Cold start: empty device list; treating as transient."
+                    "Cold start: empty device list; treating as transient.",
+                    translation_domain=DOMAIN,
+                    translation_key="cold_start_empty_device_list",
                 )
 
             # Maintain owner index for FCM fallback routing (entry-scoped).
@@ -1535,6 +1546,37 @@ class PollingOperations(_MixinBase):
                 _LOGGER.debug(
                     "Device Registry ensured/updated for %d device(s).", created
                 )
+
+            # 2.6) Remove tracker devices that left the Google account
+            # (Integration Quality Scale rule ``stale-devices``). After the
+            # ensure step, so creation and removal see the same registry. A
+            # failure here must never fail the update cycle (S-R7).
+            if fresh_list_ids is not None:
+                try:
+                    self._remove_stale_devices(
+                        fresh_list_ids,
+                        dropped_candidates=dropped_candidates,
+                        canonicless_warn=int(
+                            self.stats.get("canonicless_drop_warn", 0)
+                        ),
+                        canonicless_names=decoder.get_canonicless_name_counts(
+                            self._entry_id() or ""
+                        ),
+                    )
+                except Exception as err:  # noqa: BLE001 - S-R7, logged once
+                    # Polling record (AGENTS.md section 5): the exception text
+                    # can carry account data, which no level may log, so INFO
+                    # and above name its class and DEBUG the log-safe summary.
+                    _LOGGER.warning(
+                        "[%s] Removing devices that left the Google account failed (%s)",
+                        self._entry_id() or "unknown",
+                        type(err).__name__,
+                    )
+                    _LOGGER.debug(
+                        "[%s] Stale-device removal error detail: %s",
+                        self._entry_id() or "unknown",
+                        describe_exception(err),
+                    )
 
             # 3) Decide whether to trigger a poll cycle (monotonic clock)
             # Build list of devices to POLL:
@@ -1746,7 +1788,12 @@ class PollingOperations(_MixinBase):
             message = self._short_error_message(err)
             self._set_api_status(ApiStatus.ERROR, reason=message)
             _LOGGER.exception("Unexpected error during coordinator update")
-            raise UpdateFailed(f"{type(err).__name__}: {err}") from err
+            raise UpdateFailed(
+                f"{type(err).__name__}: {err}",
+                translation_domain=DOMAIN,
+                translation_key="update_unexpected_error",
+                translation_placeholders={"error_type": type(err).__name__},
+            ) from err
 
     def _request_poll_reauth(self, reauth_exc: ConfigEntryAuthFailed) -> None:
         """Start the config-entry reauth flow from the background poll cycle.
@@ -2167,7 +2214,10 @@ class PollingOperations(_MixinBase):
                                 if should_filter:
                                     _LOGGER.warning(
                                         "Filtering out Google Home spam detection for %s",
-                                        dev_name,
+                                        dev_id,
+                                    )
+                                    _LOGGER.debug(
+                                        "Device %s is named %s", dev_id, dev_name
                                     )
                                     continue
                                 if replacement_attrs:
@@ -2274,8 +2324,9 @@ class PollingOperations(_MixinBase):
                             if not location.get("semantic_name"):
                                 _LOGGER.warning(
                                     "No location data (coordinates or semantic name) available for %s in this update.",
-                                    dev_name,
+                                    dev_id,
                                 )
+                                _LOGGER.debug("Device %s is named %s", dev_id, dev_name)
                             # Nothing to commit/update in cache
                             # Strip any internal hint before dropping to avoid accidental exposure
                             location.pop("_report_hint", None)
@@ -2402,7 +2453,10 @@ class PollingOperations(_MixinBase):
                             # must not displace anything.
                             if last_exception is None:
                                 last_exception = UpdateFailed(
-                                    f"Location request timed out for device {dev_id}"
+                                    f"Location request timed out for device {dev_id}",
+                                    translation_domain=DOMAIN,
+                                    translation_key="locate_timeout",
+                                    translation_placeholders={"device_id": str(dev_id)},
                                 )
                                 last_exception.__cause__ = terr
                             # INVARIANT, not a live condition: mutating
@@ -2419,14 +2473,18 @@ class PollingOperations(_MixinBase):
                                 and independent_error is None
                             ):
                                 independent_error = UpdateFailed(
-                                    f"Location request timed out for device {dev_id}"
+                                    f"Location request timed out for device {dev_id}",
+                                    translation_domain=DOMAIN,
+                                    translation_key="locate_timeout",
+                                    translation_placeholders={"device_id": str(dev_id)},
                                 )
                                 independent_error.__cause__ = terr
                     except SpotAuthPermanentError:
                         _LOGGER.warning(
                             "Authentication failed for %s; triggering reauth flow.",
-                            dev_name,
+                            dev_id,
                         )
+                        _LOGGER.debug("Device %s is named %s", dev_id, dev_name)
                         self._set_auth_state(
                             failed=True,
                             reason=f"Auth failed during poll for {dev_name}: session invalid",
@@ -2444,8 +2502,9 @@ class PollingOperations(_MixinBase):
                     except SpotApiEmptyResponseError:
                         _LOGGER.warning(
                             "Authentication failed for %s; triggering reauth flow.",
-                            dev_name,
+                            dev_id,
                         )
+                        _LOGGER.debug("Device %s is named %s", dev_id, dev_name)
                         self._set_auth_state(
                             failed=True,
                             reason=f"Auth failed during poll for {dev_name}: session invalid",
@@ -2466,9 +2525,10 @@ class PollingOperations(_MixinBase):
                         # Permanent auth failure (AAS token invalid) - immediate reauth
                         _LOGGER.error(
                             "Permanent authentication failure for %s: %s. Re-authentication required.",
-                            dev_name,
+                            dev_id,
                             perm_err,
                         )
+                        _LOGGER.debug("Device %s is named %s", dev_id, dev_name)
                         self._set_auth_state(
                             failed=True,
                             reason=f"Permanent auth failure for {dev_name}: credentials invalid",
@@ -2504,9 +2564,10 @@ class PollingOperations(_MixinBase):
                                 "Client error (HTTP %s) for %s: %s. "
                                 "Skipping this device; the sign-in is not in question.",
                                 getattr(transient_err, "status", "unknown"),
-                                dev_name,
+                                dev_id,
                                 transient_err,
                             )
+                            _LOGGER.debug("Device %s is named %s", dev_id, dev_name)
                             self.note_error(
                                 transient_err,
                                 where="poll_client_error",
@@ -2600,9 +2661,10 @@ class PollingOperations(_MixinBase):
                         _LOGGER.warning(
                             "Transient auth failure for %s: %s. "
                             "Will retry in next poll cycle.",
-                            dev_name,
+                            dev_id,
                             transient_err,
                         )
+                        _LOGGER.debug("Device %s is named %s", dev_id, dev_name)
                         cycle_failed = True
                         if last_exception is None:
                             last_exception = transient_err
@@ -2751,9 +2813,8 @@ class PollingOperations(_MixinBase):
                         cycle_unaccepted_devices += 1
                         continue
                     except Exception as err:
-                        _LOGGER.error(
-                            "Failed to get location for %s: %s", dev_name, err
-                        )
+                        _LOGGER.error("Failed to get location for %s: %s", dev_id, err)
+                        _LOGGER.debug("Device %s is named %s", dev_id, dev_name)
                         cycle_failed = True
                         self._consecutive_timeouts = 0
                         self.note_error(err, where="poll_exception", device=dev_name)
@@ -3005,7 +3066,13 @@ class PollingOperations(_MixinBase):
                     last_exception = UpdateFailed(
                         f"No device's locate request was accepted this cycle "
                         f"({cycle_unaccepted_devices} not accepted, "
-                        f"{cycle_rejected_devices} rejected)"
+                        f"{cycle_rejected_devices} rejected)",
+                        translation_domain=DOMAIN,
+                        translation_key="locate_not_accepted",
+                        translation_placeholders={
+                            "not_accepted": str(cycle_unaccepted_devices),
+                            "rejected": str(cycle_rejected_devices),
+                        },
                     )
                 # Every device was refused by name: on the rejections' own
                 # terms that is account-wide, so the cycle must surface. Kept as
@@ -3020,7 +3087,12 @@ class PollingOperations(_MixinBase):
                 ):
                     last_exception = UpdateFailed(
                         f"Every device ({cycle_rejected_devices}) was rejected by "
-                        "the server this cycle"
+                        "the server this cycle",
+                        translation_domain=DOMAIN,
+                        translation_key="locate_all_rejected",
+                        translation_placeholders={
+                            "rejected": str(cycle_rejected_devices)
+                        },
                     )
                 # Resolve the cycle's decrypt verdict AND reconcile the cycle's
                 # failure state with it in one place (positive proof dominates: a

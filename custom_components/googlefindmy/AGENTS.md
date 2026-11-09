@@ -8,7 +8,7 @@ child directory overrides it.
 
 | Topic | File |
 | --- | --- |
-| Config flows, reconfigure hooks, and service validation | [`agents/config_flow/AGENTS.md`](agents/config_flow/AGENTS.md) |
+| Config flows, reconfigure hooks, service validation, and service permission checks | [`agents/config_flow/AGENTS.md`](agents/config_flow/AGENTS.md) (permissions: section *Service permission checks*) |
 | Runtime lifecycle patterns, platform forwarding, and subentry helpers (**entity lifecycle requirements live here**) | [`agents/runtime_patterns/AGENTS.md`](agents/runtime_patterns/AGENTS.md) |
 | Typing reminders, stub imports, and strict mypy expectations | [`agents/typing_guidance/AGENTS.md`](agents/typing_guidance/AGENTS.md) |
 
@@ -22,12 +22,12 @@ The frame byte does not carry the EID length. Per the [Find Hub Network Accessor
 
 ### SPOT/gRPC client reminder
 
-When reusing the shared grpclib transport (`SpotGrpcTransport`), keep SSL context creation lazy and ensure ALPN includes `h2`. The transport helper already sets the protocol list and should be closed on unload so new channels negotiate HTTP/2 cleanly.
+When reusing the shared grpclib transport (`SpotGrpcTransport`), keep SSL context creation lazy and ensure ALPN includes `h2`. The transport helper already sets the protocol list and should be closed on unload so new channels negotiate HTTP/2 cleanly. Its `Channel` subclass overrides grpclib's private `_create_connection` to add Happy Eyeballs; `tests/test_spot_grpc_happy_eyeballs.py` fails when the upstream method body changes, and a change belongs in both the subclass and that test's literal.
 
 ## Cross-reference index
 
 * [`tests/AGENTS.md`](../../tests/AGENTS.md) — Discovery and reconfigure test stubs, including the lightweight `ConfigEntry` doubles referenced across the topical guides above.
-  * Tests often monkeypatch `hass.async_create_task` with lightweight stand-ins. When authoring platform code, either guard direct calls (for example, verify the attribute exists before invoking it) or update the runtime-patterns guide with the expected stub signature so regressions like the coordinator listener crash do not resurface.
+  * Tests often monkeypatch `hass.async_create_task` and `hass.async_create_background_task` (or the config-entry variant) with lightweight stand-ins; the expected background-task signature is in the runtime-patterns guide (*Background-task stub signatures*). When authoring platform code, either guard direct calls (for example, verify the attribute exists before invoking it) or update the runtime-patterns guide with the expected stub signature so regressions like the coordinator listener crash do not resurface.
   * Keep the coordinator stub in `tests/conftest.py` aligned with new runtime helpers (for example, visibility-wait utilities) to avoid missing-attribute regressions during setup.
   * The `_async_create_task` helper in `custom_components/googlefindmy/__init__.py` intentionally delegates directly to `hass.async_create_task` with the optional `name` argument. Avoid reintroducing alternate scheduling paths that enqueue coroutines multiple times; update tests instead if new task semantics are required.
 * [`docs/CONFIG_SUBENTRIES_HANDBOOK.md`](../../docs/CONFIG_SUBENTRIES_HANDBOOK.md) — Canonical reference for config subentry setup/unload flows.
@@ -344,6 +344,39 @@ anchor then ages out and the coarse fix wins.
 The drop path taken when `_normalize_coords` fails (no usable coordinate pair and nothing cached to preserve) strips
 `_report_hint` before returning; mirror that hint-stripping step in any new helpers that short-circuit low-quality updates so
 internal metadata never leaks into entity state.
+
+**Duplicate reports are not fused again.** The fusion averages an incoming fix with the cached position, and the cached
+position already contains the report that was last committed. The same report delivered again (the next poll returns it
+unchanged, a manual locate gets it once more, the push channel brings what a poll already brought) would be averaged in a
+second time and move the published position towards the raw fix without a new location, each step a new state write that
+`person` reads as a fresh tracker. `coordinator/cache.py::_fusion_report_identity` is the SSOT of what makes two deliveries the
+same report: the normalised `last_seen`, the raw latitude and longitude, the accuracy if it is valid, whether that accuracy is only the fallback estimate and whether the
+report arrives as a trusted anchor (a semantic mapping writes the configured geometry, so an ordinary stampless report can match it), as an 8-byte digest. It
+is not `_tally_identity`, which keys on the timestamp alone and would merge two different reports of one second. The identity is
+formed at the entry of `_apply_weighted_location_fusion`, before any branch rewrites the coordinates, travels as the transient
+marker `_fusion_report_id` (popped in `update_device_cache` before sanitize, stripped by prefix in the fallbacks) and is booked
+into a per-device ring of `_FUSED_REPORT_MEMORY` identities only AFTER the row is committed - for every committed row, fused or
+taken over as a clear jump, and only when it is not in the ring yet, so the repeats of one report cannot evict another report of
+the same second. A delivery whose identity is in the ring keeps the cached geometry (`_DUPLICATE_GEOMETRY_KEYS`), returns `True`
+and commits the rest of the report (battery, height, metadata), except that against a trusted anchor it keeps the anchor's
+height as the snap-back did; it sets no `_fused_applied`, so `fused_updates` does not count it.
+The check sits before the trusted and gate branches, because a remembered report has passed them already, and a report the gate
+rejects is never committed, so it is never remembered and stays rejected on every repeat. Shared devices remember the identity
+of the row they adopt in `_propagate_location_to_shared_devices`; `purge_device` forgets the ring,
+and so does `prime_device_location_cache` when it replaces the geometry (a restored state can overwrite a row committed by
+the first refresh after a restart; the remembered reports are then no longer contained in it). A clear jump or a trusted
+takeover replaces the geometry with a newer report but keeps the ring: an older report in it is then refused instead of being
+used again, so a repeat of a report without a timestamp cannot pull the position back to where it was before the jump, as long
+as that report is still among the last `_FUSED_REPORT_MEMORY` remembered ones and no restart or priming came in between (priming
+forgets the ring because a restored state can be older than the reports in it). The functions that write `_device_location_data`
+or a row taken out of it, in the forms `tests/test_cache_fusion_duplicate_paths.py::test_every_cache_row_writer_handles_the_fused_report_ring`
+detects, are listed with what they do to the ring in `_ROW_WRITERS` there; a new writer is added with its reason. Its docstring
+lists the forms measured as undetected; that list is not exhaustive, so a writer in another form is still a review question. The ring is not persisted:
+after a restart the first repeat of a report is fused once per device, then the rule holds again. Pinned by
+`tests/test_coordinator_significance.py` (the `same_report`, `two_reports`, `repeated_report`, `same_position`, `new_accuracy`,
+`gate_rejected` and `duplicate_*` cases), `tests/test_cache_fusion_duplicate_paths.py` (the three real entry points, a clear jump,
+a trusted takeover, markers, purge, priming, shared devices) and `tests/test_device_tracker_tick_writes.py::test_redelivered_report_is_reported_not_changed`
+(the repeat is a `state_reported`, not a `state_changed`, through the real state machine).
 
 ### Authentication failure propagation
 

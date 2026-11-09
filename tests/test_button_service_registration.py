@@ -196,3 +196,83 @@ async def test_sound_buttons_surface_service_validation_errors() -> None:
 
         with pytest.raises(button_module.ServiceValidationError):
             await button.async_press()
+
+
+def _pressable(base: type) -> type:
+    """Return a subclass with the availability gates stubbed out."""
+
+    # Subclass rather than patch: mutating the production class would leak
+    # the stubbed gates into every later test in the session.
+    class _Pressable(base):  # type: ignore[misc, valid-type]
+        device_id = "device-1"
+        available = True
+
+        def device_label(self) -> str:
+            return "Device 1"
+
+        def _update_last_pressed(self) -> None:
+            return None
+
+    return _Pressable
+
+
+@pytest.mark.asyncio
+async def test_buttons_forward_the_press_context_to_the_service() -> None:
+    """The service checks the permissions of the user who pressed the button."""
+
+    button_module = importlib.import_module("custom_components.googlefindmy.button")
+    sentinel = SimpleNamespace(user_id="user-1")
+
+    for cls_name in (
+        "GoogleFindMyPlaySoundButton",
+        "GoogleFindMyStopSoundButton",
+        "GoogleFindMyLocateButton",
+    ):
+        recorded: list[dict[str, Any]] = []
+
+        class _RecordingServices:
+            async def async_call(self, *args: Any, **kwargs: Any) -> None:
+                recorded.append(kwargs)
+
+        cls = _pressable(getattr(button_module, cls_name))
+        button = cls.__new__(cls)
+        button.hass = SimpleNamespace(services=_RecordingServices())  # type: ignore[attr-defined]
+        button._context = sentinel  # type: ignore[attr-defined]
+
+        await button.async_press()
+
+        assert len(recorded) == 1, cls_name
+        assert recorded[0]["context"] is sentinel, cls_name
+        assert recorded[0]["context"].user_id == "user-1", cls_name
+        if cls_name == "GoogleFindMyLocateButton":
+            # The locate button stays fire-and-forget for a responsive UI.
+            assert recorded[0]["blocking"] is False
+
+
+@pytest.mark.asyncio
+async def test_sound_buttons_surface_permission_rejections() -> None:
+    """A permission rejection reaches the person pressing, not the log."""
+
+    button_module = importlib.import_module("custom_components.googlefindmy.button")
+    unauthorized = button_module.Unauthorized
+    # Guard against a module-local class of the same name: it must be Home
+    # Assistant's class or one of the test doubles standing in for it.
+    assert unauthorized.__name__ == "Unauthorized"
+    assert unauthorized.__module__ in {
+        "homeassistant.exceptions",
+        "tests.conftest",
+        "tests.helpers.service_doubles",
+    }
+
+    class _RaisingServices:
+        async def async_call(self, *args: Any, **kwargs: Any) -> None:
+            raise unauthorized()
+
+    for cls_name in ("GoogleFindMyStopSoundButton", "GoogleFindMyPlaySoundButton"):
+        cls = _pressable(getattr(button_module, cls_name))
+        button = cls.__new__(cls)
+        button.hass = SimpleNamespace(services=_RaisingServices())  # type: ignore[attr-defined]
+        button._context = None  # type: ignore[attr-defined]
+
+        with pytest.raises(unauthorized):
+            await button.async_press()

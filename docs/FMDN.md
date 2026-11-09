@@ -12,7 +12,7 @@ IDs: section IDs like `S0`, `S3.2` are stable for internal linking.
 * S0. Overview & Roles — `⟦OVERVIEW⟧`
 * S1. Cryptographic Primitives & Key Taxonomy — `⟦CRYPTO_PRIMITIVES⟧`
 * S2. Provisioning (Fast Pair + EIK lifecycle) — `⟦PROV_FLOW⟧`
-* S3. BLE Advertising & EID (timebase, jitter, curves) — `⟦BLE_EID⟧`
+* S3. BLE Advertising & EID (timebase, jitter, curves, S3.4.1 multi-component devices) — `⟦BLE_EID⟧`
 * S4. Finder Device Behavior (scan, upload, throttling) — `⟦FINDER_BEHAV⟧`
 * S5. Server-side Behavior (aggregation & modes) — `⟦SERVER_BEHAV⟧`
 * S6. Owner App / Client (fetch, unwrap, decrypt, aggregate) — `⟦OWNER_BEHAV⟧`
@@ -54,6 +54,7 @@ IDs: section IDs like `S0`, `S3.2` are stable for internal linking.
 * **EIK (32 B)** — root secret for identity/cryptography
 * **Derived short keys (8 B)** — purpose-bound keys
 * **Wrapped/transport forms** — encrypted containers that must be unwrapped before use
+* **Per-component keys `K_c` (32 B)** — derived from the EIK for one EID series (S3.4.1); key material, computed in memory only, never logged or persisted
 
 ### S1.3 Curves and AEADs (Measured vs. Specified)
 
@@ -135,6 +136,43 @@ This is consistent with the general principle that the EIK remains within the ow
 * Standard advertising corresponds to **20-byte EID** on **P-160R1 / secp160r1** (x-coordinate width).
 * **32-byte EID** on **P-256** is possible but measured as rare/device-specific.
   (Böttger et al., 2025). ([Pet Symposium][1])
+
+### S3.4.1 Multi-component devices (Measured; one device; not published by Google)
+
+Devices with several FMDN components do not advertise the EIDs of the EIK alone. Measured on one Pixel Buds Pro 2 pair (firmware 6.144, 2026-11-06), the steps above run with a per-component key instead of the EIK:
+
+```text
+K_c = SHA-256(EIK || 0x04 || c)        c = trackableComponent, one byte
+r   = AES-256-ECB(K_c, Table 10) mod n
+EID = x(r * G) on secp160r1            counter = timestamp - pairDate
+```
+
+The specification defines the labels `0x01` to `0x03` for the short keys of S1.2; the label `0x04` is measured.
+
+**Evidence:**
+
+| Check | Result |
+|---|---|
+| Google's `ListEidsForBleDevices` for this pair, per series | 88 of 88 for each of 5 series, 440 of 440 |
+| Received EIDs of this pair in three listening sessions, full 20 bytes | all matched |
+| Wrong label or wrong component | 0 of 15 per variant |
+| Plain Table 10 with the EIK on this pair | 0 of 440 |
+| Control: two `moto tag`, plain Table 10 | 88 of 88 each |
+
+**Series:** the measured set is `MEASURED_COMPONENT_ROWS` = 0, 1, 2, 254, 255. Which part each series stands for is not measured, and it does not fit Spot's enum (right 1, left 2, case 3). Different series appeared depending on where the earbuds were: with the earbuds in the closed case 255, with the earbuds outside 2 and 254. Which part sent which series is not known.
+
+**How the integration uses it:**
+
+* The gate is `DeviceCapabilities.trackableComponents > 1` (Pro 2: 3, `moto tag`: 1). `capableComponents` does not separate them: a `moto tag` has 3.
+* The resolver adds one forward legacy EID per series and window next to the EIK series. The set is fixed rather than read from Google at runtime, which would need a further request for every user.
+* The key fingerprint stays that of the EIK. `EIDMatch.component` and `ConfirmedSighting.component` name the series.
+* Hashed flags of a series use the mask from `K_c`. They appear in the diagnostics block `fmdn_component_flags` as raw values and fill no sensor, because a case value must not appear as the battery of the device. All measured values decoded to `0x02`, whose meaning is unchecked.
+* The finder reports the EID of the series it received. The mode in such a report comes from the frame type, not from the flags bit, because the meaning of the flags of a series is unchecked. All frames of a series measured so far had type `0x40`; whether a series sends `0x41` is not measured. Whether Google accepts reports on these EIDs is not measured.
+* The first hit of each series per process logs `FMDN_COMPONENT_HIT device=... canonical=... component=... frame=...` at INFO, so a log shows which series a device sends.
+* The owner side tries `K_c` for foreign reports without promoting it to an identity key. It reads the count from the registration in the report; that `DeviceUpdate` responses carry it is not measured.
+* All series run as one device in Bermuda.
+
+**Limits:** one device and one firmware. Another model can use other series or another derivation; the EIK series stays for it, and `compare_eid` and the derivation search of S13 test both.
 
 ### S3.5 MAC rotation vs. UT mode (Measured)
 
@@ -254,6 +292,27 @@ encryptedUserSecrets.encryptedIdentityKey:
 - unwrapping observed to involve AES-GCM in your codebase
 ```
 
+### S8.4 Spot schema inventory (reverse-engineered; not confirmed by Google)
+
+`ProtoDecoders/DeviceUpdate.proto` and `Common.proto` declare every message and field of [leonboe1/Spot](https://github.com/leonboe1/Spot) (`Spot/DataProcessing/Protos/DeviceUpdate.proto`, commit `55f87f62302fae24150188124e8e07d5285568d8`, GPL-3.0), marked `Spot@55f87f62`. That includes actions the integration does not use, so the wire format does not have to be guessed later: invitations and sharing (`UpdateBleDeviceSharingSettingsRequest`, `InvitationToken`, `SharingKeys`), web login (`WebloginAuthResponse`), key rotation (`RotateBleDeviceKeysRequest`), scan upload (`UploadScansRequest`, `UploadScansResponse`), Fast Pair data, `ListEidsForBleDevicesResponse`, `GetBleDeviceRequest`, `GetBleDeviceResponse` and `DeleteBleDeviceRequest`.
+
+**Type rule on the parse path (`DevicesList`, `DeviceUpdate`):** a new length-delimited field is `bytes`, without exception. A declared `string` or message with foreign content raises `DecodeError`, and that would fail the whole device list. The intended shape stays available as a message, and the field comment names it:
+
+| Message | Field (number) | Declared | Spot shape |
+|---|---|---|---|
+| `DeviceMetadata` | `supportedActions` (2), `phoneInformation` (3) | `bytes` | `SupportedActions`, `DeviceMetadata.PhoneInformation` |
+| `DeviceRegistration` | `canonicId` (1), `capabilities` (11) | `bytes` | `CanonicId`, `DeviceCapabilities` |
+| `DeviceRegistration` | `ringKey` (25), `recoveryKey` (26), `unwantedTrackingKey` (31) | `bytes`, key material | |
+| `DeviceRegistration` | `keyRotationInformation` (29), `lostModeInformation` (32), `firstSecretsCreationDate` (33) | `bytes` | nested messages, `Time` |
+| `DeviceTypeInformation` | `userDefinedName` (1), `deviceComponentsInformation` (9), `contactInfo` (12) | `bytes` | string, `DeviceComponentInformation`, `ContactInfo` |
+| `DeviceTypeInformation` | `componentDetails` (15) | `bytes` | not in Spot; measured wire shape `DeviceComponentDetail` |
+| `ImageInformation` | `componentImages` (3) | `bytes` | `ImageInformation.ComponentImage` |
+| `AccessInformation` | `sharingKeys` (7) | `bytes` | `SharingKeys` |
+| `EncryptedUserSecrets` | `sharingKeys` (6), `previousEikDate` (9) | `bytes` | `SharingKeys`, `Time` |
+| `SemanticLocation` | `semanticLocationIdentifier` (7) | `bytes` | nested message |
+
+`ProtoDecoders/decoder.py` hides key material and personal data from developer output (`_SECRET_PROTO_FIELDS`, scalar fields by name). `DeviceRegistration` fields 15, 38, 40 and the `DeviceMetadata` root fields 11, 12, 13 stay undeclared: they are not in Spot, their meaning is unknown, and at least one text could have the form of a key. They remain visible as numbers only.
+
 ---
 
 ## S9. State Machines & Failure Models `⟦STATE_MACHINES⟧`
@@ -296,6 +355,7 @@ Fetch secrets → Unwrap EIK (if wrapped) → Precompute rolling EIDs → Fetch 
 * Exact semantics and cryptographic definition of **UT byte** and **hashed flags** across accessory generations (unless you hold the applicable partner spec revision).
 * Exact format of **60-byte EIK wrapper** (nonce/tag sizing, AAD rules, versioning) beyond the confirmed AES-GCM structure; capture detailed layout once more test vectors are recorded.
 * Precise REST endpoints, headers, attestation details, and server retention policies (subject to change).
+* Multi-component devices (S3.4.1): what the series 0, 1, 2, 254, 255 stand for and why they differ from Spot's enum; the meaning of the decoded flags value `0x02`; whether Google accepts finder reports on these EIDs; whether other models and firmware use the same derivation and series.
 
 ---
 
@@ -320,6 +380,46 @@ Fetch secrets → Unwrap EIK (if wrapped) → Precompute rolling EIDs → Fetch 
 * **Anonymization:** Device IDs, canonical IDs, MAC addresses, and EID payloads above are redacted into realistic placeholders while preserving structure (0x40 prefix, 20-byte EID body, 1-byte flag) to illustrate the frame format without exposing production data.
 
 ---
+
+## S13. On-demand Beacon Actions Diagnostic `⟦BEACON_DIAGNOSTIC⟧`
+
+`googlefindmy.read_beacon_state` (administrators only, always returns a response) asks a tracker directly what it holds. Nothing runs unless it is called: no timer, no listener, no entity, and the module logs at DEBUG only.
+
+**Operations.** The set is closed in code (`beacon_actions.DataId`): `0x00` read beacon parameters, `0x01` read provisioning state, `0x06` read ringing state. Setting or clearing the EIK, ringing, reading the EIK and unwanted-tracking commands are rejected before any GATT access (`beacon_actions._BeaconSession.run`). Each operation reads a fresh nonce, writes the request, waits for the notification and verifies its authentication segment.
+
+**Finding the tracker.** Connectable `0xFE2C` advertisements whose account key filter holds the device's account key; the newest sighting wins, RSSI only breaks ties, because the cache keeps a tracker's previous address and its older RSSI can be the stronger one. If a connection fails, the selection repeats and the next address gets its turn, up to three tries within `timeout`. Untried addresses share the time, each try is capped at 25 s, and up to 10 s stay reserved for the reads; `connection_attempts` lists the tries with masked addresses. An address, also a lone one, is tried again only when no untried one is left. The filter is probabilistic: another device can match by chance (roughly 1 in 40 000 per frame for a filter holding one key, more for fuller filters), and it would then see a nonce answered with an HMAC, nothing it could derive a key from. A completely full filter never matches. The spec does not promise such frames for every provisioned tracker (a locator tag may stop them after reading the beacon parameters following a power loss), so `address` can name the target; `filter_checked` is then `false`.
+
+**Reading the result.**
+
+| `eik_set` | `eik_matches` | `is_owner` | Meaning |
+|---|---|---|---|
+| `true` | `true` | any | The tracker holds this EIK. With `eid_check.result: match` the derivation is known; with `no_match` it differs |
+| `true` | `false` | `false` | Another EIK and this account key is not the owner key: the tracker likely belongs to another setup |
+| `true` | `false` | `true` | Another EIK although this key is the owner: the integration likely reads the wrong key |
+| `false` | `false` | any | Not provisioned; the unauthenticated error says nothing about the key here |
+| `null` | `true` | `null` | The tracker holds this EIK, but `0x01` was not verified: the account key is missing or not accepted, see `operations` |
+| `null` | `null` | `null` | `0x01` was not verified and `0x06` decided nothing, see `operations`. Not a verdict on the EIK |
+| any | `null` | any | Undecided (timeout, transport error, malformed or skipped operation), see `operations`. Never read this as a foreign key |
+
+`eid_check` also tries the measured component series (S3.4.1): `component` names the series of a match, and is `null` for the EIK series and for no match; `components_checked` counts these comparisons apart from `variants_checked`. The derivation search has a key family `sha256_eik_label_<s>_component_<c>`, so another label or series shows up by name without a code change.
+
+`connection` says how far the run got: `no_matching_frame`, `no_account_key_for_search`, `device_not_connectable`, `timeout`, `connection_failed`, `gatt_setup_failed` (the fields above are then absent) or `connected`.
+
+`eik_matches` is `false` only after a `0x06` write was rejected with `0x80` on a link where `0x01` verified. The spec also returns `0x80` for an unprovisioned Provider, and over an ESP32 proxy the same number can be the local `ESP_GATT_NO_RESOURCES`; a verified `0x01` on the same link makes that less likely but cannot exclude it, so repeat a `false` before acting on it. `eid_check` compares the reported EID with every variant for the windows around the tracker's clock, because rotation happens 1 to 204 s after the calculated boundary.
+
+**Responses the parser does not know.** If `0x01` fails the format check, `operations.read_provisioning_state.response` gives `stage` (`nonce`, `frame`, `length`, `auth`), `frame_length`, `data_length_field`, `additional_length` and `auth_valid`; an authenticated frame adds `flags_byte` and the first five data bytes. `eid_check` then also tries the 20 and 32 bytes after the first byte, or the whole data if it is exactly that long, and carries `inferred_form: true`: the specification does not define that form, so a match proves the EID, not the layout. `include_raw_response: true` adds the whole frame as `raw_frame`, which holds the full current EID.
+
+**Searching the counter.** The specification clears the low 10 bits of the clock, and `eid_check` follows it. With `search_seconds` above 0 the action looks second by second around the clock, with the low bits left in place, for the counter that yields the reported EID, the EID the chosen address advertises, or `search_eid`. `eid_search` gives `result` (`match`, `no_match`, `time_budget_exhausted`, `no_eik`, `no_clock`, `no_target`) and on a match `source`, `variant`, `counter_offset` and `counter_low_bits`. `counter_low_bits: 0` is what the specification prescribes, anything else is a tracker departing from it. The search runs after the link has closed, so it holds no proxy slot, and in an executor, so the event loop keeps running; it loads the CPU, stops after 5 minutes at the latest and keeps the action busy until then. If a calling script stops or Home Assistant shuts down, the search ends within a moment; closing the browser or losing an API connection does not stop it. Measured in a container: 400 to 2 400 counters per second for a 20-byte EID, depending on load, and less when a 20-byte and a 32-byte EID are searched together, so a day on each side takes from about 72 s to the whole budget. A result of `time_budget_exhausted` says the window was not covered, see `counters_checked`.
+
+**Two identities.** Earbuds can run two identities under rotating addresses, both with a Fast Pair frame that matches the account key. Measured on Pixel Buds Pro 2 (firmware 6.144, case open and powered): the `locator` sends the FMDN frame and answers `0x01` with a placeholder (`00ff` and zeros), and the `audio` device announces Common Audio (`0x1853`), sends no FMDN frame and answers `0x01` with a rotating value that was not seen on air. On such a device the table above holds only for the identity whose `0x01` and `0x06` behaviour is known: `eid_check.result: no_match` at `audio` says nothing about the derivation, because that value is not the advertised EID, so compare `advertised_eid_check` at the `locator` instead. The response gives `identity_form` (`locator`, `audio`, `other`) and `advertised_tx_power` of the chosen address (`identity_form` is absent when no address was chosen and `null` without a sighting; `other` includes an FMDN service with a different frame type; both service data layouts of the resolver count, the frame type first or behind seven header bytes), and for a locator with an EID `advertised_eid_prefix` and, after a verified clock, `advertised_eid_check`. Home Assistant merges service data per address, so these can stem from an earlier advertisement of the same address. The input `identity_form` restricts the search to one of them and has no effect on a named address; `frames_other_form` counts the matches it skipped.
+
+**The response form with one more byte.** The same earbuds answer `0x01` with 22 bytes instead of the specified 21: flags, 20 bytes, and one byte the authentication covers but the specification does not define. The parser takes that form (also 34 bytes), sets `eik_set` and `is_owner`, gives the byte as `trailing_byte`, and `eid_check` carries `inferred_form: true` when an EID was compared. A placeholder is reported as `eid_placeholder: true` and is neither compared nor searched for, also when it is advertised or supplied as `search_eid`. Only the 22-byte form with a 20-byte placeholder is measured, the 32-byte forms are inferred. `protocol_version` is the version the tracker gave with its nonce.
+
+**Searching derivations.** With `derivation_windows` above 0 the action tries other key, block and scalar forms on secp160r1 at the rotation boundaries around the clock, nearest first, against the reported EID, the advertised EID and `search_eid` (a value both reported and advertised has `source: reported`). These are guesses, the specification names only the EIK and Table 10. 32-byte targets are skipped, so a lone one gives `no_target`. `derivation_search` gives `result` (`match`, `no_match`, `time_budget_exhausted`, `no_key`, `no_clock`, `no_target`), the counts `windows`, `keys`, `blocks`, `scalars`, `targets`, `combinations_checked` and on a match the names `source`, `key`, `block`, `scalar` and `window_offset`, never key bytes. `no_match` says only that none of these guesses holds, and `time_budget_exhausted` that the outer windows were not reached (measured in a test container: about 1600 combinations per second, so some 64 of the at most 256 windows per side fit). It runs after the connection has closed, for at most 5 minutes, and after a counter search if one was asked for, so a call can take 10 minutes more than one without searches; other beacon diagnostics are refused as busy meanwhile.
+
+**Owner account key.** The spec says: "The Provider chooses one of the existing account keys as the owner account key the first time a Seeker accesses the Beacon Actions characteristic. The chosen owner account key can't be changed until the Provider is factory reset." Use the diagnostic on trackers that are already set up.
+
+**Privacy.** Keys never appear in logs, responses or errors. The response carries the masked address and the first four bytes of the EID, unless `include_raw_response` asks for the whole frame. `search_eid` is never echoed, and an EID the chosen address advertises only by its first four bytes.
 
 ## Appendix A — Evidence-anchored Pseudocode `⟦APPX_PSEUDOCODE⟧`
 
