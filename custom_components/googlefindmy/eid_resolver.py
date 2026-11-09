@@ -115,6 +115,13 @@ _VARIANT_CURVE_PARAMS: dict[EidVariant, tuple[int, int, ScalarDerivation]] = {
     for variant, (curve, derivation) in VARIANT_DERIVATIONS.items()
 }
 
+_REFRESH_WAIT_LIMIT_S = 60.0
+"""Upper bound in seconds for ``async_refresh(wait=True)`` to wait on a running refresh.
+
+A setting, not a measurement: an entry setup should not hang on a refresh that
+does not finish, and a minute is far beyond a normal rebuild of the table.
+"""
+
 # Per-variant crypto memoization (AP-A).
 # Both EID derivation (generate_eid_variant) and the flags XOR mask
 # (compute_flags_xor_mask) are pure functions of their inputs and run once per
@@ -1431,6 +1438,7 @@ class GoogleFindMyEIDResolver:
     _unsub_alignment: CALLBACK_TYPE | None = field(init=False, default=None)
     _refresh_lock: asyncio.Lock = field(init=False, default_factory=asyncio.Lock)
     _pending_refresh: bool = field(init=False, default=False)
+    _refresh_generation: int = field(init=False, default=0)
     _load_task: asyncio.Task[None] | None = field(init=False, default=None)
     # Heuristic phone discovery state
     _learned_heuristic_params: dict[str, LearnedHeuristicParams] = field(
@@ -1743,21 +1751,74 @@ class GoogleFindMyEIDResolver:
             self._schedule_lock_save()
             _LOGGER.debug("Purged %d stale EID locks: %s", len(removed), removed)
 
-    async def async_refresh(self) -> None:
-        """Trigger a cache refresh immediately."""
+    async def async_refresh(self, *, wait: bool = False) -> None:
+        """Trigger a cache refresh immediately.
+
+        While a refresh is running, the call only requests another pass
+        (``_pending_refresh``) and returns at once. With ``wait=True`` it
+        instead waits for the running refresh, at most
+        ``_REFRESH_WAIT_LIMIT_S`` seconds. The holder drains every requested
+        pass before it releases the lock, and ``asyncio.Lock`` wakes waiters
+        in FIFO order, so the waiter finds the table rebuilt including its own
+        request. When the holder raised instead, the waiter runs the pass
+        itself (and may raise in turn). When the limit is reached, the call
+        returns without a finished refresh; the holder runs the queued request
+        if its passes succeed, and drops it with the failure if one raises (a
+        stale request would keep the resolve path from scheduling a refresh).
+        A caller that needs a filled lookup table (an entry setup
+        before it registers the BLE scanner) uses ``wait=True``.
+
+        Never call this with ``wait=True`` from inside ``_refresh_cache``:
+        the lock is held there, and the call would wait for itself until the
+        limit.
+        """
         if self._refresh_lock.locked():
             self._pending_refresh = True
+            if not wait:
+                return
+            # getattr: test doubles built via ``__new__`` skip field defaults.
+            generation = getattr(self, "_refresh_generation", 0)
+            try:
+                async with asyncio.timeout(_REFRESH_WAIT_LIMIT_S):
+                    await self._refresh_lock.acquire()
+            except TimeoutError:
+                _LOGGER.debug("EID refresh still running at the wait limit; continuing")
+                return
+            try:
+                if getattr(self, "_refresh_generation", 0) == generation:
+                    # The holder raised before its passes completed; the
+                    # requested pass has not run yet.
+                    await self._async_run_refresh_passes()
+            finally:
+                self._refresh_lock.release()
             return
 
         async with self._refresh_lock:
+            await self._async_run_refresh_passes()
+
+    async def _async_run_refresh_passes(self) -> None:
+        """Run refresh passes until none is requested; ``_refresh_lock`` is held."""
+        completed = False
+        try:
             self._pending_refresh = False
             await self._refresh_cache()
             while self._pending_refresh:
                 self._pending_refresh = False
                 await self._refresh_cache()
-            # Unloading an entry also runs a refresh (or stop() for the last
-            # one), so this drops the history of unloaded entries as well.
-            self._purge_uwt_state()
+            completed = True
+        finally:
+            if not completed:
+                # A failed pass must not leave a request behind:
+                # ``_pending_refresh`` also tells the resolve path that a
+                # refresh is on its way, and a stale flag would keep it from
+                # scheduling one while the lookup table is empty.
+                self._pending_refresh = False
+        # Counts completed runs; a waiter compares it to see whether the
+        # holder finished its passes or raised before.
+        self._refresh_generation = getattr(self, "_refresh_generation", 0) + 1
+        # Unloading an entry also runs a refresh (or stop() for the last
+        # one), so this drops the history of unloaded entries as well.
+        self._purge_uwt_state()
 
     def _purge_uwt_state(self) -> None:
         """Drop measurement-channel state of devices and entries now gone.

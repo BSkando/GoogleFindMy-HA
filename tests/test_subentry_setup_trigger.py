@@ -7,10 +7,13 @@ import threading
 from collections.abc import Awaitable, Callable, Iterable
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, Mock
 
 import pytest
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.exceptions import ConfigEntryNotReady
 
+import custom_components.googlefindmy as gfm
 from custom_components.googlefindmy import (
     _SUBENTRY_SETUP_MAX_ATTEMPTS,
     ConfigEntrySubentryDefinition,
@@ -30,6 +33,9 @@ from custom_components.googlefindmy.const import (
 )
 from custom_components.googlefindmy.eid_resolver import GoogleFindMyEIDResolver
 from custom_components.googlefindmy.entity import schedule_add_entities
+from custom_components.googlefindmy.fmdn_finder.ble_scanner import (
+    DATA_BLE_SCANNER_UNSUB,
+)
 from tests.helpers.homeassistant import (
     FakeConfigEntriesManager,
     FakeConfigEntry,
@@ -63,7 +69,7 @@ def _resolver_stub() -> GoogleFindMyEIDResolver:
         def stop(self) -> None:  # type: ignore[override]
             self.stop_called = True
 
-        async def async_refresh(self) -> None:
+        async def async_refresh(self, *, wait: bool = False) -> None:
             self.refresh_called = True
 
     resolver = _ResolverDouble.__new__(_ResolverDouble)
@@ -941,11 +947,32 @@ async def test_parent_unload_success_stops_resolver_when_last_entry() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resolver_stub_accepts_the_setup_refresh_call() -> None:
+    """The double keeps the real ``async_refresh`` signature (``wait`` keyword).
+
+    Entry setup reuses a resolver from the bucket and calls
+    ``async_refresh(wait=True)``; a double with a narrower signature would
+    fail there with TypeError instead of standing in for the real class.
+    """
+
+    resolver = _resolver_stub()
+    bucket: dict[str, Any] = {DATA_EID_RESOLVER: resolver}
+
+    hass = FakeHass(config_entries=FakeConfigEntriesManager())
+    await gfm._async_ensure_shared_eid_resolver(hass, bucket)  # type: ignore[arg-type]
+
+    assert bucket[DATA_EID_RESOLVER] is resolver
+    assert resolver.refresh_called is True  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
 async def test_parent_unload_success_refreshes_resolver_when_entries_remain() -> None:
     """Resolver should refresh only after a successful unload when others remain."""
 
     parent_entry = FakeConfigEntry(entry_id="parent-entry")
     other_entry = FakeConfigEntry(entry_id="other-entry")
+    # The resolver stays only while another entry is LOADED.
+    other_entry.state = ConfigEntryState.LOADED
     runtime_data = _attach_runtime(parent_entry)
     _attach_runtime(other_entry)
     config_entries = FakeConfigEntriesManager([parent_entry, other_entry])
@@ -979,6 +1006,152 @@ async def test_parent_unload_success_refreshes_resolver_when_entries_remain() ->
     assert resolver.stop_called is False  # type: ignore[attr-defined]
     assert resolver.refresh_called is True  # type: ignore[attr-defined]
     assert bucket.get(DATA_EID_RESOLVER) is resolver
+
+
+@pytest.mark.asyncio
+async def test_parent_unload_stops_resolver_when_other_entry_is_not_loaded() -> None:
+    """An entry left in SETUP_RETRY does not keep the shared resolver alive.
+
+    Its setup raised ``ConfigEntryNotReady`` after it joined the entries bucket,
+    so it is still listed there, but Home Assistant never unloads it.
+    """
+
+    parent_entry = FakeConfigEntry(entry_id="parent-entry")
+    other_entry = FakeConfigEntry(entry_id="other-entry")
+    other_entry.state = ConfigEntryState.SETUP_RETRY
+    runtime_data = _attach_runtime(parent_entry)
+    _attach_runtime(other_entry)
+    config_entries = FakeConfigEntriesManager([parent_entry, other_entry])
+    config_entries.async_unload_platforms = lambda entry, platforms: True  # type: ignore[attr-defined]
+    hass = FakeHass(config_entries=config_entries)
+    hass.async_create_task = (
+        lambda coro, name=None: asyncio.create_task(coro)  # noqa: ARG005
+    )
+
+    bucket = hass.data.setdefault(DOMAIN, {})
+    entries_bucket = bucket.setdefault("entries", {})
+    resolver = _resolver_stub()
+    entries_bucket[parent_entry.entry_id] = runtime_data
+    entries_bucket[other_entry.entry_id] = other_entry.runtime_data  # type: ignore[index]
+    bucket[DATA_EID_RESOLVER] = resolver
+
+    assert await _async_unload_parent_entry(hass, parent_entry) is True
+    assert other_entry.entry_id in entries_bucket
+    assert resolver.stop_called is True  # type: ignore[attr-defined]
+    assert resolver.refresh_called is False  # type: ignore[attr-defined]
+    assert bucket.get(DATA_EID_RESOLVER) is None
+
+
+@pytest.mark.asyncio
+async def test_parent_unload_of_one_of_two_entries_keeps_ble_callback() -> None:
+    """Unloading one of two loaded entries keeps the shared BLE callback."""
+
+    parent_entry = FakeConfigEntry(entry_id="parent-entry")
+    other_entry = FakeConfigEntry(entry_id="other-entry")
+    other_entry.state = ConfigEntryState.LOADED
+    runtime_data = _attach_runtime(parent_entry)
+    _attach_runtime(other_entry)
+    config_entries = FakeConfigEntriesManager([parent_entry, other_entry])
+    config_entries.async_unload_platforms = lambda entry, platforms: True  # type: ignore[attr-defined]
+    hass = FakeHass(config_entries=config_entries)
+    hass.async_create_task = (
+        lambda coro, name=None: asyncio.create_task(coro)  # noqa: ARG005
+    )
+
+    bucket = hass.data.setdefault(DOMAIN, {})
+    entries_bucket = bucket.setdefault("entries", {})
+    entries_bucket[parent_entry.entry_id] = runtime_data
+    entries_bucket[other_entry.entry_id] = other_entry.runtime_data  # type: ignore[index]
+    unsub = Mock(name="unsub")
+    bucket[DATA_BLE_SCANNER_UNSUB] = unsub
+
+    assert await _async_unload_parent_entry(hass, parent_entry) is True
+    assert unsub.call_count == 0
+    assert bucket[DATA_BLE_SCANNER_UNSUB] is unsub
+
+
+def _arm_global_timers(bucket: dict[str, Any]) -> dict[str, Mock]:
+    """Store mock handles for the restart watchdog and the URL refresh timer."""
+    handles = {
+        "restart_check_initial_unsub": Mock(name="restart_initial"),
+        "restart_check_unsub": Mock(name="restart_interval"),
+        "url_refresh_unsub": Mock(name="url_refresh"),
+    }
+    bucket.update(handles)
+    bucket["restart_check_registered"] = True
+    bucket["url_refresh_registered"] = True
+    return handles
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("other_state", "released", "spot_closed"),
+    [
+        (ConfigEntryState.SETUP_RETRY, True, True),
+        (ConfigEntryState.LOADED, False, False),
+        (ConfigEntryState.SETUP_IN_PROGRESS, True, False),
+    ],
+)
+async def test_parent_unload_releases_global_timers_and_spot_unless_other_loaded(
+    monkeypatch: pytest.MonkeyPatch, other_state: Any, released: bool, spot_closed: bool
+) -> None:
+    """Watchdog, URL timer and SPOT transport follow the LOADED predicate.
+
+    An entry in SETUP_RETRY stays in the entries bucket, but Home Assistant
+    never unloads it, so it must not keep the global singletons alive. An
+    entry still setting up may already use the lazy SPOT channel, so the
+    channel stays open for it (its setup end restores the other singletons).
+    """
+
+    parent_entry = FakeConfigEntry(entry_id="parent-entry")
+    other_entry = FakeConfigEntry(entry_id="other-entry")
+    other_entry.state = other_state
+    runtime_data = _attach_runtime(parent_entry)
+    _attach_runtime(other_entry)
+    config_entries = FakeConfigEntriesManager([parent_entry, other_entry])
+    config_entries.async_unload_platforms = lambda entry, platforms: True  # type: ignore[attr-defined]
+    hass = FakeHass(config_entries=config_entries)
+    hass.async_create_task = (
+        lambda coro, name=None: asyncio.create_task(coro)  # noqa: ARG005
+    )
+    spot_close = AsyncMock()
+    monkeypatch.setattr(gfm.SPOT_GRPC_TRANSPORT, "async_close", spot_close)
+
+    bucket = hass.data.setdefault(DOMAIN, {})
+    entries_bucket = bucket.setdefault("entries", {})
+    entries_bucket[parent_entry.entry_id] = runtime_data
+    entries_bucket[other_entry.entry_id] = other_entry.runtime_data  # type: ignore[index]
+    handles = _arm_global_timers(bucket)
+
+    assert await _async_unload_parent_entry(hass, parent_entry) is True
+
+    assert other_entry.entry_id in entries_bucket
+    for name, handle in handles.items():
+        assert handle.call_count == (1 if released else 0), name
+        assert (name in bucket) is (not released), name
+    assert ("restart_check_registered" in bucket) is (not released)
+    assert spot_close.await_count == (1 if spot_closed else 0)
+
+
+@pytest.mark.asyncio
+async def test_parent_unload_surfaces_unexpected_ble_unsub_error() -> None:
+    """The scanner release absorbs only the documented ValueError."""
+
+    parent_entry = FakeConfigEntry(entry_id="parent-entry")
+    runtime_data = _attach_runtime(parent_entry)
+    config_entries = FakeConfigEntriesManager([parent_entry])
+    config_entries.async_unload_platforms = lambda entry, platforms: True  # type: ignore[attr-defined]
+    hass = FakeHass(config_entries=config_entries)
+    hass.async_create_task = (
+        lambda coro, name=None: asyncio.create_task(coro)  # noqa: ARG005
+    )
+
+    bucket = hass.data.setdefault(DOMAIN, {})
+    bucket.setdefault("entries", {})[parent_entry.entry_id] = runtime_data
+    bucket[DATA_BLE_SCANNER_UNSUB] = Mock(side_effect=KeyError("unexpected"))
+
+    with pytest.raises(KeyError):
+        await _async_unload_parent_entry(hass, parent_entry)
 
 
 @pytest.mark.asyncio

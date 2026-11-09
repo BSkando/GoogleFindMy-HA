@@ -692,6 +692,41 @@ async def test_async_setup_entry_registers_the_map_tiles_token_view(
 
 
 @pytest.mark.asyncio
+async def test_async_setup_entry_ends_with_restoring_shared_singletons(
+    monkeypatch: pytest.MonkeyPatch,
+    stub_coordinator_factory: Callable[..., type[Any]],
+) -> None:
+    """The last setup step restores singletons another unload released meanwhile.
+
+    An entry still in SETUP_IN_PROGRESS does not count as LOADED, so a
+    concurrent unload may release the shared resolver and BLE callback; the
+    restore step at the end of setup brings them back.
+    """
+
+    loop = asyncio.get_running_loop()
+    harness = _prepare_async_setup_entry_harness(
+        monkeypatch, stub_coordinator_factory, loop
+    )
+    integration = harness.integration
+    hass = harness.hass
+    calls: list[tuple[object, object]] = []
+
+    async def _record_restore(hass_arg: object, bucket: object) -> None:
+        calls.append((hass_arg, bucket))
+
+    monkeypatch.setattr(
+        integration, "_async_restore_shared_singletons", _record_restore
+    )
+
+    assert await integration.async_setup(hass, {}) is True
+    assert await integration.async_setup_entry(hass, harness.entry) is True
+
+    assert len(calls) == 1
+    assert calls[0][0] is hass
+    assert calls[0][1] is hass.data[DOMAIN]
+
+
+@pytest.mark.asyncio
 async def test_async_setup_entry_skips_view_registration_when_disabled(
     monkeypatch: pytest.MonkeyPatch,
     stub_coordinator_factory: Callable[..., type[Any]],

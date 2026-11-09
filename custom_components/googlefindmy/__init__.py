@@ -9295,30 +9295,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: MyConfigEntry) -> bool:
 
     _register_instance(entry.entry_id, cache)
 
-    existing_resolver = domain_bucket.get(DATA_EID_RESOLVER)
-    if isinstance(existing_resolver, GoogleFindMyEIDResolver):
-        await existing_resolver.async_refresh()
-    else:
-        eid_resolver = GoogleFindMyEIDResolver(hass)
-        # Immediate refresh keeps BLE resolution available before the first
-        # boundary-aligned timer fires after startup/reload.
-        await eid_resolver.async_refresh()
-        # Resolver is shared for the entire domain so BLE scans can resolve
-        # devices across all loaded config entries via hass.data[DOMAIN][DATA_EID_RESOLVER].
-        domain_bucket[DATA_EID_RESOLVER] = eid_resolver
+    await _async_ensure_shared_eid_resolver(hass, domain_bucket)
 
     # ---- BLE Scanner: optional HA-Bluetooth FMDN advertisement listener ----
     # Always attempted (independent of FEATURE_FMDN_FINDER_ENABLED).
     # Collects MAC addresses and frame types for future BLE ringing (Phase 2).
-    # Silently skipped when the bluetooth integration is not loaded.
-    try:
-        from .fmdn_finder.ble_scanner import async_setup_ble_scanner  # noqa: PLC0415
-
-        await async_setup_ble_scanner(hass)
-    except ImportError:
-        _LOGGER.debug("BLE scanner module not available (optional)")
-    except Exception as err:  # noqa: BLE001
-        _LOGGER.debug("BLE scanner setup skipped: %s", err)
+    # Skipped when the bluetooth integration is not loaded.
+    await _async_setup_shared_ble_scanner(hass)
 
     # ---- FMDN Finder: Bermuda listener for location uploads ----
     # Disabled by default via FEATURE_FMDN_FINDER_ENABLED in const.py.
@@ -9422,6 +9405,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: MyConfigEntry) -> bool:
     # and the delete stays account- and content-aware, so it only removes the
     # copies the import actually consumed.
     await _async_refresh_discovery_watch_paths(hass)
+
+    # Last step: another entry may have unloaded since this setup created the
+    # shared singletons. No await follows the final check in this helper, and
+    # Home Assistant marks the entry LOADED without yielding after this
+    # coroutine returns, so a later unload sees this entry as LOADED.
+    await _async_restore_shared_singletons(hass, domain_bucket)
 
     return True
 
@@ -10020,6 +10009,197 @@ async def _async_unload_subentry(hass: HomeAssistant, entry: MyConfigEntry) -> b
     return unload_success
 
 
+def _another_entry_loaded(hass: HomeAssistant, entry_id: str) -> bool:
+    """Return True when a config entry other than ``entry_id`` is LOADED.
+
+    The domain-wide singletons (BLE scanner callback, EID resolver) stay alive
+    only while this holds. ``hass.data[DOMAIN]["entries"]`` is no witness for
+    that: an entry joins it early in ``async_setup_entry`` and stays there when
+    the setup later raises ``ConfigEntryNotReady``. Such an entry sits in
+    ``SETUP_RETRY``, and Home Assistant never calls ``async_unload_entry`` for
+    it, so it would keep both singletons alive after the last loaded entry is
+    gone. The entry being unloaded is in ``UNLOAD_IN_PROGRESS`` while its
+    unload runs; excluding ``entry_id`` guards callers outside that flow.
+
+    An entry still in ``SETUP_IN_PROGRESS`` does not count either; it
+    restores what an unload released meanwhile at the end of its setup
+    (``_async_restore_shared_singletons``).
+    """
+    return any(
+        other.entry_id != entry_id and other.state == ConfigEntryState.LOADED
+        for other in hass.config_entries.async_entries(DOMAIN)
+    )
+
+
+def _another_entry_setting_up(hass: HomeAssistant, entry_id: str) -> bool:
+    """Return True if another entry of the domain is in ``SETUP_IN_PROGRESS``."""
+    return any(
+        other.entry_id != entry_id and other.state == ConfigEntryState.SETUP_IN_PROGRESS
+        for other in hass.config_entries.async_entries(DOMAIN)
+    )
+
+
+async def _async_ensure_shared_eid_resolver(
+    hass: HomeAssistant, domain_bucket: GoogleFindMyDomainData
+) -> None:
+    """Create or reuse the domain-wide EID resolver and wait for a full refresh.
+
+    The instance goes into the bucket before the first ``await``, so two
+    entries that set up concurrently share one resolver instead of the second
+    overwriting the first (whose timers would keep running unowned). Both
+    paths then wait with ``wait=True``: a second setup that finds the instance
+    while the first refresh runs returns only after that refresh, including
+    its own requested pass, is done. The caller registers the BLE scanner
+    afterwards, and Home Assistant replays the advertisement history into the
+    callback on registration, which needs a filled lookup table.
+    """
+    resolver = domain_bucket.get(DATA_EID_RESOLVER)
+    if not isinstance(resolver, GoogleFindMyEIDResolver):
+        resolver = GoogleFindMyEIDResolver(hass)
+        # Resolver is shared for the entire domain so BLE scans can resolve
+        # devices across all loaded config entries via hass.data[DOMAIN][DATA_EID_RESOLVER].
+        domain_bucket[DATA_EID_RESOLVER] = resolver
+    # Immediate refresh keeps BLE resolution available before the first
+    # boundary-aligned timer fires after startup/reload.
+    await resolver.async_refresh(wait=True)
+
+
+def _bluetooth_loaded(hass: HomeAssistant) -> bool:
+    """Return True once Home Assistant's bluetooth integration is set up.
+
+    ``bluetooth.async_setup`` sets the habluetooth manager before it returns,
+    and Home Assistant adds the domain to ``hass.config.components`` only after
+    ``async_setup`` returned True (``homeassistant/setup.py``). Registering a
+    callback before that raises RuntimeError in ``habluetooth.get_manager``.
+    The beacon service checks the same way. Test stubs without ``config``
+    count as not loaded.
+    """
+    config = getattr(hass, "config", None)
+    return "bluetooth" in getattr(config, "components", ())
+
+
+async def _async_setup_shared_ble_scanner(
+    hass: HomeAssistant, *, replace_existing: bool = True
+) -> None:
+    """Register the domain-wide FMDN BLE callback (see ``async_setup_ble_scanner``)."""
+    if not _bluetooth_loaded(hass):
+        _LOGGER.debug("BLE scanner setup skipped: bluetooth integration not loaded")
+        return
+    try:
+        from .fmdn_finder.ble_scanner import async_setup_ble_scanner  # noqa: PLC0415
+    except ImportError:
+        _LOGGER.debug("BLE scanner module not available (optional)")
+        return
+    await async_setup_ble_scanner(hass, replace_existing=replace_existing)
+
+
+_SHARED_SINGLETON_RESTORE_ATTEMPTS = 3
+"""Restore rounds at the end of an entry setup before giving up (a setting)."""
+
+
+def _missing_shared_singletons(
+    hass: HomeAssistant, domain_bucket: GoogleFindMyDomainData
+) -> set[str]:
+    """Name the shared singletons a finished entry setup expects but lacks.
+
+    Each one has its own witness: the timer flags, the resolver instance and,
+    while the bluetooth integration is loaded, a callable BLE scanner handle.
+    """
+    missing: set[str] = set()
+    if not (
+        domain_bucket.get("restart_check_registered") is True
+        and domain_bucket.get("url_refresh_registered") is True
+    ):
+        missing.add("timers")
+    if not isinstance(domain_bucket.get(DATA_EID_RESOLVER), GoogleFindMyEIDResolver):
+        missing.add("resolver")
+    if _bluetooth_loaded(hass):
+        try:
+            from .fmdn_finder.ble_scanner import (  # noqa: PLC0415
+                DATA_BLE_SCANNER_UNSUB,
+            )
+        except ImportError:
+            return missing
+        if not callable(domain_bucket.get(DATA_BLE_SCANNER_UNSUB)):
+            missing.add("scanner")
+    return missing
+
+
+async def _async_restore_shared_singletons(
+    hass: HomeAssistant, domain_bucket: GoogleFindMyDomainData
+) -> None:
+    """Recreate shared singletons that are missing at the end of an entry setup.
+
+    ``_async_release_shared_singletons_if_last`` releases resolver, BLE
+    scanner and the global timers together without yielding, and it counts
+    only LOADED entries. An entry still in ``SETUP_IN_PROGRESS`` therefore
+    loses all of them when another entry unloads after this setup created
+    them. A concurrent setup may also have recreated only some of them (its
+    resolver is in the bucket before its first await, and its refresh or
+    scanner setup may still fail). So every singleton is checked on its own
+    witness and only the missing ones are recreated. The final check is not
+    followed by an await, and Home Assistant sets LOADED without yielding once
+    ``async_setup_entry`` returns, so no release can slip in afterwards.
+    """
+    for _ in range(_SHARED_SINGLETON_RESTORE_ATTEMPTS):
+        missing = _missing_shared_singletons(hass, domain_bucket)
+        if not missing:
+            return
+        _LOGGER.debug("Shared BLE singletons missing at the end of setup; restoring")
+        if "timers" in missing:
+            await _async_ensure_restart_required_check(hass, domain_bucket)
+        if "resolver" in missing:
+            await _async_ensure_shared_eid_resolver(hass, domain_bucket)
+        if "scanner" in missing:
+            await _async_setup_shared_ble_scanner(hass, replace_existing=False)
+    if _missing_shared_singletons(hass, domain_bucket):
+        _LOGGER.debug("Shared BLE singletons still missing after restore attempts")
+
+
+async def _async_release_shared_singletons_if_last(
+    hass: HomeAssistant, bucket: GoogleFindMyDomainData, entry_id: str
+) -> bool:
+    """Release the domain-wide singletons unless another entry is still LOADED.
+
+    Released together: the EID resolver, the restart watchdog, the daily URL
+    refresh timer and the FMDN BLE callback. Nothing in this function yields
+    between the predicate and the last release (the scanner unload runs last
+    and does not suspend), so a setup that checks the resolver afterwards
+    sees either all of them or none. Returns True when they were released;
+    the caller then closes the shared SPOT transport as well, unless another
+    entry is still setting up. While another
+    entry stays loaded, the resolver refreshes to drop this entry's devices.
+    """
+    resolver = bucket.get(DATA_EID_RESOLVER)
+    if _another_entry_loaded(hass, entry_id):
+        _LOGGER.debug("Shared BLE singletons kept; another entry is still loaded")
+        if isinstance(resolver, GoogleFindMyEIDResolver):
+            hass.async_create_task(resolver.async_refresh())
+        return False
+    if isinstance(resolver, GoogleFindMyEIDResolver):
+        resolver.stop()
+    bucket.pop(DATA_EID_RESOLVER, None)
+    # Cancel the global restart watchdog (both timers) and clear its issue,
+    # and the daily URL refresh (Codex-P1 #1/#2); setup re-arms them.
+    _teardown_restart_required_check(hass, bucket)
+    _teardown_url_refresh_timer(hass, bucket)
+    try:
+        from .fmdn_finder.ble_scanner import (
+            async_unload_ble_scanner,  # noqa: PLC0415
+        )
+
+        await async_unload_ble_scanner(hass)
+    except ImportError:
+        pass
+    except ValueError:
+        # HA contract, not a fallback: the handle runs list.remove on the
+        # matcher (BluetoothCallbackMatcherIndex.remove_callback_matcher in
+        # homeassistant/components/bluetooth/match.py), so a handle removed
+        # before (for example by a bluetooth reload) raises ValueError.
+        _LOGGER.debug("BLE scanner handle was already removed")
+    return True
+
+
 async def _maybe_close_spot_transport(entries_bucket: dict[str, RuntimeData]) -> None:
     """
     Close the shared SPOT transport when the integration has no active entries.
@@ -10314,17 +10494,10 @@ async def _async_unload_parent_entry(hass: HomeAssistant, entry: MyConfigEntry) 
         except Exception as err:
             _LOGGER.debug("FCM release during parent unload raised: %s", err)
 
-        # Unload BLE scanner (if registered)
-        try:
-            from .fmdn_finder.ble_scanner import (
-                async_unload_ble_scanner,  # noqa: PLC0415
-            )
-
-            await async_unload_ble_scanner(hass)
-        except ImportError:
-            pass
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.debug("BLE scanner unload raised: %s", err)
+        # Release the shared singletons once no other entry is LOADED.
+        shared_released = await _async_release_shared_singletons_if_last(
+            hass, bucket, entry.entry_id
+        )
 
         # Unload FMDN Finder (if enabled)
         try:
@@ -10353,25 +10526,16 @@ async def _async_unload_parent_entry(hass: HomeAssistant, entry: MyConfigEntry) 
         except Exception as err:
             _LOGGER.debug("Owner-index cleanup failed: %s", err)
 
-        resolver = bucket.get(DATA_EID_RESOLVER)
-        if isinstance(resolver, GoogleFindMyEIDResolver):
-            if not entries_bucket:
-                resolver.stop()
-                bucket.pop(DATA_EID_RESOLVER, None)
-            else:
-                hass.async_create_task(resolver.async_refresh())
-
-        if not entries_bucket:
-            # Last entry torn down: cancel the global restart watchdog (both timers)
-            # and clear its issue, mirroring how other global singletons are released
-            # here (Codex-P1 #1/#2).
-            _teardown_restart_required_check(hass, bucket)
-            _teardown_url_refresh_timer(hass, bucket)
-
-        try:
-            await _maybe_close_spot_transport(entries_bucket)
-        except Exception as err:  # pragma: no cover - defensive
-            _LOGGER.debug("SPOT transport close during parent unload raised: %s", err)
+        # The SPOT channel is lazy and an entry still setting up may already
+        # use it, so it stays open while such an entry exists. An entry in
+        # SETUP_RETRY does not keep it (its next attempt reopens it).
+        if shared_released and not _another_entry_setting_up(hass, entry.entry_id):
+            try:
+                await SPOT_GRPC_TRANSPORT.async_close()
+            except Exception as err:  # pragma: no cover - defensive
+                _LOGGER.debug(
+                    "SPOT transport close during parent unload raised: %s", err
+                )
 
         if hasattr(entry, "runtime_data"):
             with suppress(Exception):
