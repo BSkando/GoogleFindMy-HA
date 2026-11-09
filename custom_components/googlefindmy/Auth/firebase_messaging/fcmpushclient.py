@@ -326,6 +326,9 @@ class FcmPushClient[NotificationContextT]:  # pylint:disable=too-many-instance-a
         # Consumed cross-module by ``fcm_receiver_ha._needs_first_locate_reconnect``.
         self._first_data_message_delivered: bool = False
         self.tasks: list[asyncio.Task[None]] = []
+        # The listener among ``tasks``: ``stop()`` waits for it instead of
+        # cancelling it when it already ended on its own (stop contract).
+        self._listen_task: asyncio.Task[None] | None = None
         # Set by ``_listen`` when stored FCM key material is found to be
         # corrupt/undecodable. The supervisor reads this after the listener
         # stops to invalidate the bad credentials and force re-registration,
@@ -1251,6 +1254,10 @@ class FcmPushClient[NotificationContextT]:  # pylint:disable=too-many-instance-a
                 describe_exception(ex),
                 exception_origin(ex),
             )
+            # Like every other arm: end the heartbeat loop with the listener.
+            # Without this the heartbeat task kept running and kept the whole
+            # client alive after each supervisor restart (upstream #238).
+            self.do_listen = False
         finally:
             self.run_state = FcmPushClientRunState.STOPPING
             await self._do_writer_close()
@@ -1349,14 +1356,37 @@ class FcmPushClient[NotificationContextT]:  # pylint:disable=too-many-instance-a
             self.logger.debug("Heartbeat task cancelled")
             raise
 
-    async def _cancel_and_gather(self) -> None:
-        """Cancel all running internal tasks and await their completion."""
-        if not self.tasks:
+    async def _cancel_and_wait(
+        self,
+        spare: asyncio.Task[None] | None = None,
+        timeout: float | None = None,
+    ) -> None:
+        """Cancel the internal tasks and wait until none of them is running.
+
+        ``spare`` is awaited instead of cancelled, so the listener can finish
+        closing its writer. The wait uses ``asyncio.wait``, not ``gather``: when
+        the caller is cancelled, ``wait`` does not pass the cancellation on to
+        ``spare``. Tasks still running after ``timeout`` are cancelled and then
+        awaited (never ``await task``, which would raise ``CancelledError`` out
+        of ``stop()``). Without arguments every task is cancelled and awaited.
+        """
+        tasks = [t for t in self.tasks if t]
+        if not tasks:
             return
-        for t in self.tasks:
-            if t and not t.done():
+        for t in tasks:
+            if t is not spare and not t.done():
                 t.cancel()
-        await asyncio.gather(*self.tasks, return_exceptions=True)
+        _done, pending = await asyncio.wait(tasks, timeout=timeout)
+        if pending:
+            for t in pending:
+                t.cancel()
+            await asyncio.wait(pending)
+        # Defensive: both tasks catch ``Exception`` themselves, so this only
+        # retrieves a ``BaseException`` ending and keeps asyncio from reporting
+        # it as never retrieved.
+        for t in tasks:
+            if not t.cancelled():
+                t.exception()
         self.tasks = []
 
     async def start(self) -> None:
@@ -1366,8 +1396,11 @@ class FcmPushClient[NotificationContextT]:  # pylint:disable=too-many-instance-a
         try:
             # Initialize activity clock to "now" so potential monitors (if any) don't reset
             self.last_message_time = time.time()
+            self._listen_task = asyncio.create_task(
+                self._listen(), name="googlefindmy.fcm_listen"
+            )
             self.tasks = [
-                asyncio.create_task(self._listen(), name="googlefindmy.fcm_listen"),
+                self._listen_task,
                 asyncio.create_task(
                     self._start_heartbeat_sender(), name="googlefindmy.fcm_heartbeat"
                 ),
@@ -1378,16 +1411,38 @@ class FcmPushClient[NotificationContextT]:  # pylint:disable=too-many-instance-a
             )
 
     async def stop(self) -> None:
-        """Graceful stop: close writer, cancel tasks, mark stopped"""
-        if (
-            self.stopping_lock
-            and self.stopping_lock.locked()
-            or self.run_state
-            in (
-                FcmPushClientRunState.STOPPING,
-                FcmPushClientRunState.STOPPED,
-            )
+        """Graceful stop: close writer, end every task, mark stopped.
+
+        Stop contract (``Auth/AGENTS.md``, "FCM client stop contract"):
+
+        * When ``stop()`` returns, no task of this client is running, also when
+          the listener already ended on its own (``STOPPING``/``STOPPED``) and
+          left the heartbeat behind, and also for a concurrent call, which waits
+          for the running ``stop()`` and then reaps whatever it left (it may
+          have been cancelled midway).
+        * In that case the listener is awaited, not cancelled: ``stop()`` waits
+          at most ``writer_close_timeout + 1`` seconds for it, then cancels it
+          and awaits its end.
+        * Cancelling ``stop()`` itself does not cancel the listener.
+        """
+        if self.stopping_lock.locked():
+            # A stop() in the regular path holds the lock. Wait for it, then
+            # fall through: it leaves STOPPED behind, and if it was cancelled
+            # midway the early path below reaps the tasks it left running.
+            async with self.stopping_lock:
+                pass
+        if self.run_state in (
+            FcmPushClientRunState.STOPPING,
+            FcmPushClientRunState.STOPPED,
         ):
+            self.do_listen = False
+            await self._cancel_and_wait(
+                spare=self._listen_task,
+                timeout=self.config.writer_close_timeout + 1.0,
+            )
+            # The listener's own ``finally`` does not reach STOPPED when it is
+            # cancelled after the timeout.
+            self.run_state = FcmPushClientRunState.STOPPED
             return
 
         async with self.stopping_lock:
@@ -1395,7 +1450,7 @@ class FcmPushClient[NotificationContextT]:  # pylint:disable=too-many-instance-a
                 self.run_state = FcmPushClientRunState.STOPPING
                 self.do_listen = False
                 await self._do_writer_close()
-                await self._cancel_and_gather()
+                await self._cancel_and_wait()
             finally:
                 self.run_state = FcmPushClientRunState.STOPPED
 

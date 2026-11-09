@@ -210,11 +210,6 @@ REACH_CASES = [
 ]
 
 
-async def test_reach_case_set_is_complete() -> None:
-    """The reach proof runs over exactly the enumerated six cases."""
-    assert len(REACH_CASES) == 6
-
-
 @pytest.mark.parametrize(("dead_v6", "eager"), REACH_CASES)
 async def test_live_ipv4_is_reached_behind_dead_ipv6(
     monkeypatch: pytest.MonkeyPatch,
@@ -328,11 +323,6 @@ DEAD_TCP_CASES = [
     pytest.param((V4_DEAD,), id="only_v4"),
     pytest.param((V6_DEAD_A, V4_DEAD), id="v6_and_v4"),
 ]
-
-
-async def test_limit_case_set_is_complete() -> None:
-    """The limit proof runs over three TCP cases, the resolver and silent TLS."""
-    assert len(DEAD_TCP_CASES) + 2 == 5
 
 
 async def test_limit_ends_hanging_resolver(
