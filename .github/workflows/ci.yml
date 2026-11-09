@@ -424,11 +424,13 @@ jobs:
         id: mypy
         run: |
           set +e
-          {
-            poetry run mypy --install-types --non-interactive --strict -p custom_components.googlefindmy
-            poetry run mypy --install-types --non-interactive --strict -p tests
-          } 2>&1 | tee mypy_output.txt
-          EXIT_CODE=${PIPESTATUS[0]}
+          # One pipeline per run: PIPESTATUS of a `{ ...; ...; } | tee` group only
+          # holds the status of its last command, which hid package failures.
+          poetry run mypy --install-types --non-interactive --strict -p custom_components.googlefindmy 2>&1 | tee mypy_output.txt
+          PACKAGE_EXIT=${PIPESTATUS[0]}
+          poetry run mypy --install-types --non-interactive --strict -p tests 2>&1 | tee -a mypy_output.txt
+          TESTS_EXIT=${PIPESTATUS[0]}
+          EXIT_CODE=$(( PACKAGE_EXIT > TESTS_EXIT ? PACKAGE_EXIT : TESTS_EXIT ))
           echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
           exit $EXIT_CODE
 
@@ -463,8 +465,8 @@ jobs:
             echo ""
             if [ "${{ matrix.check }}" = "ruff" ]; then
               if [ -f ruff_output.txt ]; then
-                ISSUES=$(grep -c "^" ruff_output.txt 2>/dev/null || echo "0")
-                if [ "$ISSUES" = "0" ] || [ ! -s ruff_output.txt ]; then
+                # A clean run still prints "All checks passed!"; judge by exit code.
+                if [ "${{ steps.ruff.outputs.exit_code }}" = "0" ]; then
                   echo "✅ **No issues found**"
                 else
                   echo "❌ **Issues found:**"
@@ -476,11 +478,15 @@ jobs:
               fi
             elif [ "${{ matrix.check }}" = "mypy" ]; then
               if [ -f mypy_output.txt ]; then
-                ERRORS=$(grep -c "error:" mypy_output.txt 2>/dev/null || echo "0")
-                if [ "$ERRORS" = "0" ]; then
+                ERRORS=$(grep -c "error:" mypy_output.txt 2>/dev/null || true)
+                if [ "${{ steps.mypy.outputs.exit_code }}" = "0" ]; then
                   echo "✅ **No type errors found**"
                 else
-                  echo "❌ **$ERRORS type error(s) found:**"
+                  if [ "$ERRORS" = "0" ]; then
+                    echo "❌ **mypy failed without reporting a type error:**"
+                  else
+                    echo "❌ **$ERRORS type error(s) found:**"
+                  fi
                   echo ""
                   echo '```'
                   head -100 mypy_output.txt
@@ -515,11 +521,15 @@ jobs:
               fi
             elif [ "${{ matrix.check }}" = "bandit" ]; then
               if [ -f bandit_output.txt ]; then
-                ISSUES=$(grep -c "Issue:" bandit_output.txt 2>/dev/null || echo "0")
-                if [ "$ISSUES" = "0" ]; then
+                ISSUES=$(grep -c "Issue:" bandit_output.txt 2>/dev/null || true)
+                if [ "${{ steps.bandit.outputs.exit_code }}" = "0" ]; then
                   echo "✅ **No security issues found**"
                 else
-                  echo "⚠️ **$ISSUES potential security issue(s) found:**"
+                  if [ "$ISSUES" = "0" ]; then
+                    echo "❌ **bandit failed without reporting an issue:**"
+                  else
+                    echo "⚠️ **$ISSUES potential security issue(s) found:**"
+                  fi
                   echo ""
                   echo '```'
                   cat bandit_output.txt
