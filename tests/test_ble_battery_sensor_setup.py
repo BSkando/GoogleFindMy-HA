@@ -62,6 +62,13 @@ def _battery_state(pct: int = 100) -> BLEBatteryState:
     )
 
 
+class _CacheStub:
+    """Coordinator cache stand-in; it carries only the owning entry id."""
+
+    def __init__(self, entry_id: str) -> None:
+        self.entry_id = entry_id
+
+
 class _ResolverStub:
     """Resolver stand-in answering only ``get_ble_battery_state``."""
 
@@ -137,9 +144,7 @@ class _Harness:
         coordinator_cls = stub_coordinator_factory(
             snapshot_callback=lambda key, _feature: devices_by_key.get(key or "", []),
         )
-        self.coordinator = coordinator_cls(
-            self.hass, cache=SimpleNamespace(entry_id=ENTRY_ID)
-        )
+        self.coordinator = coordinator_cls(self.hass, cache=_CacheStub(ENTRY_ID))
         self.coordinator.config_entry = self.entry
         self.coordinator.is_device_visible_in_subentry = lambda _key, dev_id: (
             dev_id not in hidden
