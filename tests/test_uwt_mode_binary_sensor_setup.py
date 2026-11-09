@@ -573,7 +573,9 @@ async def _late_tracker_signal(
 
     Setup sees only the service subentry. Afterwards the entry gains a service
     subentry followed by ``late_tracker`` and the setup signal carries the
-    tracker's bare id, as in ``test_binary_sensor_subentry_setup.py``. A bare
+    tracker's bare id, as in ``test_binary_sensor_subentry_setup.py``. Both
+    mappings stay read-only like the ones Home Assistant hands out
+    (``tests/AGENTS.md``, read-only mapping attributes on entry doubles). A bare
     id is not a typed subentry, so ``_tracker_key_for`` takes the key from the
     first tracker in ``entry.subentries``. Each group key has its own device,
     so the UWT entity that appears names the key that was resolved.
@@ -598,15 +600,17 @@ async def _late_tracker_signal(
         title="Service",
         subentry_id="service-subentry",
     )
-    harness.entry.subentries = {service.subentry_id: service}
+    harness.entry.subentries = MappingProxyType({service.subentry_id: service})
     await harness.setup()
     assert harness.uwt() == []
 
-    harness.entry.subentries = {
-        service.subentry_id: service,
-        LATE_SUBENTRY_ID: late_tracker,
-        **(trailing or {}),
-    }
+    harness.entry.subentries = MappingProxyType(
+        {
+            service.subentry_id: service,
+            LATE_SUBENTRY_ID: late_tracker,
+            **(trailing or {}),
+        }
+    )
     async_dispatcher_send(
         harness.hass, f"{DOMAIN}_subentry_setup_{ENTRY_ID}", LATE_SUBENTRY_ID
     )
