@@ -98,6 +98,8 @@ Bit layout (decoded):
   Bits 0-4:   Reserved / implementation-specific
   Bits 5-6:   Battery level (2-bit enum)
   Bit  7:     UWT mode (Unwanted Tracking protection active)
+  Bits are numbered MSB first, as the FMDN spec states (section 1, step 5):
+  battery = (decoded >> 1) & 0x03, UWT = decoded & 0x01.
 
 Battery mapping:
   0 → UNSUPPORTED → None (unknown)

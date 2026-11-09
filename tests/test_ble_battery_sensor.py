@@ -824,7 +824,7 @@ class TestUpdateBLEBattery:
 # the FMDN spec's "Bits 5-6 battery, Bit 7 UWT" without honouring the
 # spec's explicit qualifier that bits are referenced from MSB to LSB.
 # See custom_components/googlefindmy/eid_resolver.py around the
-# "FMDN hashed_flags byte layout" comment block and docs/BLE_BATTERY_SENSOR.md, section 3.
+# "FMDN hashed_flags byte layout" comment block and docs/BLE_BATTERY_SENSOR.md, section 1, step 5.
 # ===========================================================================
 
 
