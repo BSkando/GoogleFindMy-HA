@@ -4213,7 +4213,7 @@ class GoogleFindMyEIDResolver:
         # qualifier in the spec is the load-bearing detail. Doing so also fails:
         #   tests/test_ble_battery_sensor.py::TestHashedFlagsMsbFirstConvention
         #   tests/test_ble_battery_sensor.py::TestMsbFirstNotLsbFirstDemonstratesCodexMisinterpretation
-        # See also docs/BLE_BATTERY_SENSOR.md L45.
+        # See also docs/BLE_BATTERY_SENSOR.md, section 3 (hashed-flags byte decoding).
         if flags_byte is not None and xor_mask is not None:
             decoded = flags_byte ^ xor_mask
             decoded_flags = decoded
