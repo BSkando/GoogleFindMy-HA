@@ -29,6 +29,7 @@ import pytest
 from homeassistant.config_entries import ConfigSubentry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from custom_components.googlefindmy import binary_sensor
 from custom_components.googlefindmy.const import (
@@ -36,6 +37,8 @@ from custom_components.googlefindmy.const import (
     DATA_EID_RESOLVER,
     DATA_SECRET_BUNDLE,
     DOMAIN,
+    SERVICE_SUBENTRY_KEY,
+    SUBENTRY_TYPE_SERVICE,
     TRACKER_SUBENTRY_KEY,
 )
 from custom_components.googlefindmy.eid_resolver import BLEBatteryState
@@ -551,3 +554,135 @@ async def test_entry_without_subentries_uses_default_tracker_key(
     await harness.setup()
 
     assert len(harness.uwt()) == 1
+
+
+LATE_SUBENTRY_ID = "late-tracker-subentry"
+LATE_KEY = "late"
+DEFAULT_DEV_ID = "device-default"
+LATE_DEV_ID = "device-late"
+OTHER_KEY = "other"
+OTHER_DEV_ID = "device-other"
+
+
+async def _late_tracker_signal(
+    stub_coordinator_factory: Any,
+    late_tracker: Any,
+    trailing: dict[str, Any] | None = None,
+) -> list[tuple[str, str | None]]:
+    """Set up with a service subentry, then announce a tracker by bare id.
+
+    Setup sees only the service subentry. Afterwards the entry gains a service
+    subentry followed by ``late_tracker`` and the setup signal carries the
+    tracker's bare id, as in ``test_binary_sensor_subentry_setup.py``. A bare
+    id is not a typed subentry, so ``_tracker_key_for`` takes the key from the
+    first tracker in ``entry.subentries``. Each group key has its own device,
+    so the UWT entity that appears names the key that was resolved.
+    ``trailing`` subentries follow the tracker in the mapping.
+    """
+    resolver = _ResolverStub()
+    resolver.states[DEFAULT_DEV_ID] = _flags_state()
+    resolver.states[LATE_DEV_ID] = _flags_state()
+    resolver.states[OTHER_DEV_ID] = _flags_state()
+    harness = _Harness(
+        stub_coordinator_factory,
+        devices_by_key={
+            TRACKER_SUBENTRY_KEY: [{"id": DEFAULT_DEV_ID, "name": "Default"}],
+            LATE_KEY: [{"id": LATE_DEV_ID, "name": "Late"}],
+            OTHER_KEY: [{"id": OTHER_DEV_ID, "name": "Other"}],
+        },
+        resolver=resolver,
+    )
+    service = ConfigSubentry(
+        data={"group_key": SERVICE_SUBENTRY_KEY, "features": ("binary_sensor",)},
+        subentry_type=SUBENTRY_TYPE_SERVICE,
+        title="Service",
+        subentry_id="service-subentry",
+    )
+    harness.entry.subentries = {service.subentry_id: service}
+    await harness.setup()
+    assert harness.uwt() == []
+
+    harness.entry.subentries = {
+        service.subentry_id: service,
+        LATE_SUBENTRY_ID: late_tracker,
+        **(trailing or {}),
+    }
+    async_dispatcher_send(
+        harness.hass, f"{DOMAIN}_subentry_setup_{ENTRY_ID}", LATE_SUBENTRY_ID
+    )
+    await asyncio.sleep(0)
+
+    return [(entity.unique_id, config) for entity, config in harness.uwt()]
+
+
+def _late_tracker(data: dict[str, Any]) -> ConfigSubentry:
+    return ConfigSubentry(
+        data={**data, "features": ("binary_sensor",)},
+        subentry_type="tracker",
+        title="Late tracker",
+        subentry_id=LATE_SUBENTRY_ID,
+    )
+
+
+@pytest.mark.asyncio
+async def test_bare_id_takes_the_first_tracker_key_after_other_subentries(
+    stub_coordinator_factory: Any,
+) -> None:
+    """A bare id skips the service subentry and reads the tracker's group key."""
+    created = await _late_tracker_signal(
+        stub_coordinator_factory, _late_tracker({"group_key": LATE_KEY})
+    )
+
+    assert created == [(_uwt_uid(LATE_SUBENTRY_ID, LATE_DEV_ID), LATE_SUBENTRY_ID)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "data",
+    [{}, {"group_key": None}, {"group_key": ""}, {"group_key": 7}],
+    ids=["missing", "none", "empty", "not-a-string"],
+)
+async def test_bare_id_falls_back_to_default_key_for_unusable_group_key(
+    stub_coordinator_factory: Any, data: dict[str, Any]
+) -> None:
+    """A missing, None, empty or non-string group key reads the default key."""
+    created = await _late_tracker_signal(stub_coordinator_factory, _late_tracker(data))
+
+    assert created == [(_uwt_uid(LATE_SUBENTRY_ID, DEFAULT_DEV_ID), LATE_SUBENTRY_ID)]
+
+
+@pytest.mark.asyncio
+async def test_bare_id_with_tracker_data_not_a_mapping_reads_default_key(
+    stub_coordinator_factory: Any,
+) -> None:
+    """A tracker whose data is not a mapping leaves the default key in place."""
+    tracker = SimpleNamespace(
+        subentry_type="tracker",
+        subentry_id=LATE_SUBENTRY_ID,
+        data=None,
+    )
+
+    created = await _late_tracker_signal(stub_coordinator_factory, tracker)
+
+    assert created == [(_uwt_uid(LATE_SUBENTRY_ID, DEFAULT_DEV_ID), LATE_SUBENTRY_ID)]
+
+
+@pytest.mark.asyncio
+async def test_bare_id_stops_at_the_first_tracker(
+    stub_coordinator_factory: Any,
+) -> None:
+    """A second tracker later in the mapping does not replace the first key."""
+    other = ConfigSubentry(
+        data={"group_key": OTHER_KEY, "features": ("binary_sensor",)},
+        subentry_type="tracker",
+        title="Other tracker",
+        subentry_id="other-tracker-subentry",
+    )
+
+    created = await _late_tracker_signal(
+        stub_coordinator_factory,
+        _late_tracker({"group_key": LATE_KEY}),
+        trailing={other.subentry_id: other},
+    )
+
+    assert created == [(_uwt_uid(LATE_SUBENTRY_ID, LATE_DEV_ID), LATE_SUBENTRY_ID)]
