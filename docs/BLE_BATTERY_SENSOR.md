@@ -120,7 +120,9 @@ The battery sensor is created in one of two ways:
    visible device whether the entity registry already holds the sensor's
    `unique_id` (`async_get_entity_id("sensor", DOMAIN, unique_id)`). If it does,
    the sensor is created at once, even when the resolver has no BLE data yet or
-   no resolver exists. This path logs at DEBUG.
+   no resolver exists. Without resolver data this path logs at DEBUG; if the
+   resolver already has data (for example on a reload of the integration),
+   the INFO record `BLE battery sensor created` is logged instead.
 2. **On the first BLE battery state.** For a device without a registry entry,
    `_build_entities()` checks `resolver.get_ble_battery_state(dev_id)`. If the
    result is `None` (no BLE data yet), no sensor is created. Once Bermuda (or
@@ -144,13 +146,16 @@ days old (`BLE_BATTERY_RESTORE_MAX_AGE_S`, the span of Home Assistant's
 `STATE_EXPIRATION`), at restore time and while running. Resolver data
 whose sighting is older than 7 days counts as no data, so a tracker that
 stops sending loses its value after 7 days even while Home Assistant keeps
-running. A restored value without a sighting time is discarded (DEBUG). Without a value the sensor shows
+running. A sighting time more than 5 minutes in the future
+(`BLE_BATTERY_FUTURE_TOLERANCE_S`) counts as invalid. A restored value without a sighting time is discarded (DEBUG). Without a value the sensor shows
 `unknown` while the device is present and `unavailable` while it is absent.
 
 The unwanted tracking mode binary sensor (`binary_sensor.py`,
 `_build_uwt_entities()`) follows the same two creation paths but restores
 nothing: until the first sighting it shows `unknown` for a present device and
-`unavailable` for an absent one.
+`unavailable` for an absent one. Its registry path logs the same way: DEBUG
+without resolver data, otherwise the INFO record `UWT-Mode binary sensor
+created`.
 
 ---
 
@@ -162,7 +167,7 @@ nothing: until the first sighting it shows `unknown` for a present device and
 | `FMDN_FLAGS_PROBE CANNOT_DECODE` | DEBUG | Once per device when decode fails | Diagnostics for missing XOR mask or truncated payload |
 | `BLE battery changed` | DEBUG | On every battery level change | Track battery transitions |
 | `BLE battery sensor created` | **INFO** | Once per device when the entity is created from a first BLE battery state | Confirms sensor appeared in HA |
-| `BLE battery sensor created from entity registry` | DEBUG | Once per device and setup when the entity is created from its registry entry | Shows the sensor came back at setup without BLE data |
+| `BLE battery sensor created from entity registry` | DEBUG | Once per device and setup when the entity is created from its registry entry without BLE data (with BLE data the INFO record above is logged) | Shows the sensor came back at setup without BLE data |
 | `Discarding restored BLE battery value` | DEBUG | At restore, when the stored state carries no BLE sighting time | Explains why a restored value is not shown |
 
 The first-decode `FMDN_FLAGS_PROBE` is at **INFO** level intentionally.
