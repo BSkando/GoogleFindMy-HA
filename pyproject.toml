@@ -11,7 +11,7 @@ name = "googlefindmy-ha"
 # script/stamp_version.py, so on those lines the hand-tag/stamp path is primary,
 # not a fallback. Canonical anchor:
 # custom_components/googlefindmy/AGENTS.md ("Version bump touches three files").
-version = "1.15.34"
+version = "1.15.35"
 description = "Home Assistant integration for Google's Find My Device network."
 readme = "README.md"
 license = "MIT"
