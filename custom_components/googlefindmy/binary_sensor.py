@@ -488,7 +488,16 @@ async def async_setup_entry(  # noqa: PLR0915
         if subentry_type in (None, "tracker"):
             tracker_key = TRACKER_SUBENTRY_KEY
             subentries = getattr(entry, "subentries", None)
-            if isinstance(subentries, Mapping):
+            # Read the group key of the subentry being set up; a bare id is
+            # resolved through the entry. Only an untyped call falls back to
+            # the first tracker subentry.
+            own = subentry
+            if isinstance(subentry, str) and isinstance(subentries, Mapping):
+                own = subentries.get(subentry)
+            own_data = getattr(own, "data", None)
+            if _subentry_type(own) == "tracker" and isinstance(own_data, Mapping):
+                tracker_key = own_data.get("group_key", TRACKER_SUBENTRY_KEY)
+            elif isinstance(subentries, Mapping):
                 for sub in subentries.values():
                     if _subentry_type(sub) == "tracker":
                         data = getattr(sub, "data", None)

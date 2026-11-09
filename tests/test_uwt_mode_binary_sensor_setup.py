@@ -36,6 +36,7 @@ from custom_components.googlefindmy.const import (
     DATA_EID_RESOLVER,
     DATA_SECRET_BUNDLE,
     DOMAIN,
+    TRACKER_SUBENTRY_KEY,
 )
 from custom_components.googlefindmy.eid_resolver import BLEBatteryState
 from tests.helpers.config_entries_stub import make_config_entry
@@ -356,10 +357,9 @@ async def test_other_subentry_uid(stub_coordinator_factory: Any) -> None:
 async def test_two_tracker_subentries(stub_coordinator_factory: Any) -> None:
     """Each subentry gets only the sensors whose uid it registered.
 
-    Both subentries see the same devices: the tracker scope of this platform
-    reads the snapshot of the first tracker subentry's group key for every
-    tracker subentry (existing behaviour, not changed here), so a per-key
-    device split would test that, not the registry arm.
+    Both subentries see the same devices here, so the test isolates the
+    registry arm; separate device lists per subentry are covered by
+    ``test_two_tracker_subentries_with_separate_devices``.
     """
     devices = [{"id": DEV_ID, "name": "Tag"}, {"id": "device-2", "name": "B"}]
     harness = _Harness(
@@ -506,3 +506,48 @@ async def test_resolver_error_counts_as_no_data(
     await harness.setup()
 
     assert harness.uwt_uids() == ([uid] if registered else [])
+
+
+@pytest.mark.asyncio
+async def test_two_tracker_subentries_with_separate_devices(
+    stub_coordinator_factory: Any,
+) -> None:
+    """Each tracker subentry reads the snapshot of its own group key."""
+    harness = _Harness(
+        stub_coordinator_factory,
+        devices_by_key={
+            TRACKER_KEY: [{"id": DEV_ID, "name": "Tag"}],
+            SECOND_KEY: [{"id": "device-2", "name": "B"}],
+        },
+        resolver=_ResolverStub(),
+        second_subentry=True,
+    )
+    tracker_uid = _uwt_uid(TRACKER_SUBENTRY_ID, DEV_ID)
+    harness.register("binary_sensor.tag_uwt_mode", tracker_uid, TRACKER_SUBENTRY_ID)
+    second_uid = _uwt_uid(SECOND_SUBENTRY_ID, "device-2")
+    harness.register("binary_sensor.b_uwt_mode", second_uid, SECOND_SUBENTRY_ID)
+
+    await harness.setup()
+
+    assert sorted((entity.unique_id, config) for entity, config in harness.uwt()) == (
+        sorted([(tracker_uid, TRACKER_SUBENTRY_ID), (second_uid, SECOND_SUBENTRY_ID)])
+    )
+
+
+@pytest.mark.asyncio
+async def test_entry_without_subentries_uses_default_tracker_key(
+    stub_coordinator_factory: Any,
+) -> None:
+    """An entry without a subentries mapping reads the default tracker key."""
+    resolver = _ResolverStub()
+    resolver.states[DEV_ID] = _flags_state()
+    harness = _Harness(
+        stub_coordinator_factory,
+        devices_by_key={TRACKER_SUBENTRY_KEY: [{"id": DEV_ID, "name": "Tag"}]},
+        resolver=resolver,
+    )
+    del harness.entry.subentries
+
+    await harness.setup()
+
+    assert len(harness.uwt()) == 1
