@@ -13,11 +13,13 @@ from __future__ import annotations
 import ast
 import json
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 import yaml
 
 from custom_components import googlefindmy
+from custom_components.googlefindmy.button import _CoordinatorRefreshServiceMixin
 
 _PACKAGE = Path(googlefindmy.__file__).resolve().parent
 
@@ -114,3 +116,20 @@ def test_entity_service_method_on_every_platform_button() -> None:
     method = _SERVICES["trigger_device_refresh"]
     missing = [name for name in buttons if not _has_method(name, method, classes)]
     assert missing == []
+
+
+@pytest.mark.asyncio
+async def test_refresh_method_requests_a_coordinator_refresh() -> None:
+    """The shared method asks the coordinator of the entry for a refresh."""
+    calls: list[str] = []
+
+    class _Coordinator:
+        async def async_request_refresh(self) -> None:
+            calls.append("refresh")
+
+    target = _CoordinatorRefreshServiceMixin()
+    target.coordinator = cast(Any, _Coordinator())
+
+    await target.async_trigger_coordinator_refresh()
+
+    assert calls == ["refresh"]

@@ -251,8 +251,9 @@ integrations) in addition to internal callers.  The
 ### 6.4  Cloud attribute removed; battery comes from BLE only (see section 6)
 
 The coordinator data model used to carry a `battery_level` placeholder for
-the Google device list. Google's API never filled it for FMDN trackers, so
-it was always `None` and never reached an entity attribute; it has been
+the Google device list. The integration never filled it from the API (every
+place that set it wrote `None`), so it never reached an entity attribute,
+and no cloud field carrying a battery level is known; it has been
 removed from the decoder, the coordinator, the cache snapshot and the
 translations. Cache rows written by older versions may still contain the
 key; they load as before, and the key is not shown.

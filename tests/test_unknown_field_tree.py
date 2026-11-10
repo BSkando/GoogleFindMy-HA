@@ -74,6 +74,7 @@ import re
 import secrets
 import struct
 from collections.abc import Iterable, Sequence
+from importlib import import_module
 from pathlib import Path
 from typing import Any, cast
 
@@ -253,12 +254,13 @@ def build_device_list(devices: int) -> Any:
     """A ``DevicesList`` shaped like the live list of 2026-11-10.
 
     Every field that was unknown on 2026-11-10 is present per device with its
-    live wire type and length (``wiretypen.txt``); since commit 6c3e2697 the
-    schema declares them, so they are walked as known fields. Two fields stay
-    unknown per device so that the whole log path runs:
+    live wire type and length as observed in a debug log of that day; since
+    commit 6c3e2697 the schema declares them, so they are walked as known
+    fields. Two fields stay unknown per device so that the whole log path runs:
     ``DeviceMetadata.#99=varint:1`` and
     ``DeviceMetadata.information.deviceRegistration.#98=len=2 msg{#1=varint}``.
-    Used by the cost measurement below; attrappes are random per call.
+    Meant for timing the walker and the log path on a realistic list; the
+    placeholder bytes are random per call.
     """
     device_list = DeviceUpdate_pb2.DevicesList()
     for index in range(devices):
@@ -476,6 +478,60 @@ def test_k2_group_like_length_delimited() -> None:
     assert uft.describe_unknown_fields(device) == [
         ("DeviceMetadata.#99", "group", "group msg{#1=varint}")
     ]
+
+
+def test_k2_empty_group_has_no_subtree() -> None:
+    number = _free(DeviceUpdate_pb2.DeviceMetadata, 99)
+    device = _reparse(DeviceUpdate_pb2.DeviceMetadata(), _group(number, b""))
+
+    assert uft.describe_unknown_fields(device) == [
+        ("DeviceMetadata.#99", "group", "group")
+    ]
+
+
+def test_k4_group_in_closed_message_is_not_opened() -> None:
+    number = _free(DeviceUpdate_pb2.Location, 9)
+    location = _reparse(
+        DeviceUpdate_pb2.Location(altitude=3), _group(number, _vf(1, 7))
+    )
+
+    assert uft.describe_unknown_fields(location) == [("Location.#9", "group", "group")]
+
+
+def test_k1_scalar_map_values_are_skipped() -> None:
+    """A map with scalar values yields no message to walk and no entry."""
+    descriptor_pb2: Any = import_module("google.protobuf.descriptor_pb2")
+    descriptor_pool: Any = import_module("google.protobuf.descriptor_pool")
+    message_factory: Any = import_module("google.protobuf.message_factory")
+    file_proto = descriptor_pb2.FileDescriptorProto(
+        name="uft_scalar_map_test.proto", package="uft_scalar_map_test", syntax="proto3"
+    )
+    holder = file_proto.message_type.add(name="Holder")
+    entry = holder.nested_type.add(name="CountsEntry")
+    entry.options.map_entry = True
+    field = descriptor_pb2.FieldDescriptorProto
+    entry.field.add(
+        name="key", number=1, type=field.TYPE_STRING, label=field.LABEL_OPTIONAL
+    )
+    entry.field.add(
+        name="value", number=2, type=field.TYPE_INT32, label=field.LABEL_OPTIONAL
+    )
+    holder.field.add(
+        name="counts",
+        number=1,
+        type=field.TYPE_MESSAGE,
+        label=field.LABEL_REPEATED,
+        type_name=".uft_scalar_map_test.Holder.CountsEntry",
+    )
+    pool = descriptor_pool.DescriptorPool()
+    pool.AddSerializedFile(file_proto.SerializeToString())
+    holder_class = message_factory.GetMessageClass(
+        pool.FindMessageTypeByName("uft_scalar_map_test.Holder")
+    )
+    message = holder_class()
+    message.counts["a"] = 1
+
+    assert uft.describe_unknown_fields(message) == []
 
 
 def test_k2_65_fields_give_64_entries_and_rest(
@@ -866,6 +922,26 @@ def test_k6_supported_actions_order_is_silent(
     forward.supportedActions.extend([unknown, _locate_action()])
     backward = DeviceUpdate_pb2.DeviceMetadata()
     backward.supportedActions.extend([_locate_action(), unknown])
+
+    uft.log_unknown_fields("device_list", ref, "Tag", [forward])
+    uft.log_unknown_fields("device_list", ref, "Tag", [backward])
+
+    assert len(_lines(caplog)) == 1
+
+
+def test_k6_order_of_two_unknown_entries_is_silent(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Two different unknown entries in swapped order keep one signature."""
+    _debug(caplog)
+    ref = secrets.token_hex(16)
+    first = _supported_action(_free(DeviceUpdate_pb2.ExecuteActionType, 99))
+    second = _supported_action(_free(DeviceUpdate_pb2.ExecuteActionType, 98))
+    forward = DeviceUpdate_pb2.DeviceMetadata()
+    forward.supportedActions.extend([first, second])
+    backward = DeviceUpdate_pb2.DeviceMetadata()
+    backward.supportedActions.extend([second, first])
+    assert len(uft.describe_unknown_fields(forward)) == 2
 
     uft.log_unknown_fields("device_list", ref, "Tag", [forward])
     uft.log_unknown_fields("device_list", ref, "Tag", [backward])
