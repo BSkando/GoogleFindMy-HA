@@ -11,8 +11,8 @@ helper. Every field number used as "unknown" passes through ``_free``, which
 fails when the schema declares that number (a later schema addition then
 breaks the fixture loudly instead of silently turning it into a known field).
 
-The module under test is imported inside each test (``_tree``), so that a
-missing module fails every case on its own instead of one collection error.
+An autouse fixture empties the signature store before every test, so each
+case starts from a first sighting.
 
 API pinned here:
 
@@ -69,18 +69,17 @@ Format decisions (where the plan left a choice, decided once for all cases):
 
 from __future__ import annotations
 
-import importlib
 import logging
 import re
 import secrets
 import struct
 from collections.abc import Iterable, Sequence
 from pathlib import Path
-from types import ModuleType
 from typing import Any, cast
 
 import pytest
 
+from custom_components.googlefindmy import unknown_field_tree as uft
 from custom_components.googlefindmy.NovaApi.ExecuteAction.LocateTracker import (
     decrypt_locations,
 )
@@ -94,7 +93,6 @@ from custom_components.googlefindmy.SpotApi.GetEidInfoForE2eeDevices import (
 )
 from google.protobuf.message import Message
 
-_MODULE = "custom_components.googlefindmy.unknown_field_tree"
 _LOGGER_NAME = "custom_components.googlefindmy.unknown_fields"
 _FORMAT = "Unknown protobuf fields (%s) for %s: %s"
 _PROTO = (
@@ -180,10 +178,9 @@ def _fake_cipher() -> tuple[bytes, int]:
     return _vf(1, big) + _ld(2, secrets.token_bytes(16)), big
 
 
-def _tree() -> ModuleType:
-    module = importlib.import_module(_MODULE)
-    module._reset_signatures_for_tests()
-    return module
+@pytest.fixture(autouse=True)
+def _reset_signatures() -> None:
+    uft._reset_signatures_for_tests()
 
 
 def _render(entries: Iterable[tuple[str, str, str]]) -> list[str]:
@@ -339,34 +336,31 @@ def build_device_list(devices: int) -> Any:
 
 
 def test_k1_depth5_path_names_and_number() -> None:
-    tree = _tree()
     number = _free(DeviceUpdate_pb2.RecentLocationAndNetworkLocations, 12)
     update = DeviceUpdate_pb2.DeviceUpdate()
     recent = update.deviceMetadata.information.locationInformation.reports.recentLocationAndNetworkLocations
     recent.CopyFrom(_reparse(recent, _vf(number, 3)))
     update = _reparse(update, b"")
 
-    entries = tree.describe_unknown_fields(update)
+    entries = uft.describe_unknown_fields(update)
 
     assert entries == [(f"{_RECENT_PATH}.#12", "varint", "varint:3")]
     assert _render(entries) == [f"{_RECENT_PATH}.#12=varint:3"]
 
 
 def test_k1_known_descent_has_no_depth_limit() -> None:
-    tree = _tree()
     number = _free(Common_pb2.SemanticLocation, 9)
     update = DeviceUpdate_pb2.DeviceUpdate()
     semantic = update.deviceMetadata.information.locationInformation.reports.recentLocationAndNetworkLocations.recentLocation.semanticLocation
     semantic.locationName = "Home"
     semantic.CopyFrom(_reparse(semantic, _vf(number, 1)))
 
-    assert _render(tree.describe_unknown_fields(update)) == [
+    assert _render(uft.describe_unknown_fields(update)) == [
         f"{_RECENT_PATH}.recentLocation.semanticLocation.#9=varint:1"
     ]
 
 
 def test_k1_repeated_field_brackets_without_index() -> None:
-    tree = _tree()
     number = _free(Common_pb2.LocationReport, 12)
     update = DeviceUpdate_pb2.DeviceUpdate()
     recent = update.deviceMetadata.information.locationInformation.reports.recentLocationAndNetworkLocations
@@ -374,21 +368,20 @@ def test_k1_repeated_field_brackets_without_index() -> None:
         report = Common_pb2.LocationReport(status=Common_pb2.Status.CROWDSOURCED)
         recent.networkLocations.add().CopyFrom(_reparse(report, _vf(number, 1)))
 
-    assert _render(tree.describe_unknown_fields(update)) == [
+    assert _render(uft.describe_unknown_fields(update)) == [
         f"{_RECENT_PATH}.networkLocations[].#12=varint:1",
         f"{_RECENT_PATH}.networkLocations[].#12=varint:1",
     ]
 
 
 def test_k1_line_carries_full_path(caplog: pytest.LogCaptureFixture) -> None:
-    tree = _tree()
     _debug(caplog)
     number = _free(DeviceUpdate_pb2.RecentLocationAndNetworkLocations, 12)
     update = DeviceUpdate_pb2.DeviceUpdate()
     recent = update.deviceMetadata.information.locationInformation.reports.recentLocationAndNetworkLocations
     recent.CopyFrom(_reparse(recent, _vf(number, 3)))
 
-    tree.log_unknown_fields("device_update", secrets.token_hex(16), "Tag", [update])
+    uft.log_unknown_fields("device_update", secrets.token_hex(16), "Tag", [update])
 
     assert _lines(caplog) == [
         f"Unknown protobuf fields (device_update) for Tag: {_RECENT_PATH}.#12=varint:3"
@@ -402,34 +395,31 @@ def test_k1_line_carries_full_path(caplog: pytest.LogCaptureFixture) -> None:
 
 @pytest.mark.parametrize("value", [0, 7, 255])
 def test_k2_varint_up_to_255_shows_value(value: int) -> None:
-    tree = _tree()
     number = _free(DeviceUpdate_pb2.DeviceMetadata, 99)
     device = _reparse(DeviceUpdate_pb2.DeviceMetadata(), _vf(number, value))
 
-    assert tree.describe_unknown_fields(device) == [
+    assert uft.describe_unknown_fields(device) == [
         ("DeviceMetadata.#99", "varint", f"varint:{value}")
     ]
 
 
 @pytest.mark.parametrize("value", [256, (1 << 64) - 1])
 def test_k2_varint_above_255_shows_marker(value: int) -> None:
-    tree = _tree()
     number = _free(DeviceUpdate_pb2.DeviceMetadata, 99)
     device = _reparse(DeviceUpdate_pb2.DeviceMetadata(), _vf(number, value))
 
-    entries = tree.describe_unknown_fields(device)
+    entries = uft.describe_unknown_fields(device)
 
     assert entries == [("DeviceMetadata.#99", "varint", "varint:>255")]
     _assert_absent(repr(entries), numbers=[value])
 
 
 def test_k2_fixed32_shows_no_value() -> None:
-    tree = _tree()
     payload = secrets.token_bytes(4)
     number = _free(DeviceUpdate_pb2.DeviceMetadata, 99)
     device = _reparse(DeviceUpdate_pb2.DeviceMetadata(), _fixed32(number, payload))
 
-    entries = tree.describe_unknown_fields(device)
+    entries = uft.describe_unknown_fields(device)
 
     assert entries == [("DeviceMetadata.#99", "fixed32", "fixed32")]
     unsigned = int.from_bytes(payload, "little")
@@ -443,12 +433,11 @@ def test_k2_fixed32_shows_no_value() -> None:
 
 
 def test_k2_fixed64_shows_no_value() -> None:
-    tree = _tree()
     payload = secrets.token_bytes(8)
     number = _free(DeviceUpdate_pb2.DeviceMetadata, 99)
     device = _reparse(DeviceUpdate_pb2.DeviceMetadata(), _fixed64(number, payload))
 
-    entries = tree.describe_unknown_fields(device)
+    entries = uft.describe_unknown_fields(device)
 
     assert entries == [("DeviceMetadata.#99", "fixed64", "fixed64")]
     unsigned = int.from_bytes(payload, "little")
@@ -461,33 +450,30 @@ def test_k2_fixed64_shows_no_value() -> None:
 
 
 def test_k2_text_shows_length_and_marker_only() -> None:
-    tree = _tree()
     word = secrets.token_urlsafe(24)
     number = _free(DeviceUpdate_pb2.DeviceMetadata, 99)
     device = _reparse(DeviceUpdate_pb2.DeviceMetadata(), _ld(number, word.encode()))
 
-    entries = tree.describe_unknown_fields(device)
+    entries = uft.describe_unknown_fields(device)
 
     assert entries == [("DeviceMetadata.#99", "len", f"len={len(word)} text")]
     _assert_absent(repr(entries), words=[word])
 
 
 def test_k2_unparseable_bytes_show_length_only() -> None:
-    tree = _tree()
     number = _free(DeviceUpdate_pb2.DeviceMetadata, 99)
     device = _reparse(DeviceUpdate_pb2.DeviceMetadata(), _ld(number, b"\xff" * 5))
 
-    assert tree.describe_unknown_fields(device) == [
+    assert uft.describe_unknown_fields(device) == [
         ("DeviceMetadata.#99", "len", "len=5")
     ]
 
 
 def test_k2_group_like_length_delimited() -> None:
-    tree = _tree()
     number = _free(DeviceUpdate_pb2.DeviceMetadata, 99)
     device = _reparse(DeviceUpdate_pb2.DeviceMetadata(), _group(number, _vf(1, 7)))
 
-    assert tree.describe_unknown_fields(device) == [
+    assert uft.describe_unknown_fields(device) == [
         ("DeviceMetadata.#99", "group", "group msg{#1=varint}")
     ]
 
@@ -495,17 +481,16 @@ def test_k2_group_like_length_delimited() -> None:
 def test_k2_65_fields_give_64_entries_and_rest(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    tree = _tree()
     _debug(caplog)
-    assert tree._MAX_ENTRIES == 64
+    assert uft._MAX_ENTRIES == 64
     extra = b"".join(
         _vf(_free(DeviceUpdate_pb2.DeviceMetadata, number), 1)
         for number in range(100, 165)
     )
     device = _reparse(DeviceUpdate_pb2.DeviceMetadata(), extra)
-    assert len(tree.describe_unknown_fields(device)) == 65
+    assert len(uft.describe_unknown_fields(device)) == 65
 
-    tree.log_unknown_fields("device_list", secrets.token_hex(16), "Tag", [device])
+    uft.log_unknown_fields("device_list", secrets.token_hex(16), "Tag", [device])
 
     payloads = _payloads(caplog)
     assert len(payloads) == 1
@@ -516,7 +501,7 @@ def test_k2_65_fields_give_64_entries_and_rest(
 
 
 def test_k2_constant_varint_threshold() -> None:
-    assert _tree()._VARINT_VALUE_MAX == 255
+    assert uft._VARINT_VALUE_MAX == 255
 
 
 # --------------------------------------------------------------------------
@@ -563,19 +548,18 @@ def _proto_forms() -> dict[str, str]:
 
 
 def test_k3_form_by_field_lists_exactly_the_structural_fields() -> None:
-    assert set(_tree()._FORM_BY_FIELD) == _EXPECTED_FORM_FIELDS
+    assert set(uft._FORM_BY_FIELD) == _EXPECTED_FORM_FIELDS
 
 
 def test_k3_form_by_field_matches_proto_comments() -> None:
     forms = _proto_forms()
-    table = _tree()._FORM_BY_FIELD
+    table = uft._FORM_BY_FIELD
     for name, form in table.items():
         assert name in forms, f"{name} has no form: comment in DeviceUpdate.proto"
         assert forms[name] == form, f"{name}: table {form}, proto {forms[name]}"
 
 
 def test_k3_known_forms_produce_no_entries() -> None:
-    tree = _tree()
     device = DeviceUpdate_pb2.DeviceMetadata()
     device.information.deviceRegistration.capabilities = (
         DeviceUpdate_pb2.DeviceCapabilities(
@@ -587,27 +571,25 @@ def test_k3_known_forms_produce_no_entries() -> None:
     )
     device.supportedActions.append(_locate_action())
 
-    assert tree.describe_unknown_fields(device) == []
+    assert uft.describe_unknown_fields(device) == []
 
 
 def test_k3_unknown_action_shows_path() -> None:
-    tree = _tree()
     action = _free(DeviceUpdate_pb2.ExecuteActionType, 99)
     device = DeviceUpdate_pb2.DeviceMetadata()
     device.supportedActions.append(_locate_action())
     device.supportedActions.append(_supported_action(action))
 
-    assert tree.describe_unknown_fields(device) == [
+    assert uft.describe_unknown_fields(device) == [
         ("DeviceMetadata.supportedActions[].type.#99", "len", "len=0")
     ]
 
 
 def test_k3_form_mismatch_shows_length_only() -> None:
-    tree = _tree()
     device = DeviceUpdate_pb2.DeviceMetadata()
     device.supportedActions.append(b"\xff\xff\xff")
 
-    entries = tree.describe_unknown_fields(device)
+    entries = uft.describe_unknown_fields(device)
 
     assert entries == [
         ("DeviceMetadata.supportedActions[]", "len", "form-mismatch len=3")
@@ -616,7 +598,6 @@ def test_k3_form_mismatch_shows_length_only() -> None:
 
 
 def test_k3_nested_forms_report_unknown_inside() -> None:
-    tree = _tree()
     number = _free(DeviceUpdate_pb2.DeviceComponentInformation, 7)
     detail = DeviceUpdate_pb2.DeviceComponentInformation(
         imageUrl="https://example.invalid/images/part.png"
@@ -628,19 +609,18 @@ def test_k3_nested_forms_report_unknown_inside() -> None:
         ).SerializeToString()
     )
 
-    assert _render(tree.describe_unknown_fields(device)) == [
+    assert _render(uft.describe_unknown_fields(device)) == [
         "DeviceMetadata.information.deviceRegistration.deviceTypeInformation."
         "componentDetails[].detail.#7=varint:1"
     ]
 
 
 def test_k3_metadata_field12_opened_with_time() -> None:
-    tree = _tree()
     number = _free(Common_pb2.Time, 3)
     device = DeviceUpdate_pb2.DeviceMetadata()
     device.metadataField12 = _time_bytes(1_700_000_000, 5) + _vf(number, 1)
 
-    assert _render(tree.describe_unknown_fields(device)) == [
+    assert _render(uft.describe_unknown_fields(device)) == [
         "DeviceMetadata.metadataField12.#3=varint:1"
     ]
 
@@ -651,7 +631,6 @@ def test_k3_metadata_field12_opened_with_time() -> None:
 
 
 def test_k4_key_field_with_parsing_cipher_not_opened() -> None:
-    tree = _tree()
     cipher, big = _fake_cipher()
     update = DeviceUpdate_pb2.DeviceUpdate()
     secrets_block = (
@@ -660,20 +639,19 @@ def test_k4_key_field_with_parsing_cipher_not_opened() -> None:
     secrets_block.encryptedAccountKey = cipher
     secrets_block.encryptedIdentityKey = _fake_cipher()[0]
 
-    entries = tree.describe_unknown_fields(update)
+    entries = uft.describe_unknown_fields(update)
 
     assert entries == []
     _assert_absent(repr(entries), raw=[cipher], numbers=[big])
 
 
 def test_k4_unlisted_bytes_field_not_opened() -> None:
-    tree = _tree()
     cipher, _big = _fake_cipher()
     device = DeviceUpdate_pb2.DeviceMetadata()
     device.metadataField10 = cipher + _vf(99, 1)
     device.information.deviceRegistration.canonicId = _ld(1, cipher)
 
-    assert tree.describe_unknown_fields(device) == []
+    assert uft.describe_unknown_fields(device) == []
 
 
 def _eid_with_closed_unknowns(cipher: bytes) -> Any:
@@ -689,10 +667,9 @@ def _eid_with_closed_unknowns(cipher: bytes) -> Any:
 
 
 def test_k4_closed_message_shows_varint() -> None:
-    tree = _tree()
     cipher, _big = _fake_cipher()
 
-    rendered = _render(tree.describe_unknown_fields(_eid_with_closed_unknowns(cipher)))
+    rendered = _render(uft.describe_unknown_fields(_eid_with_closed_unknowns(cipher)))
 
     assert (
         "GetEidInfoForE2eeDevicesResponse.encryptedOwnerKeyAndMetadata.#9=varint:4"
@@ -701,10 +678,9 @@ def test_k4_closed_message_shows_varint() -> None:
 
 
 def test_k4_closed_message_length_only() -> None:
-    tree = _tree()
     cipher, big = _fake_cipher()
 
-    entries = tree.describe_unknown_fields(_eid_with_closed_unknowns(cipher))
+    entries = uft.describe_unknown_fields(_eid_with_closed_unknowns(cipher))
 
     assert (
         "GetEidInfoForE2eeDevicesResponse.encryptedOwnerKeyAndMetadata.#10",
@@ -715,34 +691,31 @@ def test_k4_closed_message_length_only() -> None:
 
 
 def test_k4_closed_message_has_no_text_marker() -> None:
-    tree = _tree()
     word = secrets.token_urlsafe(18)
     number = _free(DeviceUpdate_pb2.Location, 9)
     location = _reparse(
         DeviceUpdate_pb2.Location(altitude=3), _ld(number, word.encode())
     )
 
-    entries = tree.describe_unknown_fields(location)
+    entries = uft.describe_unknown_fields(location)
 
     assert entries == [("Location.#9", "len", f"len={len(word)}")]
     _assert_absent(repr(entries), words=[word])
 
 
 def test_k4_closed_inherited_by_nested_message() -> None:
-    tree = _tree()
     number = _free(Common_pb2.EncryptedReport, 9)
     update = DeviceUpdate_pb2.DeviceUpdate()
     report = update.deviceMetadata.information.locationInformation.reports.recentLocationAndNetworkLocations.recentLocation.geoLocation.encryptedReport
     report.isOwnReport = True
     report.CopyFrom(_reparse(report, _ld(number, _vf(1, 7))))
 
-    assert _render(tree.describe_unknown_fields(update)) == [
+    assert _render(uft.describe_unknown_fields(update)) == [
         f"{_RECENT_PATH}.recentLocation.geoLocation.encryptedReport.#9=len=2"
     ]
 
 
 def test_k4_first_secrets_creation_date_opened_with_time() -> None:
-    tree = _tree()
     number = _free(Common_pb2.Time, 3)
     update = DeviceUpdate_pb2.DeviceUpdate()
     registration = update.deviceMetadata.information.deviceRegistration
@@ -750,7 +723,7 @@ def test_k4_first_secrets_creation_date_opened_with_time() -> None:
         number, 5
     )
 
-    assert _render(tree.describe_unknown_fields(update)) == [
+    assert _render(uft.describe_unknown_fields(update)) == [
         "DeviceUpdate.deviceMetadata.information.deviceRegistration."
         "firstSecretsCreationDate.#3=varint:5"
     ]
@@ -759,7 +732,6 @@ def test_k4_first_secrets_creation_date_opened_with_time() -> None:
 def test_k4_open_unknown_with_cipher_shows_no_value(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    tree = _tree()
     _debug(caplog)
     cipher, big = _fake_cipher()
     number = _free(DeviceUpdate_pb2.DeviceMetadata, 99)
@@ -767,19 +739,19 @@ def test_k4_open_unknown_with_cipher_shows_no_value(
         DeviceUpdate_pb2.DeviceMetadata(), _ld(number, _ld(19, _ld(1, cipher)))
     )
 
-    tree.log_unknown_fields("device_list", secrets.token_hex(16), "Tag", [device])
+    uft.log_unknown_fields("device_list", secrets.token_hex(16), "Tag", [device])
 
     assert len(_lines(caplog)) == 1
     _assert_absent(caplog.text, raw=[cipher], numbers=[big])
 
 
 def test_k4_form_names_not_in_secret_fields() -> None:
-    for name in _tree()._FORM_BY_FIELD:
+    for name in uft._FORM_BY_FIELD:
         assert name.rsplit(".", 1)[1] not in decoder._SECRET_PROTO_FIELDS, name
 
 
 def test_k4_closed_messages_listed() -> None:
-    closed = _tree()._CLOSED_MESSAGES
+    closed = uft._CLOSED_MESSAGES
     assert {
         "EncryptedUserSecrets",
         "EncryptedOwnerKeyAndMetadata",
@@ -799,34 +771,31 @@ def test_k4_closed_messages_listed() -> None:
 
 
 def test_k5_subtree_without_values() -> None:
-    tree = _tree()
     number = _free(DeviceUpdate_pb2.RecentLocationAndNetworkLocations, 12)
     update = DeviceUpdate_pb2.DeviceUpdate()
     recent = update.deviceMetadata.information.locationInformation.reports.recentLocationAndNetworkLocations
     recent.CopyFrom(_reparse(recent, _ld(number, _vf(1, 7))))
 
-    assert tree.describe_unknown_fields(update) == [
+    assert uft.describe_unknown_fields(update) == [
         (f"{_RECENT_PATH}.#12", "len", "len=2 msg{#1=varint}")
     ]
 
 
 def test_k5_closed_location_length_only() -> None:
-    tree = _tree()
     number = _free(DeviceUpdate_pb2.Location, 9)
     location = _reparse(DeviceUpdate_pb2.Location(altitude=3), _ld(number, _vf(1, 7)))
 
-    assert tree.describe_unknown_fields(location) == [("Location.#9", "len", "len=2")]
+    assert uft.describe_unknown_fields(location) == [("Location.#9", "len", "len=2")]
 
 
 def test_k5_depth_limit_on_level_one() -> None:
-    tree = _tree()
     cipher, big = _fake_cipher()
     inner = _ld(1, cipher)
     outer = _ld(19, inner)
     number = _free(DeviceUpdate_pb2.DeviceMetadata, 99)
     device = _reparse(DeviceUpdate_pb2.DeviceMetadata(), _ld(number, outer))
 
-    entries = tree.describe_unknown_fields(device)
+    entries = uft.describe_unknown_fields(device)
 
     assert entries == [
         (
@@ -839,13 +808,12 @@ def test_k5_depth_limit_on_level_one() -> None:
 
 
 def test_k5_subtree_has_no_text_marker() -> None:
-    tree = _tree()
     word = secrets.token_urlsafe(9)
     payload = _vf(1, 200) + _ld(3, word.encode()) + _fixed32(4, secrets.token_bytes(4))
     number = _free(DeviceUpdate_pb2.DeviceMetadata, 99)
     device = _reparse(DeviceUpdate_pb2.DeviceMetadata(), _ld(number, payload))
 
-    entries = tree.describe_unknown_fields(device)
+    entries = uft.describe_unknown_fields(device)
 
     assert entries == [
         (
@@ -859,7 +827,7 @@ def test_k5_subtree_has_no_text_marker() -> None:
 
 
 def test_k5_constant_unknown_depth() -> None:
-    assert _tree()._MAX_UNKNOWN_DEPTH == 1
+    assert uft._MAX_UNKNOWN_DEPTH == 1
 
 
 # --------------------------------------------------------------------------
@@ -876,15 +844,14 @@ def _time_like_unknown(nanos: int) -> tuple[Any, int]:
 
 
 def test_k6_length_change_is_silent(caplog: pytest.LogCaptureFixture) -> None:
-    tree = _tree()
     _debug(caplog)
     ref = secrets.token_hex(16)
     first, first_len = _time_like_unknown(123_456_789)
     second, second_len = _time_like_unknown(300_000_000)
     assert (first_len, second_len) == (11, 12)
 
-    tree.log_unknown_fields("device_list", ref, "Tag", [first])
-    tree.log_unknown_fields("device_list", ref, "Tag", [second])
+    uft.log_unknown_fields("device_list", ref, "Tag", [first])
+    uft.log_unknown_fields("device_list", ref, "Tag", [second])
 
     assert _payloads(caplog) == ["DeviceMetadata.#99=len=11 msg{#1=varint, #2=varint}"]
 
@@ -892,7 +859,6 @@ def test_k6_length_change_is_silent(caplog: pytest.LogCaptureFixture) -> None:
 def test_k6_supported_actions_order_is_silent(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    tree = _tree()
     _debug(caplog)
     ref = secrets.token_hex(16)
     unknown = _supported_action(_free(DeviceUpdate_pb2.ExecuteActionType, 99))
@@ -901,8 +867,8 @@ def test_k6_supported_actions_order_is_silent(
     backward = DeviceUpdate_pb2.DeviceMetadata()
     backward.supportedActions.extend([_locate_action(), unknown])
 
-    tree.log_unknown_fields("device_list", ref, "Tag", [forward])
-    tree.log_unknown_fields("device_list", ref, "Tag", [backward])
+    uft.log_unknown_fields("device_list", ref, "Tag", [forward])
+    uft.log_unknown_fields("device_list", ref, "Tag", [backward])
 
     assert len(_lines(caplog)) == 1
 
@@ -916,12 +882,11 @@ def _recent_with_varint(value: int) -> Any:
 
 
 def test_k6_small_value_change_writes(caplog: pytest.LogCaptureFixture) -> None:
-    tree = _tree()
     _debug(caplog)
     ref = secrets.token_hex(16)
 
-    tree.log_unknown_fields("device_update", ref, "Tag", [_recent_with_varint(2)])
-    tree.log_unknown_fields("device_update", ref, "Tag", [_recent_with_varint(3)])
+    uft.log_unknown_fields("device_update", ref, "Tag", [_recent_with_varint(2)])
+    uft.log_unknown_fields("device_update", ref, "Tag", [_recent_with_varint(3)])
 
     assert _payloads(caplog) == [
         f"{_RECENT_PATH}.#12=varint:2",
@@ -930,12 +895,11 @@ def test_k6_small_value_change_writes(caplog: pytest.LogCaptureFixture) -> None:
 
 
 def test_k6_large_value_change_is_silent(caplog: pytest.LogCaptureFixture) -> None:
-    tree = _tree()
     _debug(caplog)
     ref = secrets.token_hex(16)
 
-    tree.log_unknown_fields("device_update", ref, "Tag", [_recent_with_varint(300)])
-    tree.log_unknown_fields("device_update", ref, "Tag", [_recent_with_varint(400)])
+    uft.log_unknown_fields("device_update", ref, "Tag", [_recent_with_varint(300)])
+    uft.log_unknown_fields("device_update", ref, "Tag", [_recent_with_varint(400)])
 
     assert _payloads(caplog) == [f"{_RECENT_PATH}.#12=varint:>255"]
 
@@ -945,55 +909,51 @@ def _location(extra: bytes) -> Any:
 
 
 def test_k6_reports_merged_per_response(caplog: pytest.LogCaptureFixture) -> None:
-    tree = _tree()
     _debug(caplog)
     ref = secrets.token_hex(16)
     marked = _location(_vf(_free(DeviceUpdate_pb2.Location, 9), 1))
     plain = _location(b"")
 
-    tree.log_unknown_fields("location", ref, "Tag", [marked, plain])
-    tree.log_unknown_fields("location", ref, "Tag", [plain, marked])
-    tree.log_unknown_fields("location", ref, "Tag", [marked, plain])
+    uft.log_unknown_fields("location", ref, "Tag", [marked, plain])
+    uft.log_unknown_fields("location", ref, "Tag", [plain, marked])
+    uft.log_unknown_fields("location", ref, "Tag", [marked, plain])
 
     assert _payloads(caplog) == ["Location.#9=varint:1"]
 
 
 def test_k6_signature_counts_multiplicity(caplog: pytest.LogCaptureFixture) -> None:
-    tree = _tree()
     _debug(caplog)
     ref = secrets.token_hex(16)
     marked = _location(_vf(_free(DeviceUpdate_pb2.Location, 9), 1))
     plain = _location(b"")
 
-    tree.log_unknown_fields("location", ref, "Tag", [marked, plain])
-    tree.log_unknown_fields("location", ref, "Tag", [marked, marked])
+    uft.log_unknown_fields("location", ref, "Tag", [marked, plain])
+    uft.log_unknown_fields("location", ref, "Tag", [marked, marked])
 
     assert len(_lines(caplog)) == 2
 
 
 def test_k6_same_label_two_ids_two_lines(caplog: pytest.LogCaptureFixture) -> None:
-    tree = _tree()
     _debug(caplog)
     device = _reparse(
         DeviceUpdate_pb2.DeviceMetadata(),
         _vf(_free(DeviceUpdate_pb2.DeviceMetadata, 99), 1),
     )
 
-    tree.log_unknown_fields("device_list", secrets.token_hex(16), "Keys", [device])
-    tree.log_unknown_fields("device_list", secrets.token_hex(16), "Keys", [device])
+    uft.log_unknown_fields("device_list", secrets.token_hex(16), "Keys", [device])
+    uft.log_unknown_fields("device_list", secrets.token_hex(16), "Keys", [device])
 
     assert len(_lines(caplog)) == 2
 
 
 def test_k6_first_sight_logs_none(caplog: pytest.LogCaptureFixture) -> None:
-    tree = _tree()
     _debug(caplog)
     ref = secrets.token_hex(16)
 
-    tree.log_unknown_fields(
+    uft.log_unknown_fields(
         "device_list", ref, "Tag", [DeviceUpdate_pb2.DeviceMetadata()]
     )
-    tree.log_unknown_fields(
+    uft.log_unknown_fields(
         "device_list", ref, "Tag", [DeviceUpdate_pb2.DeviceMetadata()]
     )
 
@@ -1001,37 +961,34 @@ def test_k6_first_sight_logs_none(caplog: pytest.LogCaptureFixture) -> None:
 
 
 def test_k6_lru_keeps_256(caplog: pytest.LogCaptureFixture) -> None:
-    tree = _tree()
     _debug(caplog)
-    assert tree._MAX_SIGNATURES == 256
+    assert uft._MAX_SIGNATURES == 256
     device = DeviceUpdate_pb2.DeviceMetadata()
     refs = [secrets.token_hex(16) for _ in range(256)]
     for ref in refs:
-        tree.log_unknown_fields("device_list", ref, "Tag", [device])
+        uft.log_unknown_fields("device_list", ref, "Tag", [device])
     caplog.clear()
 
-    tree.log_unknown_fields("device_list", refs[0], "Tag", [device])
+    uft.log_unknown_fields("device_list", refs[0], "Tag", [device])
 
     assert _lines(caplog) == []
 
 
 def test_k6_lru_evicts_oldest_after_256(caplog: pytest.LogCaptureFixture) -> None:
-    tree = _tree()
     _debug(caplog)
     device = DeviceUpdate_pb2.DeviceMetadata()
     refs = [secrets.token_hex(16) for _ in range(257)]
     for ref in refs:
-        tree.log_unknown_fields("device_list", ref, "Tag", [device])
+        uft.log_unknown_fields("device_list", ref, "Tag", [device])
     caplog.clear()
 
-    tree.log_unknown_fields("device_list", refs[-1], "Tag", [device])
+    uft.log_unknown_fields("device_list", refs[-1], "Tag", [device])
     assert _lines(caplog) == []
-    tree.log_unknown_fields("device_list", refs[0], "Tag", [device])
+    uft.log_unknown_fields("device_list", refs[0], "Tag", [device])
     assert len(_lines(caplog)) == 1
 
 
 def test_k6_no_id_window_in_log(caplog: pytest.LogCaptureFixture) -> None:
-    tree = _tree()
     _debug(caplog)
     ref = secrets.token_hex(16)
     device = _reparse(
@@ -1039,8 +996,8 @@ def test_k6_no_id_window_in_log(caplog: pytest.LogCaptureFixture) -> None:
         _vf(_free(DeviceUpdate_pb2.DeviceMetadata, 99), 1),
     )
 
-    tree.log_unknown_fields("device_list", ref, "Tag", [device])
-    tree.log_unknown_fields(
+    uft.log_unknown_fields("device_list", ref, "Tag", [device])
+    uft.log_unknown_fields(
         "device_list", ref, "Tag", [DeviceUpdate_pb2.DeviceMetadata()]
     )
 
@@ -1053,26 +1010,25 @@ def test_k6_no_id_window_in_log(caplog: pytest.LogCaptureFixture) -> None:
 # --------------------------------------------------------------------------
 
 
-def _count_walker(monkeypatch: pytest.MonkeyPatch, tree: ModuleType) -> list[int]:
+def _count_walker(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     calls: list[int] = []
-    original = tree.describe_unknown_fields
+    original = uft.describe_unknown_fields
 
     def _counting(message: Message) -> Any:
         calls.append(1)
         return original(message)
 
-    monkeypatch.setattr(tree, "describe_unknown_fields", _counting)
+    monkeypatch.setattr(uft, "describe_unknown_fields", _counting)
     return calls
 
 
 def test_k7_info_level_skips_walker(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    tree = _tree()
     caplog.set_level(logging.INFO, logger=_LOGGER_NAME)
-    calls = _count_walker(monkeypatch, tree)
+    calls = _count_walker(monkeypatch)
 
-    tree.log_unknown_fields(
+    uft.log_unknown_fields(
         "device_list",
         secrets.token_hex(16),
         "Tag",
@@ -1086,11 +1042,10 @@ def test_k7_info_level_skips_walker(
 def test_k7_debug_level_calls_walker(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    tree = _tree()
     _debug(caplog)
-    calls = _count_walker(monkeypatch, tree)
+    calls = _count_walker(monkeypatch)
 
-    tree.log_unknown_fields(
+    uft.log_unknown_fields(
         "device_list",
         secrets.token_hex(16),
         "Tag",
@@ -1102,7 +1057,6 @@ def test_k7_debug_level_calls_walker(
 
 
 def test_k7_build_device_list_has_live_shape() -> None:
-    tree = _tree()
     device_list = build_device_list(11)
 
     assert len(device_list.deviceMetadata) == 11
@@ -1112,7 +1066,7 @@ def test_k7_build_device_list_has_live_shape() -> None:
     }
     assert len(ids) == 11
     for device in device_list.deviceMetadata:
-        assert _render(tree.describe_unknown_fields(device)) == [
+        assert _render(uft.describe_unknown_fields(device)) == [
             "DeviceMetadata.#99=varint:1",
             "DeviceMetadata.information.deviceRegistration.#98=len=2 msg{#1=varint}",
         ]
@@ -1125,11 +1079,11 @@ def test_k7_build_device_list_has_live_shape() -> None:
 _NAME = "Tag Alpha"
 
 
-def _boom_walker(monkeypatch: pytest.MonkeyPatch, tree: ModuleType, word: str) -> None:
+def _boom_walker(monkeypatch: pytest.MonkeyPatch, word: str) -> None:
     def _boom(_message: Message) -> Any:
         raise RuntimeError(word)
 
-    monkeypatch.setattr(tree, "describe_unknown_fields", _boom)
+    monkeypatch.setattr(uft, "describe_unknown_fields", _boom)
 
 
 def _assert_fail_safe_record(caplog: pytest.LogCaptureFixture, word: str) -> None:
@@ -1163,7 +1117,6 @@ def _device_update_hex() -> tuple[str, Any]:
 
 
 def test_k8_device_list_logs_line(caplog: pytest.LogCaptureFixture) -> None:
-    _tree()
     _debug(caplog)
     hex_string, _expected = _device_list_hex()
 
@@ -1177,10 +1130,9 @@ def test_k8_device_list_logs_line(caplog: pytest.LogCaptureFixture) -> None:
 def test_k8_device_list_fail_safe(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    tree = _tree()
     _debug(caplog)
     word = secrets.token_urlsafe(24)
-    _boom_walker(monkeypatch, tree, word)
+    _boom_walker(monkeypatch, word)
     hex_string, expected = _device_list_hex()
 
     result = decoder.parse_device_list_protobuf(hex_string)
@@ -1190,7 +1142,6 @@ def test_k8_device_list_fail_safe(
 
 
 def test_k8_device_update_logs_line(caplog: pytest.LogCaptureFixture) -> None:
-    _tree()
     _debug(caplog)
     hex_string, _expected = _device_update_hex()
 
@@ -1205,10 +1156,9 @@ def test_k8_device_update_logs_line(caplog: pytest.LogCaptureFixture) -> None:
 def test_k8_device_update_fail_safe(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    tree = _tree()
     _debug(caplog)
     word = secrets.token_urlsafe(24)
-    _boom_walker(monkeypatch, tree, word)
+    _boom_walker(monkeypatch, word)
     hex_string, expected = _device_update_hex()
 
     result = decoder.parse_device_update_protobuf(hex_string)
@@ -1265,7 +1215,6 @@ async def _decrypt_one_location(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
 async def test_k8_location_logs_line(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    _tree()
     _debug(caplog)
 
     result = await _decrypt_one_location(monkeypatch)
@@ -1280,10 +1229,9 @@ async def test_k8_location_logs_line(
 async def test_k8_location_fail_safe(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    tree = _tree()
     _debug(caplog)
     word = secrets.token_urlsafe(24)
-    _boom_walker(monkeypatch, tree, word)
+    _boom_walker(monkeypatch, word)
 
     result = await _decrypt_one_location(monkeypatch)
 
@@ -1312,7 +1260,6 @@ def _patch_spot(monkeypatch: pytest.MonkeyPatch, body: bytes) -> None:
 async def test_k8_eid_response_logs_line(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    _tree()
     _debug(caplog)
     _patch_spot(monkeypatch, _eid_response_bytes())
 
@@ -1328,10 +1275,9 @@ async def test_k8_eid_response_logs_line(
 async def test_k8_eid_response_fail_safe(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    tree = _tree()
     _debug(caplog)
     word = secrets.token_urlsafe(24)
-    _boom_walker(monkeypatch, tree, word)
+    _boom_walker(monkeypatch, word)
     body = _eid_response_bytes()
     _patch_spot(monkeypatch, body)
 
@@ -1344,12 +1290,11 @@ async def test_k8_eid_response_fail_safe(
 def test_k8_helper_fail_safe(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    tree = _tree()
     _debug(caplog)
     word = secrets.token_urlsafe(24)
-    _boom_walker(monkeypatch, tree, word)
+    _boom_walker(monkeypatch, word)
 
-    tree.log_unknown_fields(
+    uft.log_unknown_fields(
         "device_list", secrets.token_hex(16), "Tag", [DeviceUpdate_pb2.DeviceMetadata()]
     )
 
@@ -1362,14 +1307,13 @@ def test_k8_helper_fail_safe(
 
 
 def test_k9_format_string_and_logger(caplog: pytest.LogCaptureFixture) -> None:
-    tree = _tree()
     _debug(caplog)
     device = _reparse(
         DeviceUpdate_pb2.DeviceMetadata(),
         _vf(_free(DeviceUpdate_pb2.DeviceMetadata, 99), 1),
     )
 
-    tree.log_unknown_fields("device_list", secrets.token_hex(16), "Tag", [device])
+    uft.log_unknown_fields("device_list", secrets.token_hex(16), "Tag", [device])
 
     own = [r for r in caplog.records if r.name == _LOGGER_NAME]
     assert len(own) == 1
@@ -1379,7 +1323,6 @@ def test_k9_format_string_and_logger(caplog: pytest.LogCaptureFixture) -> None:
 
 
 def test_k9_no_payload_window_in_log(caplog: pytest.LogCaptureFixture) -> None:
-    _tree()
     caplog.set_level(logging.DEBUG, logger="custom_components.googlefindmy")
     canonic_id = secrets.token_hex(16)
     word = secrets.token_urlsafe(30)

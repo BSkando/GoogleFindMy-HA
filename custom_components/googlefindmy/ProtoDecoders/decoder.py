@@ -16,11 +16,6 @@ from collections.abc import Iterable
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, Protocol
 
-# Imported at module load (integration setup runs in the executor): the probe
-# runs on the event loop, where a lazy ``import_module`` would be blocking
-# filesystem work (AGENTS.md 11.3).
-from google.protobuf.unknown_fields import UnknownFieldSet
-
 from google.protobuf.message import DecodeError, Message
 
 try:
@@ -39,6 +34,7 @@ from custom_components.googlefindmy.ProtoDecoders import (
     DeviceUpdate_pb2,
     LocationReportsUpload_pb2,
 )
+from custom_components.googlefindmy.unknown_field_tree import log_unknown_fields
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -168,40 +164,6 @@ def _get_text_format() -> Any:
     if _text_format_module is None:
         _text_format_module = import_module("google.protobuf.text_format")
     return _text_format_module
-
-
-def _unknown_field_numbers(message: Message) -> list[int]:
-    """Field numbers of the unknown fields a decoded message carries.
-
-    Read from the runtime's unknown-field set of the message and of every
-    known sub-message it holds (``str(message)`` omits unknown fields on
-    current protobuf runtimes, so the old probe never fired). The numbers are
-    schema drift diagnostics, the values behind them are wire content and are
-    not returned. No text serialisation: this runs on the event loop inside
-    the DEBUG branch of the device-list walk, twice per poll, and a
-    ``text_format`` pass over every device message would stall the loop for
-    large lists (``AGENTS.md`` 11.3, async-first).
-    """
-    if not isinstance(message, Message):
-        # Test doubles stand in for the message in the debug branch.
-        return []
-    numbers: set[int] = set()
-    pending: list[Message] = [message]
-    while pending:
-        current = pending.pop()
-        numbers.update(field.field_number for field in UnknownFieldSet(current))
-        for descriptor, value in current.ListFields():
-            # `message_type` is set for message-typed fields on every runtime;
-            # the upb descriptor has no `label`, so repeated is read from the
-            # value (map fields yield message values via `.values()`).
-            if descriptor.message_type is None:
-                continue
-            if isinstance(value, Message):
-                pending.append(value)
-            else:
-                items = value.values() if hasattr(value, "values") else value
-                pending.extend(item for item in items if isinstance(item, Message))
-    return sorted(numbers)
 
 
 def _usable_id_count(entries: Iterable[object] | None) -> int:
@@ -393,7 +355,7 @@ def custom_message_formatter(
                 lines.append(f'{indent}{field.name}: "{hex_value}"')
         elif field.type == field.TYPE_MESSAGE:
             # The upb descriptor of current runtimes has no `label`, so repeated
-            # is read from the value (see `_unknown_field_numbers`).
+            # is read from the value (as in `unknown_field_tree`).
             if not isinstance(value, Message):
                 for sub_message in value:
                     if field.message_type.name == "Time":
@@ -495,6 +457,13 @@ def parse_device_update_protobuf(
             exc,
         )
         raise NovaProtobufDecodeError(f"DeviceUpdate decode failed: {exc}") from exc
+    device = device_update.deviceMetadata
+    log_unknown_fields(
+        "device_update",
+        _first_canonic_id(device),
+        device.userDefinedDeviceName,
+        [device_update],
+    )
     return device_update
 
 
@@ -515,7 +484,32 @@ def parse_device_list_protobuf(
             exc,
         )
         raise NovaProtobufDecodeError(f"DevicesList decode failed: {exc}") from exc
+    for index, device in enumerate(device_list.deviceMetadata):
+        # One comparison slot per device; a device without a canonical ID is
+        # keyed by its position so that two such devices do not share a slot.
+        log_unknown_fields(
+            "device_list",
+            _first_canonic_id(device) or f"#{index}",
+            device.userDefinedDeviceName,
+            [device],
+        )
     return device_list
+
+
+def _first_canonic_id(device: object) -> str:
+    """First usable canonical ID of a device message, else ``""``.
+
+    Only the comparison slot of `log_unknown_fields` uses it; it is never
+    logged. The phone branch is read first, as in `get_canonic_ids`.
+    """
+    info = getattr(device, "identifierInformation", None)
+    for holder in (getattr(info, "phoneInformation", None), info):
+        entries = getattr(getattr(holder, "canonicIds", None), "canonicId", None)
+        for entry in entries if entries is not None else ():
+            value = getattr(entry, "id", None)
+            if isinstance(value, str) and value:
+                return value
+    return ""
 
 
 # --------------------------------------------------------------------------------------
@@ -1248,17 +1242,9 @@ def get_devices_with_location(
                     ]
                     _LOGGER.debug("    -> locationInformation fields: %s", loc_fields)
 
-            unknown_numbers = _unknown_field_numbers(device)
-            if unknown_numbers:
-                # Field numbers only: the text-format lines carry the
-                # server-supplied values of those fields, which are raw API
-                # payload and never reach the log (AGENTS.md section 5).
-                _LOGGER.debug(
-                    "Device '%s' has UNKNOWN FIELDS: numbers=%s, count=%d",
-                    device_name,
-                    unknown_numbers,
-                    len(unknown_numbers),
-                )
+            # Unknown fields are reported by `parse_device_list_protobuf`
+            # through `log_unknown_fields` (AGENTS.md section 5, Schema-drift
+            # diagnostics), not here.
 
             if emit_canonicless_diagnostics and not _usable_id_count(canonic_ids):
                 # Structure only, never ID values; the device name stays at

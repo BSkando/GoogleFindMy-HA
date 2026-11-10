@@ -37,6 +37,7 @@ from custom_components.googlefindmy.SpotApi.spot_request import (
     SpotError,
     SpotTrailersOnlyError,
 )
+from custom_components.googlefindmy.unknown_field_tree import log_unknown_fields
 from google.protobuf.message import DecodeError  # parse-time error type for protobufs
 
 if TYPE_CHECKING:
@@ -193,6 +194,8 @@ async def async_get_eid_info(
         )
         raise
 
+    # Account-wide response: the kind alone keys the comparison.
+    log_unknown_fields("eid_response", "", "account", [eid_info])
     return eid_info
 
 

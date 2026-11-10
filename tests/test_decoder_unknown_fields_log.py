@@ -22,15 +22,14 @@ from __future__ import annotations
 import importlib
 import logging
 import secrets
-from types import ModuleType
 from typing import Any
 
 import pytest
 
+from custom_components.googlefindmy import unknown_field_tree as uft
 from custom_components.googlefindmy.ProtoDecoders import DeviceUpdate_pb2, decoder
 from google.protobuf import text_format
 
-_MODULE = "custom_components.googlefindmy.unknown_field_tree"
 _LOGGER_NAME = "custom_components.googlefindmy.unknown_fields"
 _FORMAT = "Unknown protobuf fields (%s) for %s: %s"
 
@@ -40,11 +39,9 @@ def _reset_state() -> None:
     decoder._reset_canonicless_warning_state()
 
 
-def _tree() -> ModuleType:
-    """Import inside the test, so a missing module fails each case on its own."""
-    module = importlib.import_module(_MODULE)
-    module._reset_signatures_for_tests()
-    return module
+@pytest.fixture(autouse=True)
+def _reset_signatures() -> None:
+    uft._reset_signatures_for_tests()
 
 
 def _device_with_unknown_fields(secret: str) -> Any:
@@ -69,22 +66,20 @@ def _device_with_unknown_fields(secret: str) -> Any:
 
 
 def test_unknown_fields_show_numbers_not_values() -> None:
-    tree = _tree()
     secret = secrets.token_urlsafe(9)
     device_list = _device_with_unknown_fields(secret)
 
-    entries = tree.describe_unknown_fields(device_list.deviceMetadata[0])
+    entries = uft.describe_unknown_fields(device_list.deviceMetadata[0])
 
     assert [f"{path}={display}" for path, _wire, display in entries] == [
         f"DeviceMetadata.#1023=len={len(secret)} text",
         "DeviceMetadata.#1024=varint:7",
     ]
     assert secret not in repr(entries)
-    assert tree.describe_unknown_fields(DeviceUpdate_pb2.DeviceMetadata()) == []
+    assert uft.describe_unknown_fields(DeviceUpdate_pb2.DeviceMetadata()) == []
 
 
 def test_unknown_fields_record_omits_values(caplog: pytest.LogCaptureFixture) -> None:
-    _tree()
     secret = secrets.token_urlsafe(24)
     device_list = _device_with_unknown_fields(secret)
 
@@ -129,7 +124,6 @@ def test_unknown_fields_do_not_serialise_to_text(
     loop, and so would a lazy ``import_module`` on first use (``AGENTS.md``
     11.3). Nested messages are walked as well.
     """
-    tree = _tree()
 
     def _no_text_format(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("text_format must not be used for unknown fields")
@@ -145,10 +139,8 @@ def test_unknown_fields_do_not_serialise_to_text(
     device_list = _device_with_unknown_fields("s3cr3t-value")
     caplog.set_level(logging.DEBUG, logger=_LOGGER_NAME)
 
-    paths = [
-        path for path, _wire, _display in tree.describe_unknown_fields(device_list)
-    ]
-    tree.log_unknown_fields(
+    paths = [path for path, _wire, _display in uft.describe_unknown_fields(device_list)]
+    uft.log_unknown_fields(
         "device_list", secrets.token_hex(16), "Pixel", list(device_list.deviceMetadata)
     )
 
