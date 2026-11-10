@@ -2518,6 +2518,24 @@ class GoogleFindMyCoordinator(
         """
         return self._ensure_device_name_cache().get(device_id)
 
+    def get_device_image_url(self, device_id: str) -> str | None:
+        """Return Google's product image address of a device, if known.
+
+        Written by the poll cycle from the device list into
+        ``_device_caps[device_id]["image_url"]``; a list without an address keeps
+        the stored one. The address is a property of the device model, not a
+        location field, so it is kept outside the location cache: a cache row
+        holding only the address would count as a first observation for the
+        tracker (bootstrap of the last-good row) and make it available without
+        any position.
+        """
+        caps = getattr(self, "_device_caps", None) or {}
+        slot = caps.get(device_id)
+        if not isinstance(slot, Mapping):
+            return None
+        value = slot.get("image_url")
+        return value if decoder.is_allowed_image_url(value) else None
+
     def get_device_name_map(self) -> dict[str, str]:
         """Return a shallow copy of the internal device-id -> name mapping.
 

@@ -89,6 +89,7 @@ from .entity import (
 )
 from .entry_reload_gate import entry_reload_is_hopeless
 from .ha_typing import RestoreEntity, TrackerEntity, callback
+from .ProtoDecoders.decoder import is_allowed_image_url
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1185,6 +1186,11 @@ class GoogleFindMyDeviceTracker(GoogleFindMyDeviceEntity, TrackerEntity, Restore
     # The main tracker carries the held coarse-fix side information; the
     # _last_location tracker never goes stale and carries none.
     _publishes_coarse_fix = True
+    # Google's product image of the device model (``get_device_image_url``). The
+    # browser loads it directly from Google; see the README. Only the main
+    # tracker shows it, so the two trackers of one device stay distinguishable.
+    _publishes_entity_picture = True
+    _attr_entity_picture: str | None = None
 
     # ---- Display-name policy (strip legacy prefixes, no new prefixes) ----
     @staticmethod
@@ -1499,6 +1505,20 @@ class GoogleFindMyDeviceTracker(GoogleFindMyDeviceEntity, TrackerEntity, Restore
     # _attr_* attributes before every async_write_ha_state() call.
     # ------------------------------------------------------------------
 
+    def _entity_picture_url(self) -> str | None:
+        """Return the image address to publish as ``entity_picture``, or None.
+
+        Checked again here so that only an ``https`` address on an allowed host
+        ever reaches the frontend, whatever the coordinator holds.
+        """
+        if not self._publishes_entity_picture:
+            return None
+        getter = getattr(self.coordinator, "get_device_image_url", None)
+        if not callable(getter):
+            return None
+        value = getter(self.device_id)
+        return value if is_allowed_image_url(value) else None
+
     def _sync_location_attrs(self) -> None:
         """Recompute and publish every TrackerEntity attribute via _attr_*.
 
@@ -1509,6 +1529,9 @@ class GoogleFindMyDeviceTracker(GoogleFindMyDeviceEntity, TrackerEntity, Restore
         the last observation; see ``_hold_observation_attributes``.
         """
         stale = self._is_location_stale()
+
+        # An entity property, not a state attribute (never in _as_ha_attributes).
+        self._attr_entity_picture = self._entity_picture_url()
 
         # Single source of truth for every published value below (coordinates,
         # name, age, status, extra attributes). Binding them all to this one
@@ -1833,6 +1856,8 @@ class GoogleFindMyLastLocationTracker(GoogleFindMyDeviceTracker):
     # Never stale, so an expiring coarse fix would be a timestamp move on a
     # tracker that otherwise holds still; the coarse-fix sensor carries it.
     _publishes_coarse_fix = False
+    # No product image: it would make this tracker look like the main one.
+    _publishes_entity_picture = False
 
     def __init__(
         self,

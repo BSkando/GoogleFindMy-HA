@@ -15,6 +15,7 @@ import subprocess
 from collections.abc import Iterable
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, Protocol
+from urllib.parse import urlsplit
 
 from google.protobuf.message import DecodeError, Message
 
@@ -536,6 +537,85 @@ def trackable_components_of(registration: object) -> int | None:
     return count if count > 0 else None
 
 
+# Hosts of Google's device images. Only this one was measured (2026-11-10): https,
+# ``200 image/png`` without sign-in, no identifier of the account or the device in
+# the address, the same address for every device of one model. A host is added only
+# after the same measurement; ``tests/test_device_tracker_entity_picture.py`` pins it.
+_IMAGE_HOSTS: frozenset[str] = frozenset({"lh3.googleusercontent.com"})
+
+
+def is_allowed_image_url(value: object) -> bool:
+    """Return True if ``value`` is an ``https`` address on one of ``_IMAGE_HOSTS``.
+
+    The host is compared exactly (no suffix match); an address with userinfo, an
+    explicit port, whitespace or control characters is refused.
+    """
+    if not isinstance(value, str) or not value:
+        return False
+    if any(ch.isspace() or not ch.isprintable() for ch in value):
+        return False
+    try:
+        parts = urlsplit(value)
+        port = parts.port
+    except ValueError:
+        return False
+    if parts.scheme != "https" or port is not None:
+        return False
+    if parts.username is not None or parts.password is not None:
+        return False
+    return parts.hostname in _IMAGE_HOSTS
+
+
+def _image_url_candidates(device: Any) -> Iterable[str]:
+    """Yield the image addresses of a device in order of precedence.
+
+    ``imageInformation.imageUrl``, then the ``componentImages`` entries, then the
+    ``deviceComponentsInformation`` entries of the registration. The two repeated
+    fields are ``bytes`` (see ``ProtoDecoders/AGENTS.md``); an entry that does not
+    parse into its form is skipped.
+    """
+    if device.HasField("imageInformation"):
+        image_information = device.imageInformation
+        yield image_information.imageUrl
+        for raw in image_information.componentImages:
+            component = DeviceUpdate_pb2.ImageInformation.ComponentImage()
+            try:
+                component.ParseFromString(raw)
+            except DecodeError:
+                continue
+            yield component.imageUrl
+    if not (
+        device.HasField("information")
+        and device.information.HasField("deviceRegistration")
+        and device.information.deviceRegistration.HasField("deviceTypeInformation")
+    ):
+        return
+    type_information = device.information.deviceRegistration.deviceTypeInformation
+    for raw in type_information.deviceComponentsInformation:
+        component_information = DeviceUpdate_pb2.DeviceComponentInformation()
+        try:
+            component_information.ParseFromString(raw)
+        except DecodeError:
+            continue
+        yield component_information.imageUrl
+
+
+def image_url_of(device: Any) -> str | None:
+    """Return the first allowed image address of a ``DeviceMetadata``, else None.
+
+    The address is returned unchanged (no size suffix added or removed). Nothing
+    here logs the address.
+    """
+    try:
+        for candidate in _image_url_candidates(device):
+            if is_allowed_image_url(candidate):
+                return candidate
+    except (AttributeError, TypeError, ValueError):
+        # A test double or a message without these fields: no image.
+        return None
+    return None
+
+
 def get_canonic_ids(
     device_list: DeviceUpdate_pb2.DevicesList,
 ) -> list[tuple[str, str]]:
@@ -613,6 +693,7 @@ _DEVICE_STUB_KEYS: tuple[str, ...] = (
     "manufacturer",
     "model",
     "trackable_components",
+    "image_url",
     "latitude",
     "longitude",
     "altitude",
@@ -646,6 +727,7 @@ def _build_device_stub(device_name: str, canonic_id: str) -> dict[str, Any]:
         "manufacturer": None,
         "model": None,
         "trackable_components": None,
+        "image_url": None,
         "latitude": None,
         "longitude": None,
         "altitude": None,
@@ -1274,6 +1356,7 @@ def get_devices_with_location(
         manufacturer: str | None = None
         model: str | None = None
         trackable_components: int | None = None
+        image_url = image_url_of(device)
         pair_date: int | None = None
         secrets_creation_date: int | None = None
         encrypted_account_key: str | None = None
@@ -1536,6 +1619,7 @@ def get_devices_with_location(
             row["manufacturer"] = manufacturer
             row["model"] = model
             row["trackable_components"] = trackable_components
+            row["image_url"] = image_url
             row["pair_date"] = pair_date
             row["secrets_creation_date"] = secrets_creation_date
             row["encrypted_account_key"] = encrypted_account_key
