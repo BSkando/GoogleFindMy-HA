@@ -468,6 +468,11 @@
           "description": "Rotationsfenster von je 1024 s, die auf jeder Seite der Tracker-Uhr durchsucht werden; dabei werden andere Schlüssel- und Blockformen gegen die Ziel-EIDs probiert. 0 schaltet sie aus. Die Suche läuft nach dem Trennen der Verbindung, dauert bis zu 5 Minuten länger und belastet währenddessen die CPU."
         }
       }
+    },
+    "trigger_device_refresh": {
+      "name": "Geräteaktualisierung auslösen",
+      "description": "Fordert sofort eine Datenaktualisierung für das Google-Konto des gewählten Google-Find-My-Buttons an.",
+      "fields": {}
     }
   },
   "entity": {

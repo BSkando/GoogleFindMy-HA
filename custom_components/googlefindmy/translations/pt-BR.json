@@ -468,6 +468,11 @@
           "description": "Janelas de rotação de 1024 s a buscar em cada lado do relógio do rastreador, testando outras formas de chave e de bloco contra os EIDs procurados. 0 desativa. É executada depois de fechar a conexão, adiciona até 5 minutos e usa a CPU nesse tempo."
         }
       }
+    },
+    "trigger_device_refresh": {
+      "name": "Acionar atualização dos dispositivos",
+      "description": "Solicita uma atualização imediata dos dados da conta Google do botão do Google Find My selecionado.",
+      "fields": {}
     }
   },
   "entity": {
