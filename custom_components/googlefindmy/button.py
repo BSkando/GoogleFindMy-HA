@@ -847,7 +847,25 @@ async def _async_require_admin(hass: HomeAssistant, context: Context | None) -> 
         raise Unauthorized(context=context)
 
 
-class GoogleFindMyStatsResetButton(GoogleFindMyEntity, ButtonEntity, RestoreEntityType):
+class _CoordinatorRefreshServiceMixin:
+    """Target of the ``trigger_device_refresh`` entity service.
+
+    The service's target filter can only narrow by integration and domain, so
+    Home Assistant offers every button of this integration; each button class
+    therefore carries the method the service calls.
+    """
+
+    coordinator: GoogleFindMyCoordinator
+
+    async def async_trigger_coordinator_refresh(self) -> None:
+        """Request an immediate refresh of the coordinator of this entry."""
+
+        await self.coordinator.async_request_refresh()
+
+
+class GoogleFindMyStatsResetButton(
+    _CoordinatorRefreshServiceMixin, GoogleFindMyEntity, ButtonEntity, RestoreEntityType
+):
     """Button to reset integration statistics counters."""
 
     entity_description = RESET_STATISTICS_DESCRIPTION
@@ -1015,7 +1033,10 @@ class GoogleFindMyStatsResetButton(GoogleFindMyEntity, ButtonEntity, RestoreEnti
 
 
 class GoogleFindMyButtonEntity(
-    GoogleFindMyDeviceEntity, ButtonEntity, RestoreEntityType
+    _CoordinatorRefreshServiceMixin,
+    GoogleFindMyDeviceEntity,
+    ButtonEntity,
+    RestoreEntityType,
 ):
     """Common helpers for all per-device buttons."""
 
@@ -1070,11 +1091,6 @@ class GoogleFindMyButtonEntity(
 
         self._attr_last_pressed = dt_util.utcnow()
         self.async_write_ha_state()
-
-    async def async_trigger_coordinator_refresh(self) -> None:
-        """Request a coordinator refresh via the entity service placeholder."""
-
-        await self.coordinator.async_request_refresh()
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -1395,7 +1411,7 @@ class GoogleFindMyLocateButton(GoogleFindMyButtonEntity):
 
 
 class GoogleFindMyTokenRefreshButtonBase(
-    GoogleFindMyEntity, ButtonEntity, RestoreEntityType
+    _CoordinatorRefreshServiceMixin, GoogleFindMyEntity, ButtonEntity, RestoreEntityType
 ):
     """Base class for token regeneration buttons with per-type cooldown logic.
 
