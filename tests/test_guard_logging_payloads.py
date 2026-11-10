@@ -390,7 +390,6 @@ _SAFE_WRAPPERS = frozenset(
         # Type and key count of a gpsoauth response, never names or values.
         "_summarize_response",
         "_msg_str",
-        "_unknown_field_numbers",
         # Protobuf descriptor access: field names, not values.
         "ListFields",
         "HasField",
@@ -3064,7 +3063,7 @@ async def decode(self, device_list: DeviceUpdate_pb2.DevicesList, raw):
         device_str = str(device)
         unknown = [line for line in device_str.splitlines() if line[:1].isdigit()]
         _LOGGER.debug("a: %s %s", names, unknown)
-        _LOGGER.debug("b: %s", _unknown_field_numbers(device))
+        _LOGGER.debug("b: %s", describe_unknown_fields(device))
     first = device_list.deviceMetadata[0]
     _LOGGER.debug("c: %s", first)
     code = alias.error.code
@@ -6214,3 +6213,58 @@ def test_former_pinned_file_is_in_shape_i_scope() -> None:
     by_line = sorted((line, leaf) for _, line, leaf, _ in under_path)
     assert by_line == sorted((line, leaf) for _, line, leaf, _ in under_fixture)
     assert len(by_line) == 13
+
+
+def test_unknown_field_tree_arguments_stay_inspected() -> None:
+    """The unknown-field helpers are not trusted wrappers (no `_SAFE_WRAPPERS` entry).
+
+    A message passed whole to them is not reported (they show no payload), but
+    a body such as `str(device)` passed to them still is.
+    """
+    assert "log_unknown_fields" not in _SAFE_WRAPPERS
+    assert "describe_unknown_fields" not in _SAFE_WRAPPERS
+    source = """
+from custom_components.googlefindmy.ProtoDecoders import DeviceUpdate_pb2
+
+def walk(device_list: DeviceUpdate_pb2.DevicesList):
+    for device in getattr(device_list, "deviceMetadata", []):
+        _LOGGER.debug("a: %s", describe_unknown_fields(device))
+        device_str = str(device)
+        _LOGGER.debug("d: %s", describe_unknown_fields(device_str))
+        _LOGGER.debug("f: %s", describe_unknown_fields(str(device)))
+        _LOGGER.debug("g: %s", log_unknown_fields(device))
+        _LOGGER.debug("h: %s", log_unknown_fields(device_str))
+"""
+    offenders, scanned = _scan_tree(ast.parse(source), "fixture.py")
+    assert scanned == 5
+    assert sorted((line, leaf) for _p, line, leaf, _f in offenders) == [
+        (8, "device_str"),
+        (11, "device_str"),
+    ]
+
+
+# The guard trusts what `log_unknown_fields` logs only because these tests pin
+# it; removing one of them removes that basis.
+_UNKNOWN_FIELD_TREE_LEAK_TESTS = frozenset(
+    {
+        "test_k4_key_field_with_parsing_cipher_not_opened",
+        "test_k4_open_unknown_with_cipher_shows_no_value",
+        "test_k5_subtree_has_no_text_marker",
+        "test_k6_no_id_window_in_log",
+        "test_k8_helper_fail_safe",
+        "test_k9_format_string_and_logger",
+        "test_k9_no_payload_window_in_log",
+    }
+)
+
+
+def test_unknown_field_tree_is_backed_by_leak_tests() -> None:
+    """The helper's log line is covered by named leak tests (AGENTS.md section 5)."""
+    path = _PACKAGE_ROOT.parents[1] / "tests" / "test_unknown_field_tree.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    defined = {
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
+    }
+    assert _UNKNOWN_FIELD_TREE_LEAK_TESTS <= defined
