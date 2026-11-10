@@ -3,9 +3,10 @@
 
 Home Assistant shows an entity service without a description and without a
 target picker unless ``services.yaml`` and the translations describe it. The
-target filter can only narrow by integration and domain, so every button of
-this integration is offered as a target; each of them must therefore carry the
-method the service calls.
+target filter narrows by integration and domain; the buttons of this
+integration have no device class or feature flag that would separate them, and
+a call from YAML bypasses the filter, so every button can be a target and each
+of them must carry the method the service calls.
 """
 
 from __future__ import annotations

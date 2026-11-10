@@ -6219,7 +6219,9 @@ def test_unknown_field_tree_arguments_stay_inspected() -> None:
     """The unknown-field helpers are not trusted wrappers (no `_SAFE_WRAPPERS` entry).
 
     A message passed whole to them is not reported (they show no payload), but
-    a body such as `str(device)` passed to them still is.
+    a body bound to a name first (`device_str = str(device)`) and passed to
+    them still is. Not seen: an inline `str(device)` inside the call (line f of
+    the fixture); that limit of the guard predates these helpers.
     """
     assert "log_unknown_fields" not in _SAFE_WRAPPERS
     assert "describe_unknown_fields" not in _SAFE_WRAPPERS
@@ -6247,13 +6249,13 @@ def walk(device_list: DeviceUpdate_pb2.DevicesList):
 # it; removing one of them removes that basis.
 _UNKNOWN_FIELD_TREE_LEAK_TESTS = frozenset(
     {
-        "test_k4_key_field_with_parsing_cipher_not_opened",
-        "test_k4_open_unknown_with_cipher_shows_no_value",
-        "test_k5_subtree_has_no_text_marker",
-        "test_k6_no_id_window_in_log",
-        "test_k8_helper_fail_safe",
-        "test_k9_format_string_and_logger",
-        "test_k9_no_payload_window_in_log",
+        "test_key_field_with_parsing_cipher_not_opened",
+        "test_open_unknown_with_cipher_shows_no_value",
+        "test_subtree_has_no_text_marker",
+        "test_no_id_window_in_log",
+        "test_helper_fail_safe",
+        "test_format_string_and_logger",
+        "test_no_payload_window_in_log",
     }
 )
 

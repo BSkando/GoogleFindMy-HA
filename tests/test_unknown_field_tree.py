@@ -337,7 +337,7 @@ def build_device_list(devices: int) -> Any:
 # --------------------------------------------------------------------------
 
 
-def test_k1_depth5_path_names_and_number() -> None:
+def test_depth5_path_names_and_number() -> None:
     number = _free(DeviceUpdate_pb2.RecentLocationAndNetworkLocations, 12)
     update = DeviceUpdate_pb2.DeviceUpdate()
     recent = update.deviceMetadata.information.locationInformation.reports.recentLocationAndNetworkLocations
@@ -350,7 +350,7 @@ def test_k1_depth5_path_names_and_number() -> None:
     assert _render(entries) == [f"{_RECENT_PATH}.#12=varint:3"]
 
 
-def test_k1_known_descent_has_no_depth_limit() -> None:
+def test_known_descent_has_no_depth_limit() -> None:
     number = _free(Common_pb2.SemanticLocation, 9)
     update = DeviceUpdate_pb2.DeviceUpdate()
     semantic = update.deviceMetadata.information.locationInformation.reports.recentLocationAndNetworkLocations.recentLocation.semanticLocation
@@ -362,7 +362,7 @@ def test_k1_known_descent_has_no_depth_limit() -> None:
     ]
 
 
-def test_k1_repeated_field_brackets_without_index() -> None:
+def test_repeated_field_brackets_without_index() -> None:
     number = _free(Common_pb2.LocationReport, 12)
     update = DeviceUpdate_pb2.DeviceUpdate()
     recent = update.deviceMetadata.information.locationInformation.reports.recentLocationAndNetworkLocations
@@ -376,7 +376,7 @@ def test_k1_repeated_field_brackets_without_index() -> None:
     ]
 
 
-def test_k1_line_carries_full_path(caplog: pytest.LogCaptureFixture) -> None:
+def test_line_carries_full_path(caplog: pytest.LogCaptureFixture) -> None:
     _debug(caplog)
     number = _free(DeviceUpdate_pb2.RecentLocationAndNetworkLocations, 12)
     update = DeviceUpdate_pb2.DeviceUpdate()
@@ -396,7 +396,7 @@ def test_k1_line_carries_full_path(caplog: pytest.LogCaptureFixture) -> None:
 
 
 @pytest.mark.parametrize("value", [0, 7, 255])
-def test_k2_varint_up_to_255_shows_value(value: int) -> None:
+def test_varint_up_to_255_shows_value(value: int) -> None:
     number = _free(DeviceUpdate_pb2.DeviceMetadata, 99)
     device = _reparse(DeviceUpdate_pb2.DeviceMetadata(), _vf(number, value))
 
@@ -406,7 +406,7 @@ def test_k2_varint_up_to_255_shows_value(value: int) -> None:
 
 
 @pytest.mark.parametrize("value", [256, (1 << 64) - 1])
-def test_k2_varint_above_255_shows_marker(value: int) -> None:
+def test_varint_above_255_shows_marker(value: int) -> None:
     number = _free(DeviceUpdate_pb2.DeviceMetadata, 99)
     device = _reparse(DeviceUpdate_pb2.DeviceMetadata(), _vf(number, value))
 
@@ -416,7 +416,7 @@ def test_k2_varint_above_255_shows_marker(value: int) -> None:
     _assert_absent(repr(entries), numbers=[value])
 
 
-def test_k2_fixed32_shows_no_value() -> None:
+def test_fixed32_shows_no_value() -> None:
     payload = secrets.token_bytes(4)
     number = _free(DeviceUpdate_pb2.DeviceMetadata, 99)
     device = _reparse(DeviceUpdate_pb2.DeviceMetadata(), _fixed32(number, payload))
@@ -434,7 +434,7 @@ def test_k2_fixed32_shows_no_value() -> None:
     assert as_float not in text
 
 
-def test_k2_fixed64_shows_no_value() -> None:
+def test_fixed64_shows_no_value() -> None:
     payload = secrets.token_bytes(8)
     number = _free(DeviceUpdate_pb2.DeviceMetadata, 99)
     device = _reparse(DeviceUpdate_pb2.DeviceMetadata(), _fixed64(number, payload))
@@ -451,7 +451,7 @@ def test_k2_fixed64_shows_no_value() -> None:
     assert as_float not in text
 
 
-def test_k2_text_shows_length_and_marker_only() -> None:
+def test_text_shows_length_and_marker_only() -> None:
     word = secrets.token_urlsafe(24)
     number = _free(DeviceUpdate_pb2.DeviceMetadata, 99)
     device = _reparse(DeviceUpdate_pb2.DeviceMetadata(), _ld(number, word.encode()))
@@ -462,7 +462,7 @@ def test_k2_text_shows_length_and_marker_only() -> None:
     _assert_absent(repr(entries), words=[word])
 
 
-def test_k2_unparseable_bytes_show_length_only() -> None:
+def test_unparseable_bytes_show_length_only() -> None:
     number = _free(DeviceUpdate_pb2.DeviceMetadata, 99)
     device = _reparse(DeviceUpdate_pb2.DeviceMetadata(), _ld(number, b"\xff" * 5))
 
@@ -471,7 +471,7 @@ def test_k2_unparseable_bytes_show_length_only() -> None:
     ]
 
 
-def test_k2_group_like_length_delimited() -> None:
+def test_group_like_length_delimited() -> None:
     number = _free(DeviceUpdate_pb2.DeviceMetadata, 99)
     device = _reparse(DeviceUpdate_pb2.DeviceMetadata(), _group(number, _vf(1, 7)))
 
@@ -480,7 +480,7 @@ def test_k2_group_like_length_delimited() -> None:
     ]
 
 
-def test_k2_empty_group_has_no_subtree() -> None:
+def test_empty_group_has_no_subtree() -> None:
     number = _free(DeviceUpdate_pb2.DeviceMetadata, 99)
     device = _reparse(DeviceUpdate_pb2.DeviceMetadata(), _group(number, b""))
 
@@ -489,7 +489,7 @@ def test_k2_empty_group_has_no_subtree() -> None:
     ]
 
 
-def test_k4_group_in_closed_message_is_not_opened() -> None:
+def test_group_in_closed_message_is_not_opened() -> None:
     number = _free(DeviceUpdate_pb2.Location, 9)
     location = _reparse(
         DeviceUpdate_pb2.Location(altitude=3), _group(number, _vf(1, 7))
@@ -498,7 +498,7 @@ def test_k4_group_in_closed_message_is_not_opened() -> None:
     assert uft.describe_unknown_fields(location) == [("Location.#9", "group", "group")]
 
 
-def test_k1_scalar_map_values_are_skipped() -> None:
+def test_scalar_map_values_are_skipped() -> None:
     """A map with scalar values yields no message to walk and no entry."""
     descriptor_pb2: Any = import_module("google.protobuf.descriptor_pb2")
     descriptor_pool: Any = import_module("google.protobuf.descriptor_pool")
@@ -534,7 +534,7 @@ def test_k1_scalar_map_values_are_skipped() -> None:
     assert uft.describe_unknown_fields(message) == []
 
 
-def test_k2_65_fields_give_64_entries_and_rest(
+def test_65_fields_give_64_entries_and_rest(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     _debug(caplog)
@@ -556,7 +556,7 @@ def test_k2_65_fields_give_64_entries_and_rest(
     assert all(re.fullmatch(r"DeviceMetadata\.#\d+=varint:1", i) for i in items[:-1])
 
 
-def test_k2_constant_varint_threshold() -> None:
+def test_constant_varint_threshold() -> None:
     assert uft._VARINT_VALUE_MAX == 255
 
 
@@ -603,11 +603,11 @@ def _proto_forms() -> dict[str, str]:
     return forms
 
 
-def test_k3_form_by_field_lists_exactly_the_structural_fields() -> None:
+def test_form_by_field_lists_exactly_the_structural_fields() -> None:
     assert set(uft._FORM_BY_FIELD) == _EXPECTED_FORM_FIELDS
 
 
-def test_k3_form_by_field_matches_proto_comments() -> None:
+def test_form_by_field_matches_proto_comments() -> None:
     forms = _proto_forms()
     table = uft._FORM_BY_FIELD
     for name, form in table.items():
@@ -615,7 +615,7 @@ def test_k3_form_by_field_matches_proto_comments() -> None:
         assert forms[name] == form, f"{name}: table {form}, proto {forms[name]}"
 
 
-def test_k3_known_forms_produce_no_entries() -> None:
+def test_known_forms_produce_no_entries() -> None:
     device = DeviceUpdate_pb2.DeviceMetadata()
     device.information.deviceRegistration.capabilities = (
         DeviceUpdate_pb2.DeviceCapabilities(
@@ -630,7 +630,7 @@ def test_k3_known_forms_produce_no_entries() -> None:
     assert uft.describe_unknown_fields(device) == []
 
 
-def test_k3_unknown_action_shows_path() -> None:
+def test_unknown_action_shows_path() -> None:
     action = _free(DeviceUpdate_pb2.ExecuteActionType, 99)
     device = DeviceUpdate_pb2.DeviceMetadata()
     device.supportedActions.append(_locate_action())
@@ -641,7 +641,7 @@ def test_k3_unknown_action_shows_path() -> None:
     ]
 
 
-def test_k3_form_mismatch_shows_length_only() -> None:
+def test_form_mismatch_shows_length_only() -> None:
     device = DeviceUpdate_pb2.DeviceMetadata()
     device.supportedActions.append(b"\xff\xff\xff")
 
@@ -653,7 +653,7 @@ def test_k3_form_mismatch_shows_length_only() -> None:
     assert "ff" not in repr(entries)
 
 
-def test_k3_nested_forms_report_unknown_inside() -> None:
+def test_nested_forms_report_unknown_inside() -> None:
     number = _free(DeviceUpdate_pb2.DeviceComponentInformation, 7)
     detail = DeviceUpdate_pb2.DeviceComponentInformation(
         imageUrl="https://example.invalid/images/part.png"
@@ -671,7 +671,7 @@ def test_k3_nested_forms_report_unknown_inside() -> None:
     ]
 
 
-def test_k3_metadata_field12_opened_with_time() -> None:
+def test_metadata_field12_opened_with_time() -> None:
     number = _free(Common_pb2.Time, 3)
     device = DeviceUpdate_pb2.DeviceMetadata()
     device.metadataField12 = _time_bytes(1_700_000_000, 5) + _vf(number, 1)
@@ -686,7 +686,7 @@ def test_k3_metadata_field12_opened_with_time() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_k4_key_field_with_parsing_cipher_not_opened() -> None:
+def test_key_field_with_parsing_cipher_not_opened() -> None:
     cipher, big = _fake_cipher()
     update = DeviceUpdate_pb2.DeviceUpdate()
     secrets_block = (
@@ -701,7 +701,7 @@ def test_k4_key_field_with_parsing_cipher_not_opened() -> None:
     _assert_absent(repr(entries), raw=[cipher], numbers=[big])
 
 
-def test_k4_unlisted_bytes_field_not_opened() -> None:
+def test_unlisted_bytes_field_not_opened() -> None:
     cipher, _big = _fake_cipher()
     device = DeviceUpdate_pb2.DeviceMetadata()
     device.metadataField10 = cipher + _vf(99, 1)
@@ -722,7 +722,7 @@ def _eid_with_closed_unknowns(cipher: bytes) -> Any:
     )
 
 
-def test_k4_closed_message_shows_varint() -> None:
+def test_closed_message_shows_varint() -> None:
     cipher, _big = _fake_cipher()
 
     rendered = _render(uft.describe_unknown_fields(_eid_with_closed_unknowns(cipher)))
@@ -733,7 +733,7 @@ def test_k4_closed_message_shows_varint() -> None:
     )
 
 
-def test_k4_closed_message_length_only() -> None:
+def test_closed_message_length_only() -> None:
     cipher, big = _fake_cipher()
 
     entries = uft.describe_unknown_fields(_eid_with_closed_unknowns(cipher))
@@ -746,7 +746,7 @@ def test_k4_closed_message_length_only() -> None:
     _assert_absent(repr(entries), raw=[cipher], numbers=[big])
 
 
-def test_k4_closed_message_has_no_text_marker() -> None:
+def test_closed_message_has_no_text_marker() -> None:
     word = secrets.token_urlsafe(18)
     number = _free(DeviceUpdate_pb2.Location, 9)
     location = _reparse(
@@ -759,7 +759,7 @@ def test_k4_closed_message_has_no_text_marker() -> None:
     _assert_absent(repr(entries), words=[word])
 
 
-def test_k4_closed_inherited_by_nested_message() -> None:
+def test_closed_inherited_by_nested_message() -> None:
     number = _free(Common_pb2.EncryptedReport, 9)
     update = DeviceUpdate_pb2.DeviceUpdate()
     report = update.deviceMetadata.information.locationInformation.reports.recentLocationAndNetworkLocations.recentLocation.geoLocation.encryptedReport
@@ -771,7 +771,7 @@ def test_k4_closed_inherited_by_nested_message() -> None:
     ]
 
 
-def test_k4_first_secrets_creation_date_opened_with_time() -> None:
+def test_first_secrets_creation_date_opened_with_time() -> None:
     number = _free(Common_pb2.Time, 3)
     update = DeviceUpdate_pb2.DeviceUpdate()
     registration = update.deviceMetadata.information.deviceRegistration
@@ -785,7 +785,7 @@ def test_k4_first_secrets_creation_date_opened_with_time() -> None:
     ]
 
 
-def test_k4_open_unknown_with_cipher_shows_no_value(
+def test_open_unknown_with_cipher_shows_no_value(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     _debug(caplog)
@@ -801,12 +801,12 @@ def test_k4_open_unknown_with_cipher_shows_no_value(
     _assert_absent(caplog.text, raw=[cipher], numbers=[big])
 
 
-def test_k4_form_names_not_in_secret_fields() -> None:
+def test_form_names_not_in_secret_fields() -> None:
     for name in uft._FORM_BY_FIELD:
         assert name.rsplit(".", 1)[1] not in decoder._SECRET_PROTO_FIELDS, name
 
 
-def test_k4_closed_messages_listed() -> None:
+def test_closed_messages_listed() -> None:
     closed = uft._CLOSED_MESSAGES
     assert {
         "EncryptedUserSecrets",
@@ -826,7 +826,7 @@ def test_k4_closed_messages_listed() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_k5_subtree_without_values() -> None:
+def test_subtree_without_values() -> None:
     number = _free(DeviceUpdate_pb2.RecentLocationAndNetworkLocations, 12)
     update = DeviceUpdate_pb2.DeviceUpdate()
     recent = update.deviceMetadata.information.locationInformation.reports.recentLocationAndNetworkLocations
@@ -837,14 +837,14 @@ def test_k5_subtree_without_values() -> None:
     ]
 
 
-def test_k5_closed_location_length_only() -> None:
+def test_closed_location_length_only() -> None:
     number = _free(DeviceUpdate_pb2.Location, 9)
     location = _reparse(DeviceUpdate_pb2.Location(altitude=3), _ld(number, _vf(1, 7)))
 
     assert uft.describe_unknown_fields(location) == [("Location.#9", "len", "len=2")]
 
 
-def test_k5_depth_limit_on_level_one() -> None:
+def test_depth_limit_on_level_one() -> None:
     cipher, big = _fake_cipher()
     inner = _ld(1, cipher)
     outer = _ld(19, inner)
@@ -863,7 +863,7 @@ def test_k5_depth_limit_on_level_one() -> None:
     _assert_absent(repr(entries), raw=[cipher], numbers=[big])
 
 
-def test_k5_subtree_has_no_text_marker() -> None:
+def test_subtree_has_no_text_marker() -> None:
     word = secrets.token_urlsafe(9)
     payload = _vf(1, 200) + _ld(3, word.encode()) + _fixed32(4, secrets.token_bytes(4))
     number = _free(DeviceUpdate_pb2.DeviceMetadata, 99)
@@ -882,7 +882,7 @@ def test_k5_subtree_has_no_text_marker() -> None:
     assert "200" not in repr(entries)
 
 
-def test_k5_constant_unknown_depth() -> None:
+def test_constant_unknown_depth() -> None:
     assert uft._MAX_UNKNOWN_DEPTH == 1
 
 
@@ -899,7 +899,7 @@ def _time_like_unknown(nanos: int) -> tuple[Any, int]:
     )
 
 
-def test_k6_length_change_is_silent(caplog: pytest.LogCaptureFixture) -> None:
+def test_length_change_is_silent(caplog: pytest.LogCaptureFixture) -> None:
     _debug(caplog)
     ref = secrets.token_hex(16)
     first, first_len = _time_like_unknown(123_456_789)
@@ -912,7 +912,7 @@ def test_k6_length_change_is_silent(caplog: pytest.LogCaptureFixture) -> None:
     assert _payloads(caplog) == ["DeviceMetadata.#99=len=11 msg{#1=varint, #2=varint}"]
 
 
-def test_k6_supported_actions_order_is_silent(
+def test_supported_actions_order_is_silent(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     _debug(caplog)
@@ -929,7 +929,7 @@ def test_k6_supported_actions_order_is_silent(
     assert len(_lines(caplog)) == 1
 
 
-def test_k6_order_of_two_unknown_entries_is_silent(
+def test_order_of_two_unknown_entries_is_silent(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Two different unknown entries in swapped order keep one signature."""
@@ -957,7 +957,7 @@ def _recent_with_varint(value: int) -> Any:
     return update
 
 
-def test_k6_small_value_change_writes(caplog: pytest.LogCaptureFixture) -> None:
+def test_small_value_change_writes(caplog: pytest.LogCaptureFixture) -> None:
     _debug(caplog)
     ref = secrets.token_hex(16)
 
@@ -970,7 +970,7 @@ def test_k6_small_value_change_writes(caplog: pytest.LogCaptureFixture) -> None:
     ]
 
 
-def test_k6_large_value_change_is_silent(caplog: pytest.LogCaptureFixture) -> None:
+def test_large_value_change_is_silent(caplog: pytest.LogCaptureFixture) -> None:
     _debug(caplog)
     ref = secrets.token_hex(16)
 
@@ -984,7 +984,7 @@ def _location(extra: bytes) -> Any:
     return _reparse(DeviceUpdate_pb2.Location(altitude=3), extra)
 
 
-def test_k6_reports_merged_per_response(caplog: pytest.LogCaptureFixture) -> None:
+def test_reports_merged_per_response(caplog: pytest.LogCaptureFixture) -> None:
     _debug(caplog)
     ref = secrets.token_hex(16)
     marked = _location(_vf(_free(DeviceUpdate_pb2.Location, 9), 1))
@@ -997,7 +997,7 @@ def test_k6_reports_merged_per_response(caplog: pytest.LogCaptureFixture) -> Non
     assert _payloads(caplog) == ["Location.#9=varint:1"]
 
 
-def test_k6_signature_counts_multiplicity(caplog: pytest.LogCaptureFixture) -> None:
+def test_signature_counts_multiplicity(caplog: pytest.LogCaptureFixture) -> None:
     _debug(caplog)
     ref = secrets.token_hex(16)
     marked = _location(_vf(_free(DeviceUpdate_pb2.Location, 9), 1))
@@ -1009,7 +1009,7 @@ def test_k6_signature_counts_multiplicity(caplog: pytest.LogCaptureFixture) -> N
     assert len(_lines(caplog)) == 2
 
 
-def test_k6_same_label_two_ids_two_lines(caplog: pytest.LogCaptureFixture) -> None:
+def test_same_label_two_ids_two_lines(caplog: pytest.LogCaptureFixture) -> None:
     _debug(caplog)
     device = _reparse(
         DeviceUpdate_pb2.DeviceMetadata(),
@@ -1022,7 +1022,7 @@ def test_k6_same_label_two_ids_two_lines(caplog: pytest.LogCaptureFixture) -> No
     assert len(_lines(caplog)) == 2
 
 
-def test_k6_first_sight_logs_none(caplog: pytest.LogCaptureFixture) -> None:
+def test_first_sight_logs_none(caplog: pytest.LogCaptureFixture) -> None:
     _debug(caplog)
     ref = secrets.token_hex(16)
 
@@ -1036,7 +1036,7 @@ def test_k6_first_sight_logs_none(caplog: pytest.LogCaptureFixture) -> None:
     assert _lines(caplog) == ["Unknown protobuf fields (device_list) for Tag: (none)"]
 
 
-def test_k6_lru_keeps_256(caplog: pytest.LogCaptureFixture) -> None:
+def test_lru_keeps_256(caplog: pytest.LogCaptureFixture) -> None:
     _debug(caplog)
     assert uft._MAX_SIGNATURES == 256
     device = DeviceUpdate_pb2.DeviceMetadata()
@@ -1050,7 +1050,7 @@ def test_k6_lru_keeps_256(caplog: pytest.LogCaptureFixture) -> None:
     assert _lines(caplog) == []
 
 
-def test_k6_lru_evicts_oldest_after_256(caplog: pytest.LogCaptureFixture) -> None:
+def test_lru_evicts_oldest_after_256(caplog: pytest.LogCaptureFixture) -> None:
     _debug(caplog)
     device = DeviceUpdate_pb2.DeviceMetadata()
     refs = [secrets.token_hex(16) for _ in range(257)]
@@ -1064,7 +1064,7 @@ def test_k6_lru_evicts_oldest_after_256(caplog: pytest.LogCaptureFixture) -> Non
     assert len(_lines(caplog)) == 1
 
 
-def test_k6_no_id_window_in_log(caplog: pytest.LogCaptureFixture) -> None:
+def test_no_id_window_in_log(caplog: pytest.LogCaptureFixture) -> None:
     _debug(caplog)
     ref = secrets.token_hex(16)
     device = _reparse(
@@ -1098,7 +1098,7 @@ def _count_walker(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     return calls
 
 
-def test_k7_info_level_skips_walker(
+def test_info_level_skips_walker(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.INFO, logger=_LOGGER_NAME)
@@ -1115,7 +1115,7 @@ def test_k7_info_level_skips_walker(
     assert [r for r in caplog.records if r.name == _LOGGER_NAME] == []
 
 
-def test_k7_debug_level_calls_walker(
+def test_debug_level_calls_walker(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     _debug(caplog)
@@ -1132,7 +1132,7 @@ def test_k7_debug_level_calls_walker(
     assert len(_lines(caplog)) == 1
 
 
-def test_k7_build_device_list_has_live_shape() -> None:
+def test_build_device_list_has_live_shape() -> None:
     device_list = build_device_list(11)
 
     assert len(device_list.deviceMetadata) == 11
@@ -1192,7 +1192,7 @@ def _device_update_hex() -> tuple[str, Any]:
     return update.SerializeToString().hex(), update
 
 
-def test_k8_device_list_logs_line(caplog: pytest.LogCaptureFixture) -> None:
+def test_device_list_logs_line(caplog: pytest.LogCaptureFixture) -> None:
     _debug(caplog)
     hex_string, _expected = _device_list_hex()
 
@@ -1203,7 +1203,33 @@ def test_k8_device_list_logs_line(caplog: pytest.LogCaptureFixture) -> None:
     ]
 
 
-def test_k8_device_list_fail_safe(
+def test_device_list_without_ids_keys_by_position(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Two devices without a canonical ID do not share one comparison slot."""
+    _debug(caplog)
+    number = _free(DeviceUpdate_pb2.DeviceMetadata, 99)
+    device_list = DeviceUpdate_pb2.DevicesList()
+    for _ in range(2):
+        device = _reparse(DeviceUpdate_pb2.DeviceMetadata(), _vf(number, 5))
+        device.userDefinedDeviceName = _NAME
+        device_list.deviceMetadata.append(device)
+
+    decoder.parse_device_list_protobuf(device_list.SerializeToString().hex())
+
+    assert len(_lines(caplog)) == 2
+
+
+def test_slot_reads_the_phone_branch_first() -> None:
+    device = DeviceUpdate_pb2.DeviceMetadata()
+    info = device.identifierInformation
+    info.canonicIds.canonicId.add().id = "tracker-branch"
+    info.phoneInformation.canonicIds.canonicId.add().id = "phone-branch"
+
+    assert decoder._first_canonic_id(device) == "phone-branch"
+
+
+def test_device_list_fail_safe(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     _debug(caplog)
@@ -1217,7 +1243,7 @@ def test_k8_device_list_fail_safe(
     _assert_fail_safe_record(caplog, word)
 
 
-def test_k8_device_update_logs_line(caplog: pytest.LogCaptureFixture) -> None:
+def test_device_update_logs_line(caplog: pytest.LogCaptureFixture) -> None:
     _debug(caplog)
     hex_string, _expected = _device_update_hex()
 
@@ -1229,7 +1255,7 @@ def test_k8_device_update_logs_line(caplog: pytest.LogCaptureFixture) -> None:
     ]
 
 
-def test_k8_device_update_fail_safe(
+def test_device_update_fail_safe(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     _debug(caplog)
@@ -1288,7 +1314,7 @@ async def _decrypt_one_location(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
 
 
 @pytest.mark.asyncio
-async def test_k8_location_logs_line(
+async def test_location_logs_line(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     _debug(caplog)
@@ -1302,7 +1328,7 @@ async def test_k8_location_logs_line(
 
 
 @pytest.mark.asyncio
-async def test_k8_location_fail_safe(
+async def test_location_fail_safe(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     _debug(caplog)
@@ -1333,7 +1359,7 @@ def _patch_spot(monkeypatch: pytest.MonkeyPatch, body: bytes) -> None:
 
 
 @pytest.mark.asyncio
-async def test_k8_eid_response_logs_line(
+async def test_eid_response_logs_line(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     _debug(caplog)
@@ -1348,7 +1374,7 @@ async def test_k8_eid_response_logs_line(
 
 
 @pytest.mark.asyncio
-async def test_k8_eid_response_fail_safe(
+async def test_eid_response_fail_safe(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     _debug(caplog)
@@ -1363,7 +1389,7 @@ async def test_k8_eid_response_fail_safe(
     _assert_fail_safe_record(caplog, word)
 
 
-def test_k8_helper_fail_safe(
+def test_helper_fail_safe(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     _debug(caplog)
@@ -1382,7 +1408,7 @@ def test_k8_helper_fail_safe(
 # --------------------------------------------------------------------------
 
 
-def test_k9_format_string_and_logger(caplog: pytest.LogCaptureFixture) -> None:
+def test_format_string_and_logger(caplog: pytest.LogCaptureFixture) -> None:
     _debug(caplog)
     device = _reparse(
         DeviceUpdate_pb2.DeviceMetadata(),
@@ -1398,7 +1424,7 @@ def test_k9_format_string_and_logger(caplog: pytest.LogCaptureFixture) -> None:
     assert own[0].args == ("device_list", "Tag", "DeviceMetadata.#99=varint:1")
 
 
-def test_k9_no_payload_window_in_log(caplog: pytest.LogCaptureFixture) -> None:
+def test_no_payload_window_in_log(caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.DEBUG, logger="custom_components.googlefindmy")
     canonic_id = secrets.token_hex(16)
     word = secrets.token_urlsafe(30)

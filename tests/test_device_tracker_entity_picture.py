@@ -342,8 +342,10 @@ class _DummyAPI:
     def __init__(self) -> None:
         self.device_list: list[dict[str, Any]] = []
         self.fcm: Any | None = None
+        self.list_calls = 0
 
     async def async_get_basic_device_list(self) -> list[dict[str, Any]]:
+        self.list_calls += 1
         return [dict(row) for row in self.device_list]
 
     def is_push_ready(self) -> bool:
@@ -446,9 +448,14 @@ async def test_decoder_row_reaches_the_coordinator_and_survives_a_list_without_i
 
     # A later list (or a locate row built by the same decoder) without an
     # address carries ``image_url: None``; it must not erase the stored one.
+    # The second cycle must fetch that list; otherwise the cached first list
+    # (which still carries the address) would be processed again.
     api.device_list = get_devices_with_location(_device_list(), cache=None)
     assert api.device_list[0]["image_url"] is None
+    calls_before = api.list_calls
+    coord.request_device_list_refresh(reason="test", schedule_refresh=False)
     await coord._async_update_data()
+    assert api.list_calls == calls_before + 1
     assert coord.get_device_image_url("dev-1") == _URL_COMPONENT
 
     # The entity reads it through the coordinator accessor.

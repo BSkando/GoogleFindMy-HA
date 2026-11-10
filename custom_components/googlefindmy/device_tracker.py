@@ -1530,7 +1530,8 @@ class GoogleFindMyDeviceTracker(GoogleFindMyDeviceEntity, TrackerEntity, Restore
         """
         stale = self._is_location_stale()
 
-        # An entity property, not a state attribute (never in _as_ha_attributes).
+        # Published through the entity_picture property, which Home Assistant
+        # adds to the state attributes itself; never part of _as_ha_attributes.
         self._attr_entity_picture = self._entity_picture_url()
 
         # Single source of truth for every published value below (coordinates,

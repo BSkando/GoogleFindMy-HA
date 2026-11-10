@@ -850,9 +850,11 @@ async def _async_require_admin(hass: HomeAssistant, context: Context | None) -> 
 class _CoordinatorRefreshServiceMixin:
     """Target of the ``trigger_device_refresh`` entity service.
 
-    The service's target filter can only narrow by integration and domain, so
-    Home Assistant offers every button of this integration; each button class
-    therefore carries the method the service calls.
+    The target filter in ``services.yaml`` narrows by integration and domain;
+    the buttons of this integration carry no device class or feature flag the
+    filter could tell apart, and a call from YAML bypasses the filter anyway.
+    Every button of this integration can therefore be a target, so each button
+    class carries the method the service calls.
     """
 
     coordinator: GoogleFindMyCoordinator

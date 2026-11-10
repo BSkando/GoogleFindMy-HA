@@ -153,9 +153,10 @@ def _schemaless_from_bytes(raw: bytes) -> str | None:
 def _opens_unknown(closed: bool) -> bool:
     """Whether an unknown length-delimited field or group gets a schemaless level.
 
-    Never inside a closed message. ``_MAX_UNKNOWN_DEPTH`` counts levels below the
-    first unknown field; with 1 the level is opened and every length-delimited
-    field or group in it carries ``depth-limit``.
+    Never inside a closed message. At most one level below the first unknown
+    field is ever opened: ``_MAX_UNKNOWN_DEPTH`` acts as a switch (0 opens
+    nothing, any value of 1 or more opens that one level), and every
+    length-delimited field or group in that level carries ``depth-limit``.
     """
     return not closed and _MAX_UNKNOWN_DEPTH >= 1
 
