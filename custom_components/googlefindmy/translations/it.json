@@ -575,9 +575,6 @@
           "semantic_name": {
             "name": "Etichetta semantica"
           },
-          "battery_level": {
-            "name": "Livello batteria"
-          },
           "last_seen": {
             "name": "Ultima volta visto (segnalato)"
           },
@@ -636,9 +633,6 @@
           },
           "semantic_name": {
             "name": "Etichetta semantica"
-          },
-          "battery_level": {
-            "name": "Livello batteria"
           },
           "last_seen": {
             "name": "Ultima volta visto (riportato)"
@@ -733,9 +727,6 @@
           },
           "semantic_name": {
             "name": "Etichetta semantica"
-          },
-          "battery_level": {
-            "name": "Livello batteria"
           },
           "last_seen": {
             "name": "Ultima volta visto (segnalato)"

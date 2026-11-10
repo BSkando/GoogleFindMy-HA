@@ -575,9 +575,6 @@
           "semantic_name": {
             "name": "Semantische Bezeichnung"
           },
-          "battery_level": {
-            "name": "Batteriestand"
-          },
           "last_seen": {
             "name": "Zuletzt gesehen (gemeldet)"
           },
@@ -636,9 +633,6 @@
           },
           "semantic_name": {
             "name": "Semantische Bezeichnung"
-          },
-          "battery_level": {
-            "name": "Akkustand"
           },
           "last_seen": {
             "name": "Zuletzt gesehen (gemeldet)"
@@ -733,9 +727,6 @@
           },
           "semantic_name": {
             "name": "Semantische Bezeichnung"
-          },
-          "battery_level": {
-            "name": "Batteriestand"
           },
           "last_seen": {
             "name": "Zuletzt gesehen (gemeldet)"

@@ -54,20 +54,20 @@ class TestUpdatePreserveMetadata:
         assert target == {"battery_level": 70, "name": "New", "status": "Online"}
 
     def test_metadata_key_with_none_value_does_not_clobber_existing(self) -> None:
-        target = {"battery_level": 80}
-        source = {"battery_level": None}
+        target = {"pair_date": 80}
+        source = {"pair_date": None}
 
         _update_preserve_metadata(target, source)
 
-        assert target == {"battery_level": 80}
+        assert target == {"pair_date": 80}
 
     def test_metadata_key_with_real_value_overwrites(self) -> None:
-        target = {"battery_level": 80}
-        source = {"battery_level": 90}
+        target = {"pair_date": 80}
+        source = {"pair_date": 90}
 
         _update_preserve_metadata(target, source)
 
-        assert target == {"battery_level": 90}
+        assert target == {"pair_date": 90}
 
     def test_metadata_key_added_when_target_missing(self) -> None:
         target: dict[str, Any] = {}
@@ -79,7 +79,7 @@ class TestUpdatePreserveMetadata:
 
     def test_metadata_none_does_not_add_key(self) -> None:
         target: dict[str, Any] = {}
-        source = {"identity_key": None, "battery_level": None}
+        source = {"identity_key": None, "pair_date": None}
 
         _update_preserve_metadata(target, source)
 

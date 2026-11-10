@@ -860,7 +860,6 @@ class GoogleFindMyAPI:
                 "status": "No location data (requires individual request)",
                 "is_own_report": None,
                 "semantic_name": None,
-                "battery_level": None,
             }
             extended.append(dev)
         return extended

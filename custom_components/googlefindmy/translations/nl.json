@@ -575,9 +575,6 @@
           "semantic_name": {
             "name": "Semantisch label"
           },
-          "battery_level": {
-            "name": "Batterijniveau"
-          },
           "last_seen": {
             "name": "Laatst gezien (gerapporteerd)"
           },
@@ -636,9 +633,6 @@
           },
           "semantic_name": {
             "name": "Semantisch label"
-          },
-          "battery_level": {
-            "name": "Batterijniveau"
           },
           "last_seen": {
             "name": "Laatst gezien (gerapporteerd)"
@@ -733,9 +727,6 @@
           },
           "semantic_name": {
             "name": "Semantisch label"
-          },
-          "battery_level": {
-            "name": "Batterijniveau"
           },
           "last_seen": {
             "name": "Laatst gezien (gerapporteerd)"

@@ -248,14 +248,20 @@ scanner.
 integrations) in addition to internal callers.  The
 `Ephemeral_Identifier_Resolver_API.md` documents this contract.
 
-### 6.4  Google API `battery_level` is always None
+### 6.4  Cloud attribute removed; battery comes from BLE only (see section 6)
 
-The `battery_level` field in the coordinator data model (from
-`ProtoDecoders/decoder.py`) is always `None` — Google's API does not
-populate it for FMDN trackers.  Battery data is only available via the
-BLE hashed-flags byte decoded locally.  Do not confuse
-`device["battery_level"]` (always None) with
-`BLEBatteryState.battery_level` (from BLE).
+The coordinator data model used to carry a `battery_level` placeholder for
+the Google device list. Google's API never filled it for FMDN trackers, so
+it was always `None` and never reached an entity attribute; it has been
+removed from the decoder, the coordinator, the cache snapshot and the
+translations. Cache rows written by older versions may still contain the
+key; they load as before, and the key is not shown.
+
+Measurements on 2026-11-10 found no cloud field that follows the battery
+state shown in the Google app (the candidate `recentField11` in
+`RecentLocationAndNetworkLocations` was contradicted three times). Battery
+data is only available via the BLE hashed-flags byte decoded locally, as
+`BLEBatteryState.battery_level`.
 
 ### 6.5  Bermuda passes full raw payloads
 

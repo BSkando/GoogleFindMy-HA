@@ -63,7 +63,6 @@ class TestBuildBaseSnapshotEntry:
         assert result["last_seen"] is None
         assert result["is_own_report"] is None
         assert result["semantic_name"] is None
-        assert result["battery_level"] is None
 
     def test_default_status(self) -> None:
         """Default status is 'Waiting for location poll'."""

@@ -575,9 +575,6 @@
           "semantic_name": {
             "name": "תווית סמנטית"
           },
-          "battery_level": {
-            "name": "רמת סוללה"
-          },
           "last_seen": {
             "name": "נראה לאחרונה (מדווח)"
           },
@@ -636,9 +633,6 @@
           },
           "semantic_name": {
             "name": "תווית סמנטית"
-          },
-          "battery_level": {
-            "name": "רמת סוללה"
           },
           "last_seen": {
             "name": "נראה לאחרונה (מדווח)"
@@ -733,9 +727,6 @@
           },
           "semantic_name": {
             "name": "תווית סמנטית"
-          },
-          "battery_level": {
-            "name": "רמת סוללה"
           },
           "last_seen": {
             "name": "נראה לאחרונה (מדווח)"

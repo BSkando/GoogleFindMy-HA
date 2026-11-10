@@ -575,9 +575,6 @@
           "semantic_name": {
             "name": "Semantic label"
           },
-          "battery_level": {
-            "name": "Battery level"
-          },
           "last_seen": {
             "name": "Last seen (reported)"
           },
@@ -636,9 +633,6 @@
           },
           "semantic_name": {
             "name": "Semantic label"
-          },
-          "battery_level": {
-            "name": "Battery level"
           },
           "last_seen": {
             "name": "Last seen (reported)"
@@ -733,9 +727,6 @@
           },
           "semantic_name": {
             "name": "Semantic label"
-          },
-          "battery_level": {
-            "name": "Battery level"
           },
           "last_seen": {
             "name": "Last seen (reported)"

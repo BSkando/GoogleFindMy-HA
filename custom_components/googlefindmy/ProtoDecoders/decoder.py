@@ -623,7 +623,6 @@ _DEVICE_STUB_KEYS: tuple[str, ...] = (
     "_report_hint",
     "is_own_report",
     "semantic_name",
-    "battery_level",
     *_ANCHOR_METADATA_KEYS,
 )
 
@@ -657,7 +656,6 @@ def _build_device_stub(device_name: str, canonic_id: str) -> dict[str, Any]:
         "_report_hint": None,
         "is_own_report": None,
         "semantic_name": None,
-        "battery_level": None,
         "pair_date": None,
         "secrets_creation_date": None,
         "device_registration": None,

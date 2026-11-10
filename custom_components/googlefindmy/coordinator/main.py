@@ -260,7 +260,6 @@ _STATS_LOAD_SHUTDOWN_WAIT_S = 5.0
 
 # Fields consumed by get_active_device_identities from cached payloads/anchors.
 _PERSISTED_METADATA_KEYS: tuple[str, ...] = (
-    "battery_level",
     "device_type",
     "pair_date",
     "encrypted_account_key",
@@ -452,7 +451,6 @@ def _as_ha_attributes(row: dict[str, Any] | None) -> dict[str, Any] | None:
         "device_id": r.get("device_id") or r.get("id"),
         "status": r.get("status"),
         "semantic_name": r.get("semantic_name"),
-        "battery_level": r.get("battery_level"),
         "last_seen": last_seen_iso,
         "last_seen_utc": last_seen_utc,
         "source_label": r.get("source_label"),
