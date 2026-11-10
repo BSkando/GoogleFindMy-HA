@@ -19,7 +19,9 @@ import "ProtoDecoders/Common.proto";
 // message; read such a field through a guarded helper only.
 
 message GetEidInfoForE2eeDevicesResponse {
+  bytes eidResponseField3 = 3; // Meaning unknown, observed 2026-11-10: length-delimited, 1 byte
   EncryptedOwnerKeyAndMetadata encryptedOwnerKeyAndMetadata = 4;
+  bytes eidResponseField5 = 5; // Meaning unknown, observed 2026-11-10: length-delimited, 4 bytes
 }
 
 message EncryptedOwnerKeyAndMetadata {
@@ -71,10 +73,24 @@ message GcmCloudMessagingIdProtobuf {
   string id = 1;
 }
 
+// The set field number names the action: 30, 31, 32 on trackers; 1, 2, 4, 5, 6, 7,
+// 13, 14 on phones (observed 2026-11-10, each as an empty message, meaning unknown).
 message ExecuteActionType {
+  ExecuteActionPhoneAction phoneActionField1 = 1;
+  ExecuteActionPhoneAction phoneActionField2 = 2;
+  ExecuteActionPhoneAction phoneActionField4 = 4;
+  ExecuteActionPhoneAction phoneActionField5 = 5;
+  ExecuteActionPhoneAction phoneActionField6 = 6;
+  ExecuteActionPhoneAction phoneActionField7 = 7;
+  ExecuteActionPhoneAction phoneActionField13 = 13;
+  ExecuteActionPhoneAction phoneActionField14 = 14;
   ExecuteActionLocateTrackerType locateTracker = 30;
   ExecuteActionSoundType startSound = 31;
   ExecuteActionSoundType stopSound = 32;
+}
+
+// Observed 2026-11-10 as an empty message; it carries no field yet.
+message ExecuteActionPhoneAction {
 }
 
 message ExecuteActionLocateTrackerType {
@@ -118,16 +134,22 @@ message DeviceUpdate {
 
 message DeviceMetadata {
   IdentitfierInformation identifierInformation = 1;
-  repeated bytes supportedActions = 2; // Spot@55f87f62 form: SupportedActions
+  repeated bytes supportedActions = 2; // Spot@55f87f62 form: DeviceMetadata.SupportedActions
   bytes phoneInformation = 3; // Spot@55f87f62 form: DeviceMetadata.PhoneInformation
   DeviceInformation information = 4;
   string userDefinedDeviceName = 5;
   ImageInformation imageInformation = 6;
+  uint64 metadataField8 = 8; // Meaning unknown, observed 2026-11-10: varint, values 6, 7, 11
+  bytes metadataField10 = 10; // Meaning unknown, observed 2026-11-10: nested message (about 800 bytes, key-like shape), never opened
+  bytes metadataField11 = 11; // Meaning unknown, observed 2026-11-10: text, 19 or 44 characters
+  bytes metadataField12 = 12; // Meaning unknown, observed 2026-11-10; form: Time
+  bytes metadataField13 = 13; // Meaning unknown, observed 2026-11-10: text, 32 characters
 
-  // Spot@55f87f62, reverse-engineered, not confirmed by Google.
+  // Spot@55f87f62, reverse-engineered, not confirmed by Google. The Spot form matches
+  // the wire: `type` is an ExecuteActionType whose set field number names the action.
   message SupportedActions {
     ExecuteActionType type = 1;
-    bool isSupported = 2;
+    uint32 supportedActionsField2 = 2; // Meaning unknown; observed 1 and 2 on 2026-11-10, a bool would lose 2
   }
 
   // Spot@55f87f62, reverse-engineered, not confirmed by Google.
@@ -156,6 +178,7 @@ message IdentitfierInformation {
   PhoneInformation phoneInformation = 1;
   IdentifierInformationType type = 2;
   CanonicIds canonicIds = 3;
+  bytes identifierField5 = 5; // Meaning unknown, observed 2026-11-10: nested message, 42 bytes
 }
 
 enum IdentifierInformationType {
@@ -189,14 +212,15 @@ message DeviceTypeInformation {
   SpotBeaconType beaconType = 11; // Spot@55f87f62
   bytes contactInfo = 12; // Spot@55f87f62 form: DeviceDescription.ContactInfo
   DeviceDescription.RingingVolume ringingVolume = 13; // Spot@55f87f62
-  repeated bytes componentDetails = 15; // Not in Spot, measured wire shape: DeviceComponentDetail
+  repeated bytes componentDetails = 15; // Not in Spot, measured; form: DeviceComponentDetail
+  uint64 typeInformationField14 = 14; // Meaning unknown, observed 2026-11-10: varint, value 2
 }
 
 // Not in Spot. Shape measured on Pixel Buds Pro 2 (2026-11-05); the values were
 // 3, 1, 2 and their meaning next to DeviceComponent is not confirmed.
 message DeviceComponentDetail {
   DeviceComponent component = 1;
-  bytes detail = 2;
+  bytes detail = 2; // form: DeviceComponentInformation (measured 2026-11-10)
 }
 
 message DeviceRegistration {
@@ -217,6 +241,10 @@ message DeviceRegistration {
   bytes lostModeInformation = 32; // Spot@55f87f62 form: DeviceRegistration.LostModeInformation
   bytes firstSecretsCreationDate = 33; // Spot@55f87f62 form: Time
   string model = 34;
+  bytes registrationField15 = 15; // Meaning unknown, observed 2026-11-10: text, 36 characters
+  uint64 registrationField22 = 22; // Meaning unknown, observed 2026-11-10: varint, value 1
+  bytes registrationField38 = 38; // Meaning unknown, observed 2026-11-10: text, 7 or 11 characters
+  bytes registrationField40 = 40; // Meaning unknown, observed 2026-11-10; form: Time
 
   // Spot@55f87f62, reverse-engineered, not confirmed by Google.
   message KeyRotationInformation {
@@ -254,6 +282,7 @@ message LocationInformation {
 
 message LocationsAndTimestampsWrapper {
   RecentLocationAndNetworkLocations recentLocationAndNetworkLocations = 4;
+  uint64 reportsField5 = 5; // Meaning unknown, observed 2026-11-10: varint, value 1
 }
 
 message RecentLocationAndNetworkLocations {
@@ -262,6 +291,11 @@ message RecentLocationAndNetworkLocations {
   repeated LocationReport networkLocations = 5;
   repeated Time networkLocationTimestamps = 6;
   uint32 minLocationsNeededForAggregation = 9;
+  // Meaning unknown, observed 2026-11-10: one entry per component (1, 2, 3 on earbuds),
+  // paired by position with recentField11 (values 2, 3, 4, 8). recentField11 does not
+  // follow the charge state shown in the app (three measurements).
+  repeated uint64 recentField8 = 8;
+  repeated uint64 recentField11 = 11;
 }
 
 enum SpotDeviceType {

@@ -285,6 +285,16 @@ _NOT_SECRET_NAMES = frozenset(
         "publicKeyId",
         # No personal data of their own.
         "thisAccount",
+        # Empty action messages of `ExecuteActionType` on phones (2026-11-10):
+        # the field number names the action, there is no content to hide.
+        "phoneActionField1",
+        "phoneActionField2",
+        "phoneActionField4",
+        "phoneActionField5",
+        "phoneActionField6",
+        "phoneActionField7",
+        "phoneActionField13",
+        "phoneActionField14",
         # Containers: their leaves are checked one by one.
         "accessInformation",
         "phoneIdentifierInformation",

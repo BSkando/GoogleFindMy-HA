@@ -300,7 +300,7 @@ encryptedUserSecrets.encryptedIdentityKey:
 
 | Message | Field (number) | Declared | Spot shape |
 |---|---|---|---|
-| `DeviceMetadata` | `supportedActions` (2), `phoneInformation` (3) | `bytes` | `SupportedActions`, `DeviceMetadata.PhoneInformation` |
+| `DeviceMetadata` | `supportedActions` (2), `phoneInformation` (3) | `bytes` | `DeviceMetadata.SupportedActions`, `DeviceMetadata.PhoneInformation` |
 | `DeviceRegistration` | `canonicId` (1), `capabilities` (11) | `bytes` | `CanonicId`, `DeviceCapabilities` |
 | `DeviceRegistration` | `ringKey` (25), `recoveryKey` (26), `unwantedTrackingKey` (31) | `bytes`, key material | |
 | `DeviceRegistration` | `keyRotationInformation` (29), `lostModeInformation` (32), `firstSecretsCreationDate` (33) | `bytes` | nested messages, `Time` |
@@ -310,8 +310,11 @@ encryptedUserSecrets.encryptedIdentityKey:
 | `AccessInformation` | `sharingKeys` (7) | `bytes` | `SharingKeys` |
 | `EncryptedUserSecrets` | `sharingKeys` (6), `previousEikDate` (9) | `bytes` | `SharingKeys`, `Time` |
 | `SemanticLocation` | `semanticLocationIdentifier` (7) | `bytes` | nested message |
+| `DeviceMetadata` | `metadataField10` (10), `metadataField11` (11), `metadataField12` (12), `metadataField13` (13) | `bytes` | not in Spot; observed 2026-11-10: nested blob, text, `Time`, text |
+| `DeviceRegistration` | `registrationField15` (15), `registrationField38` (38), `registrationField40` (40) | `bytes` | not in Spot; observed 2026-11-10: text, text, `Time` |
+| `IdentitfierInformation` | `identifierField5` (5) | `bytes` | not in Spot; observed 2026-11-10: nested message |
 
-`ProtoDecoders/decoder.py` hides key material and personal data from developer output (`_SECRET_PROTO_FIELDS`, scalar fields by name). `DeviceRegistration` fields 15, 38, 40 and the `DeviceMetadata` root fields 11, 12, 13 stay undeclared: they are not in Spot, their meaning is unknown, and at least one text could have the form of a key. They remain visible as numbers only.
+`ProtoDecoders/decoder.py` hides key material and personal data from developer output (`_SECRET_PROTO_FIELDS`, scalar fields by name). Fields observed on 2026-11-10 that are not in Spot are declared under neutral names (`metadataField<N>`, `registrationField<N>`, `typeInformationField14`, `identifierField5`, `reportsField5`, `recentField8`/`recentField11`, `eidResponseField3`/`eidResponseField5`); their meaning is unknown. The text, identifier-like and blob fields among them are in `_SECRET_PROTO_FIELDS`. `DeviceMetadata.SupportedActions` keeps the Spot form: `type` is an `ExecuteActionType` whose set field number names the action (30, 31, 32 on trackers; 1, 2, 4, 5, 6, 7, 13, 14 on phones, declared as empty `ExecuteActionPhoneAction` messages), and field 2 is `supportedActionsField2` (`uint32`), because the wire carried 1 and 2. Unknown fields that remain are reported at DEBUG as `AGENTS.md` describes under **Schema-drift diagnostics**.
 
 ---
 

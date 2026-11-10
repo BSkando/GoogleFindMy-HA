@@ -154,14 +154,24 @@ BEACON_TYPE_SELF_REPORT_OR_ADVERTISING: SpotBeaconType
 BEACON_TYPE_NON_ADVERTISING_ACCESSORY: SpotBeaconType
 
 class GetEidInfoForE2eeDevicesResponse(Message, _MessageProto):
-    __slots__ = ("encryptedOwnerKeyAndMetadata",)
+    __slots__ = (
+        "encryptedOwnerKeyAndMetadata",
+        "eidResponseField3",
+        "eidResponseField5",
+    )
     ENCRYPTEDOWNERKEYANDMETADATA_FIELD_NUMBER: _ClassVar[int]
+    EIDRESPONSEFIELD3_FIELD_NUMBER: _ClassVar[int]
+    EIDRESPONSEFIELD5_FIELD_NUMBER: _ClassVar[int]
     encryptedOwnerKeyAndMetadata: EncryptedOwnerKeyAndMetadata
+    eidResponseField3: bytes
+    eidResponseField5: bytes
     def __init__(
         self,
         encryptedOwnerKeyAndMetadata: EncryptedOwnerKeyAndMetadata
         | _Mapping[str, _Any]
         | None = ...,
+        eidResponseField3: bytes | None = ...,
+        eidResponseField5: bytes | None = ...,
     ) -> None: ...
 
 class EncryptedOwnerKeyAndMetadata(Message, _MessageProto):
@@ -268,13 +278,41 @@ class GcmCloudMessagingIdProtobuf(Message, _MessageProto):
     def __init__(self, id: str | None = ...) -> None: ...
 
 class ExecuteActionType(Message, _MessageProto):
-    __slots__ = ("locateTracker", "startSound", "stopSound")
+    __slots__ = (
+        "locateTracker",
+        "startSound",
+        "stopSound",
+        "phoneActionField1",
+        "phoneActionField2",
+        "phoneActionField4",
+        "phoneActionField5",
+        "phoneActionField6",
+        "phoneActionField7",
+        "phoneActionField13",
+        "phoneActionField14",
+    )
     LOCATETRACKER_FIELD_NUMBER: _ClassVar[int]
     STARTSOUND_FIELD_NUMBER: _ClassVar[int]
     STOPSOUND_FIELD_NUMBER: _ClassVar[int]
+    PHONEACTIONFIELD1_FIELD_NUMBER: _ClassVar[int]
+    PHONEACTIONFIELD2_FIELD_NUMBER: _ClassVar[int]
+    PHONEACTIONFIELD4_FIELD_NUMBER: _ClassVar[int]
+    PHONEACTIONFIELD5_FIELD_NUMBER: _ClassVar[int]
+    PHONEACTIONFIELD6_FIELD_NUMBER: _ClassVar[int]
+    PHONEACTIONFIELD7_FIELD_NUMBER: _ClassVar[int]
+    PHONEACTIONFIELD13_FIELD_NUMBER: _ClassVar[int]
+    PHONEACTIONFIELD14_FIELD_NUMBER: _ClassVar[int]
     locateTracker: ExecuteActionLocateTrackerType
     startSound: ExecuteActionSoundType
     stopSound: ExecuteActionSoundType
+    phoneActionField1: ExecuteActionPhoneAction
+    phoneActionField2: ExecuteActionPhoneAction
+    phoneActionField4: ExecuteActionPhoneAction
+    phoneActionField5: ExecuteActionPhoneAction
+    phoneActionField6: ExecuteActionPhoneAction
+    phoneActionField7: ExecuteActionPhoneAction
+    phoneActionField13: ExecuteActionPhoneAction
+    phoneActionField14: ExecuteActionPhoneAction
     def __init__(
         self,
         locateTracker: ExecuteActionLocateTrackerType
@@ -282,7 +320,19 @@ class ExecuteActionType(Message, _MessageProto):
         | None = ...,
         startSound: ExecuteActionSoundType | _Mapping[str, _Any] | None = ...,
         stopSound: ExecuteActionSoundType | _Mapping[str, _Any] | None = ...,
+        phoneActionField1: ExecuteActionPhoneAction | _Mapping[str, _Any] | None = ...,
+        phoneActionField2: ExecuteActionPhoneAction | _Mapping[str, _Any] | None = ...,
+        phoneActionField4: ExecuteActionPhoneAction | _Mapping[str, _Any] | None = ...,
+        phoneActionField5: ExecuteActionPhoneAction | _Mapping[str, _Any] | None = ...,
+        phoneActionField6: ExecuteActionPhoneAction | _Mapping[str, _Any] | None = ...,
+        phoneActionField7: ExecuteActionPhoneAction | _Mapping[str, _Any] | None = ...,
+        phoneActionField13: ExecuteActionPhoneAction | _Mapping[str, _Any] | None = ...,
+        phoneActionField14: ExecuteActionPhoneAction | _Mapping[str, _Any] | None = ...,
     ) -> None: ...
+
+class ExecuteActionPhoneAction(Message, _MessageProto):
+    __slots__ = ()
+    def __init__(self) -> None: ...
 
 class ExecuteActionLocateTrackerType(Message, _MessageProto):
     __slots__ = ("lastHighTrafficEnablingTime", "contributorType")
@@ -347,17 +397,22 @@ class DeviceMetadata(Message, _MessageProto):
         "information",
         "userDefinedDeviceName",
         "imageInformation",
+        "metadataField8",
+        "metadataField10",
+        "metadataField11",
+        "metadataField12",
+        "metadataField13",
     )
     class SupportedActions(Message, _MessageProto):
-        __slots__ = ("type", "isSupported")
+        __slots__ = ("type", "supportedActionsField2")
         TYPE_FIELD_NUMBER: _ClassVar[int]
-        ISSUPPORTED_FIELD_NUMBER: _ClassVar[int]
+        SUPPORTEDACTIONSFIELD2_FIELD_NUMBER: _ClassVar[int]
         type: ExecuteActionType
-        isSupported: bool
+        supportedActionsField2: int
         def __init__(
             self,
             type: ExecuteActionType | _Mapping[str, _Any] | None = ...,
-            isSupported: bool = ...,
+            supportedActionsField2: int | None = ...,
         ) -> None: ...
 
     class PhoneInformation(Message, _MessageProto):
@@ -397,12 +452,22 @@ class DeviceMetadata(Message, _MessageProto):
     INFORMATION_FIELD_NUMBER: _ClassVar[int]
     USERDEFINEDDEVICENAME_FIELD_NUMBER: _ClassVar[int]
     IMAGEINFORMATION_FIELD_NUMBER: _ClassVar[int]
+    METADATAFIELD8_FIELD_NUMBER: _ClassVar[int]
+    METADATAFIELD10_FIELD_NUMBER: _ClassVar[int]
+    METADATAFIELD11_FIELD_NUMBER: _ClassVar[int]
+    METADATAFIELD12_FIELD_NUMBER: _ClassVar[int]
+    METADATAFIELD13_FIELD_NUMBER: _ClassVar[int]
     identifierInformation: IdentitfierInformation
     supportedActions: _containers.RepeatedScalarFieldContainer[bytes]
     phoneInformation: bytes
     information: DeviceInformation
     userDefinedDeviceName: str
     imageInformation: ImageInformation
+    metadataField8: int
+    metadataField10: bytes
+    metadataField11: bytes
+    metadataField12: bytes
+    metadataField13: bytes
     def __init__(
         self,
         identifierInformation: IdentitfierInformation
@@ -413,6 +478,11 @@ class DeviceMetadata(Message, _MessageProto):
         information: DeviceInformation | _Mapping[str, _Any] | None = ...,
         userDefinedDeviceName: str | None = ...,
         imageInformation: ImageInformation | _Mapping[str, _Any] | None = ...,
+        metadataField8: int | None = ...,
+        metadataField10: bytes | None = ...,
+        metadataField11: bytes | None = ...,
+        metadataField12: bytes | None = ...,
+        metadataField13: bytes | None = ...,
     ) -> None: ...
 
 class ImageInformation(Message, _MessageProto):
@@ -437,18 +507,26 @@ class ImageInformation(Message, _MessageProto):
     ) -> None: ...
 
 class IdentitfierInformation(Message, _MessageProto):
-    __slots__ = ("phoneInformation", "type", "canonicIds")
+    __slots__ = (
+        "phoneInformation",
+        "type",
+        "canonicIds",
+        "identifierField5",
+    )
     PHONEINFORMATION_FIELD_NUMBER: _ClassVar[int]
     TYPE_FIELD_NUMBER: _ClassVar[int]
     CANONICIDS_FIELD_NUMBER: _ClassVar[int]
+    IDENTIFIERFIELD5_FIELD_NUMBER: _ClassVar[int]
     phoneInformation: PhoneInformation
     type: IdentifierInformationType
     canonicIds: CanonicIds
+    identifierField5: bytes
     def __init__(
         self,
         phoneInformation: PhoneInformation | _Mapping[str, _Any] | None = ...,
         type: IdentifierInformationType | str | None = ...,
         canonicIds: CanonicIds | _Mapping[str, _Any] | None = ...,
+        identifierField5: bytes | None = ...,
     ) -> None: ...
 
 class PhoneInformation(Message, _MessageProto):
@@ -498,6 +576,7 @@ class DeviceTypeInformation(Message, _MessageProto):
         "contactInfo",
         "ringingVolume",
         "componentDetails",
+        "typeInformationField14",
     )
     USERDEFINEDNAME_FIELD_NUMBER: _ClassVar[int]
     DEVICETYPE_FIELD_NUMBER: _ClassVar[int]
@@ -506,6 +585,7 @@ class DeviceTypeInformation(Message, _MessageProto):
     CONTACTINFO_FIELD_NUMBER: _ClassVar[int]
     RINGINGVOLUME_FIELD_NUMBER: _ClassVar[int]
     COMPONENTDETAILS_FIELD_NUMBER: _ClassVar[int]
+    TYPEINFORMATIONFIELD14_FIELD_NUMBER: _ClassVar[int]
     userDefinedName: bytes
     deviceType: SpotDeviceType
     deviceComponentsInformation: _containers.RepeatedScalarFieldContainer[bytes]
@@ -513,6 +593,7 @@ class DeviceTypeInformation(Message, _MessageProto):
     contactInfo: bytes
     ringingVolume: DeviceDescription.RingingVolume
     componentDetails: _containers.RepeatedScalarFieldContainer[bytes]
+    typeInformationField14: int
     def __init__(
         self,
         userDefinedName: bytes | None = ...,
@@ -522,6 +603,7 @@ class DeviceTypeInformation(Message, _MessageProto):
         contactInfo: bytes | None = ...,
         ringingVolume: DeviceDescription.RingingVolume | str | None = ...,
         componentDetails: _Iterable[bytes] | None = ...,
+        typeInformationField14: int | None = ...,
     ) -> None: ...
 
 class DeviceComponentDetail(Message, _MessageProto):
@@ -555,6 +637,10 @@ class DeviceRegistration(Message, _MessageProto):
         "lostModeInformation",
         "firstSecretsCreationDate",
         "model",
+        "registrationField15",
+        "registrationField22",
+        "registrationField38",
+        "registrationField40",
     )
     class KeyRotationInformation(Message, _MessageProto):
         __slots__ = ("rotatedEIKs", "keyRotationNeeded")
@@ -614,6 +700,10 @@ class DeviceRegistration(Message, _MessageProto):
     LOSTMODEINFORMATION_FIELD_NUMBER: _ClassVar[int]
     FIRSTSECRETSCREATIONDATE_FIELD_NUMBER: _ClassVar[int]
     MODEL_FIELD_NUMBER: _ClassVar[int]
+    REGISTRATIONFIELD15_FIELD_NUMBER: _ClassVar[int]
+    REGISTRATIONFIELD22_FIELD_NUMBER: _ClassVar[int]
+    REGISTRATIONFIELD38_FIELD_NUMBER: _ClassVar[int]
+    REGISTRATIONFIELD40_FIELD_NUMBER: _ClassVar[int]
     canonicId: bytes
     deviceTypeInformation: DeviceTypeInformation
     capabilities: bytes
@@ -631,6 +721,10 @@ class DeviceRegistration(Message, _MessageProto):
     lostModeInformation: bytes
     firstSecretsCreationDate: bytes
     model: str
+    registrationField15: bytes
+    registrationField22: int
+    registrationField38: bytes
+    registrationField40: bytes
     def __init__(
         self,
         canonicId: bytes | None = ...,
@@ -650,6 +744,10 @@ class DeviceRegistration(Message, _MessageProto):
         lostModeInformation: bytes | None = ...,
         firstSecretsCreationDate: bytes | None = ...,
         model: str | None = ...,
+        registrationField15: bytes | None = ...,
+        registrationField22: int | None = ...,
+        registrationField38: bytes | None = ...,
+        registrationField40: bytes | None = ...,
     ) -> None: ...
 
 class EncryptedUserSecrets(Message, _MessageProto):
@@ -701,14 +799,20 @@ class LocationInformation(Message, _MessageProto):
     ) -> None: ...
 
 class LocationsAndTimestampsWrapper(Message, _MessageProto):
-    __slots__ = ("recentLocationAndNetworkLocations",)
+    __slots__ = (
+        "recentLocationAndNetworkLocations",
+        "reportsField5",
+    )
     RECENTLOCATIONANDNETWORKLOCATIONS_FIELD_NUMBER: _ClassVar[int]
+    REPORTSFIELD5_FIELD_NUMBER: _ClassVar[int]
     recentLocationAndNetworkLocations: RecentLocationAndNetworkLocations
+    reportsField5: int
     def __init__(
         self,
         recentLocationAndNetworkLocations: RecentLocationAndNetworkLocations
         | _Mapping[str, _Any]
         | None = ...,
+        reportsField5: int | None = ...,
     ) -> None: ...
 
 class RecentLocationAndNetworkLocations(Message, _MessageProto):
@@ -718,12 +822,16 @@ class RecentLocationAndNetworkLocations(Message, _MessageProto):
         "networkLocations",
         "networkLocationTimestamps",
         "minLocationsNeededForAggregation",
+        "recentField8",
+        "recentField11",
     )
     RECENTLOCATION_FIELD_NUMBER: _ClassVar[int]
     RECENTLOCATIONTIMESTAMP_FIELD_NUMBER: _ClassVar[int]
     NETWORKLOCATIONS_FIELD_NUMBER: _ClassVar[int]
     NETWORKLOCATIONTIMESTAMPS_FIELD_NUMBER: _ClassVar[int]
     MINLOCATIONSNEEDEDFORAGGREGATION_FIELD_NUMBER: _ClassVar[int]
+    RECENTFIELD8_FIELD_NUMBER: _ClassVar[int]
+    RECENTFIELD11_FIELD_NUMBER: _ClassVar[int]
     recentLocation: _Common_pb2.LocationReport
     recentLocationTimestamp: _Common_pb2.Time
     networkLocations: _containers.RepeatedCompositeFieldContainer[
@@ -733,6 +841,8 @@ class RecentLocationAndNetworkLocations(Message, _MessageProto):
         _Common_pb2.Time
     ]
     minLocationsNeededForAggregation: int
+    recentField8: _containers.RepeatedScalarFieldContainer[int]
+    recentField11: _containers.RepeatedScalarFieldContainer[int]
     def __init__(
         self,
         recentLocation: _Common_pb2.LocationReport | _Mapping[str, _Any] | None = ...,
@@ -742,6 +852,8 @@ class RecentLocationAndNetworkLocations(Message, _MessageProto):
         networkLocationTimestamps: _Iterable[_Common_pb2.Time | _Mapping[str, _Any]]
         | None = ...,
         minLocationsNeededForAggregation: int | None = ...,
+        recentField8: _Iterable[int] | None = ...,
+        recentField11: _Iterable[int] | None = ...,
     ) -> None: ...
 
 class AccessInformation(Message, _MessageProto):
