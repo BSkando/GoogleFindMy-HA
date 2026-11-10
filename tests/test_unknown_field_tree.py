@@ -51,7 +51,7 @@ Format decisions (where the plan left a choice, decided once for all cases):
   ``group`` plus `` msg{...}`` like a length-delimited field. A known bytes
   field whose declared form fails to parse is ``form-mismatch len=<n>``
   (wire ``len``).
-* Schemaless subtree (V-5, ``_MAX_UNKNOWN_DEPTH = 1``): items joined by
+* Schemaless subtree (``_MAX_UNKNOWN_DEPTH = 1``): items joined by
   ``", "``, each ``#<nr>=varint``, ``#<nr>=fixed32``, ``#<nr>=fixed64``,
   ``#<nr>=len=<m> depth-limit`` or ``#<nr>=group depth-limit``: no value, no
   text marker, no further level.
@@ -171,7 +171,7 @@ def _reparse[M: Message](message: M, extra: bytes) -> M:
 def _fake_cipher() -> tuple[bytes, int]:
     """Random bytes that parse cleanly as protobuf wire data.
 
-    Ciphertext parses as protobuf in up to 1.33 % of cases (EE-10); this one
+    Ciphertext parses as protobuf in up to 1.33 % of cases (measured); this one
     always does. Returns the bytes and the large varint they carry.
     """
     big = (1 << 40) + secrets.randbelow(1 << 20)
@@ -250,7 +250,7 @@ def _time_bytes(seconds: int, nanos: int) -> bytes:
 
 
 def build_device_list(devices: int) -> Any:
-    """A ``DevicesList`` shaped like the live list of 2026-11-10 (EE-15).
+    """A ``DevicesList`` shaped like the live list of 2026-11-10.
 
     Every field that was unknown on 2026-11-10 is present per device with its
     live wire type and length (``wiretypen.txt``); since commit 6c3e2697 the
@@ -258,7 +258,7 @@ def build_device_list(devices: int) -> Any:
     unknown per device so that the whole log path runs:
     ``DeviceMetadata.#99=varint:1`` and
     ``DeviceMetadata.information.deviceRegistration.#98=len=2 msg{#1=varint}``.
-    Used by the cost measurement in AP12 (K7); attrappes are random per call.
+    Used by the cost measurement below; attrappes are random per call.
     """
     device_list = DeviceUpdate_pb2.DevicesList()
     for index in range(devices):
@@ -331,7 +331,7 @@ def build_device_list(devices: int) -> Any:
 
 
 # --------------------------------------------------------------------------
-# K1: path of field names and #number, no depth limit for known fields
+# path of field names and #number, no depth limit for known fields
 # --------------------------------------------------------------------------
 
 
@@ -389,7 +389,7 @@ def test_k1_line_carries_full_path(caplog: pytest.LogCaptureFixture) -> None:
 
 
 # --------------------------------------------------------------------------
-# K2: values at an unknown field of a known message
+# values at an unknown field of a known message
 # --------------------------------------------------------------------------
 
 
@@ -505,7 +505,7 @@ def test_k2_constant_varint_threshold() -> None:
 
 
 # --------------------------------------------------------------------------
-# K3: known bytes fields opened only through _FORM_BY_FIELD
+# known bytes fields opened only through _FORM_BY_FIELD
 # --------------------------------------------------------------------------
 
 _EXPECTED_FORM_FIELDS = frozenset(
@@ -626,7 +626,7 @@ def test_k3_metadata_field12_opened_with_time() -> None:
 
 
 # --------------------------------------------------------------------------
-# K4: key material and identifiers never opened, closed messages inherit
+# key material and identifiers never opened, closed messages inherit
 # --------------------------------------------------------------------------
 
 
@@ -766,7 +766,7 @@ def test_k4_closed_messages_listed() -> None:
 
 
 # --------------------------------------------------------------------------
-# K5: schemaless subtree under an unknown field, no values (V-5)
+# schemaless subtree under an unknown field, no values
 # --------------------------------------------------------------------------
 
 
@@ -831,7 +831,7 @@ def test_k5_constant_unknown_depth() -> None:
 
 
 # --------------------------------------------------------------------------
-# K6: one line per signature change, keyed by (kind, device id), LRU 256
+# one line per signature change, keyed by (kind, device id), LRU 256
 # --------------------------------------------------------------------------
 
 
@@ -1006,7 +1006,7 @@ def test_k6_no_id_window_in_log(caplog: pytest.LogCaptureFixture) -> None:
 
 
 # --------------------------------------------------------------------------
-# K7: zero cost below DEBUG; shape of the cost-measurement fixture
+# zero cost below DEBUG; shape of the cost-measurement fixture
 # --------------------------------------------------------------------------
 
 
@@ -1073,7 +1073,7 @@ def test_k7_build_device_list_has_live_shape() -> None:
 
 
 # --------------------------------------------------------------------------
-# K8: four call sites, fail-safe
+# four call sites, fail-safe
 # --------------------------------------------------------------------------
 
 _NAME = "Tag Alpha"
@@ -1302,7 +1302,7 @@ def test_k8_helper_fail_safe(
 
 
 # --------------------------------------------------------------------------
-# K9: log hygiene of the whole line
+# log hygiene of the whole line
 # --------------------------------------------------------------------------
 
 

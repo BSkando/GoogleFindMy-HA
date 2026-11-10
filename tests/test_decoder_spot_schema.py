@@ -616,7 +616,7 @@ def test_device_row_survives_garbage_capabilities() -> None:
     assert rows[0]["trackable_components"] is None
 
 
-# --- Fields observed on 2026-11-10 (PLAN_GFMY_UNBEKANNT_BAUM_DIAGNOSE) ------
+# --- Fields observed on 2026-11-10 ------------------------------------------
 #
 # Expected values come from the live wire types measured on 2026-11-10, not from
 # the schema: varint fields carried small numbers, length-delimited fields text,

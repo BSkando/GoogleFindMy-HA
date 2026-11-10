@@ -430,6 +430,7 @@ def _coordinator() -> Any:
     return coord
 
 
+@pytest.mark.asyncio
 async def test_decoder_row_reaches_the_coordinator_and_survives_a_list_without_image(
     poll_coordinator: _DummyAPI,
 ) -> None:
@@ -455,6 +456,7 @@ async def test_decoder_row_reaches_the_coordinator_and_survives_a_list_without_i
     assert _picture(_tracker(coordinator_stub)) == _URL_COMPONENT
 
 
+@pytest.mark.asyncio
 async def test_coordinator_ignores_a_rejected_address_from_the_list(
     poll_coordinator: _DummyAPI,
 ) -> None:
@@ -468,6 +470,7 @@ async def test_coordinator_ignores_a_rejected_address_from_the_list(
     assert coord.get_device_image_url("dev-unknown") is None
 
 
+@pytest.mark.asyncio
 async def test_purge_device_drops_the_image(poll_coordinator: _DummyAPI) -> None:
     api = poll_coordinator
     coord = _coordinator()
