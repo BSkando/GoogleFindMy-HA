@@ -726,6 +726,14 @@ _OBSERVED: tuple[tuple[str, int, bytes, str, object], ...] = (
         "eidResponseField5",
         b"\x02" * 4,
     ),
+    ("RecentLocationAndNetworkLocations", 7, _varint_field(7, 4), "recentField7", 4),
+    (
+        "PhoneInformation",
+        1,
+        _varint_field(1, 2**40 + 7),
+        "phoneInformationField1",
+        2**40 + 7,
+    ),
 )
 
 
@@ -806,6 +814,7 @@ def test_component_detail_carries_component_information() -> None:
         "identifierField5",
         "eidResponseField3",
         "eidResponseField5",
+        "phoneInformationField1",
     ],
 )
 def test_observed_text_fields_are_redacted(field_name: str) -> None:
