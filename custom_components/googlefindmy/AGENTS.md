@@ -458,8 +458,12 @@ three slots), `test_without_content_the_rejection_keeps_the_report_it_booked` (n
 rejection stays) and `test_only_the_provisional_rejection_gives_way_not_an_earlier_diagnosis`.
 The all-rejected case is handled after the loop, not in the branch: whether a rejection is per-device or
 account-wide is only knowable once every device has been tried, the same reasoning by which
-`_finalize_cycle_decrypt_state` defers the decrypt verdict. If `cycle_rejected_devices == len(devices)` every device
-was refused, which is account-wide on the rejections' own terms, and the cycle surfaces an `UpdateFailed`. Do NOT
+`_finalize_cycle_decrypt_state` defers the decrypt verdict. If `cycle_rejected_devices == cycle_polled_devices` every
+device was refused, which is account-wide on the rejections' own terms, and the cycle surfaces an `UpdateFailed`.
+Both post-loop guards compare against `cycle_polled_devices` (`len(devices) - cycle_skipped_devices`), never against
+`len(devices)`: a tracker whose automatic polling is switched off, even one switched off mid-cycle, is skipped at its
+turn and was never asked, so counting it would keep either equality from holding and hide the verdict for that cycle
+(`test_switched_off_mid_cycle_does_not_hide_the_cycle_verdict`). Do NOT
 replace that check with "the device list would have caught it one layer up": `async_get_basic_device_list` is a
 different RPC (`nbe_list_devices`) from the per-device location request, and it runs on its own clock:
 `DEVICE_LIST_POLL_INTERVAL` is a fixed 300s (`const.py`) while the location poll interval is configurable between 60
@@ -469,7 +473,7 @@ was wrong.
 Read the check for exactly what it tests, and no more. It does NOT say that a cycle failing the equality had a sibling
 success. It is one of TWO post-loop guards, and the other one is what closed the gap this paragraph used to describe as
 open. `cycle_unaccepted_devices` counts the devices whose locate request was never accepted, and the sum guard
-(`unaccepted + rejected == len(devices)`, with at least one unaccepted) surfaces a cycle in which no device's request
+(`unaccepted + rejected == cycle_polled_devices`, with at least one unaccepted) surfaces a cycle in which no device's request
 got through. The two are kept apart so the reported message names the condition: a deleted tracker is a configuration
 change, a cycle in which no request was accepted is an outage.
 That difference is NOT flow position, and writing it that way would be measurably wrong. `location_request.py`
@@ -691,6 +695,14 @@ send site that skips the wrapper leaves its requests out of `poll_age_s`. Never 
 logs the value at once, so a stamp for an attempt that later stops in its push or token phase cannot be taken back.
 `test_dispatch_observer_fires_once_per_post` counts observer calls against POSTs, and
 `test_reader_sees_no_stamp_while_the_attempt_is_in_its_push_phase` pins the second rule.
+Location requests leave through exactly two send sites, the poll cycle (`coordinator/polling.py`) and the manual
+locate (`coordinator/locate.py`); `test_location_requests_leave_only_through_two_send_sites` pins that set. Each site
+passes `counts=self._locate_request_counts` and its `kind` (`"auto"` for the poll cycle, `"manual"` for the manual
+locate) to `stamp_on_dispatch`, so the per-tracker request counters see every POST. An automatic send site checks
+`is_automatic_polling_enabled(dev_id)` at the device's turn, not only when the cycle is planned, and skips a
+switched-off tracker without sending; the manual locate does NOT check the switch, because the switch stops only
+automatic requests. A new send site therefore needs the switch check (if it is automatic), both arguments, and an
+update of that test; one that skips them bypasses the switch or drops out of the counters.
 
 ### Map View reminders
 

@@ -9,8 +9,8 @@ for each of them: a non-empty value, the same value in ``strings.json`` and
 from the English one. A language may keep the English word only with an entry
 and a reason in ``ALLOWED_IDENTICAL``.
 
-Each finding is one line: ``FEHLT <file> <key>``, ``ENGLISCH <file> <key>`` or
-``UNGLEICH en/strings <key>``.
+Each finding is one line: ``MISSING <file> <key>``, ``ENGLISH <file> <key>`` or
+``MISMATCH en/strings <key>``.
 """
 
 from __future__ import annotations
@@ -56,16 +56,16 @@ def localization_findings(
         en_value = _lookup(english, key)
         strings_value = _lookup(strings, key)
         if _empty(en_value) or _empty(strings_value):
-            findings.append(f"FEHLT en/strings {key}")
+            findings.append(f"MISSING en/strings {key}")
             continue
         if en_value != strings_value:
-            findings.append(f"UNGLEICH en/strings {key}")
+            findings.append(f"MISMATCH en/strings {key}")
         for name in sorted(others):
             value = _lookup(others[name], key)
             if _empty(value):
-                findings.append(f"FEHLT {name} {key}")
+                findings.append(f"MISSING {name} {key}")
             elif value == en_value and (name, key) not in allowed:
-                findings.append(f"ENGLISCH {name} {key}")
+                findings.append(f"ENGLISH {name} {key}")
     return findings
 
 
@@ -114,12 +114,12 @@ def test_predicate_reports_each_kind_of_finding() -> None:
     )
 
     assert findings == [
-        f"ENGLISCH it.json {key}",
-        f"FEHLT nl.json {key}",
-        f"FEHLT pl.json {key}",
-        f"FEHLT en/strings {missing_key}",
-        f"UNGLEICH en/strings {unequal_key}",
+        f"ENGLISH it.json {key}",
+        f"MISSING nl.json {key}",
+        f"MISSING pl.json {key}",
+        f"MISSING en/strings {missing_key}",
+        f"MISMATCH en/strings {unequal_key}",
     ]
     assert localization_findings(
         strings, english, others, (key,), {("it.json", key): "brand name"}
-    ) == [f"FEHLT nl.json {key}", f"FEHLT pl.json {key}"]
+    ) == [f"MISSING nl.json {key}", f"MISSING pl.json {key}"]
