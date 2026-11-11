@@ -3427,8 +3427,7 @@ class TestTheDocumentedExtentStaysTrue:
         rule is that a citation of a FILE goes unchecked; renaming a test module
         leaves such a reference dangling and no row here notices.
 
-        Scope is every `AGENTS.md` under the component (68 citations today, all
-        of them live). `tests/AGENTS.md` is deliberately NOT included: it cites
+        Scope is every `AGENTS.md` under the component. `tests/AGENTS.md` is deliberately NOT included: it cites
         at least one name as a FORMER name on purpose, so folding it in needs a
         way to declare a citation historical, which is a change of its own.
 

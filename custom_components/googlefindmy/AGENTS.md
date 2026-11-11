@@ -458,12 +458,14 @@ three slots), `test_without_content_the_rejection_keeps_the_report_it_booked` (n
 rejection stays) and `test_only_the_provisional_rejection_gives_way_not_an_earlier_diagnosis`.
 The all-rejected case is handled after the loop, not in the branch: whether a rejection is per-device or
 account-wide is only knowable once every device has been tried, the same reasoning by which
-`_finalize_cycle_decrypt_state` defers the decrypt verdict. If `cycle_rejected_devices == cycle_polled_devices` every
-device was refused, which is account-wide on the rejections' own terms, and the cycle surfaces an `UpdateFailed`.
+`_finalize_cycle_decrypt_state` defers the decrypt verdict. If at least one device was rejected and
+`cycle_rejected_devices == cycle_polled_devices`, every device was refused, which is account-wide on the rejections' own terms, and the cycle surfaces an `UpdateFailed`.
 Both post-loop guards compare against `cycle_polled_devices` (`len(devices) - cycle_skipped_devices`), never against
 `len(devices)`: a tracker whose automatic polling is switched off, even one switched off mid-cycle, is skipped at its
 turn and was never asked, so counting it would keep either equality from holding and hide the verdict for that cycle
-(`test_switched_off_mid_cycle_does_not_hide_the_cycle_verdict`). Do NOT
+(`test_switched_off_mid_cycle_does_not_hide_the_cycle_verdict`). Both guards also require a non-zero count (at least one
+rejected, at least one unaccepted): when every tracker is switched off mid-cycle, `cycle_polled_devices` is 0 and an
+equality of 0 == 0 surfaces nothing. Do NOT
 replace that check with "the device list would have caught it one layer up": `async_get_basic_device_list` is a
 different RPC (`nbe_list_devices`) from the per-device location request, and it runs on its own clock:
 `DEVICE_LIST_POLL_INTERVAL` is a fixed 300s (`const.py`) while the location poll interval is configurable between 60
@@ -695,8 +697,12 @@ send site that skips the wrapper leaves its requests out of `poll_age_s`. Never 
 logs the value at once, so a stamp for an attempt that later stops in its push or token phase cannot be taken back.
 `test_dispatch_observer_fires_once_per_post` counts observer calls against POSTs, and
 `test_reader_sees_no_stamp_while_the_attempt_is_in_its_push_phase` pins the second rule.
-Location requests leave through exactly two send sites, the poll cycle (`coordinator/polling.py`) and the manual
-locate (`coordinator/locate.py`); `test_location_requests_leave_only_through_two_send_sites` pins that set. Each site
+Inside Home Assistant, location requests leave through exactly two send sites, the poll cycle
+(`coordinator/polling.py`) and the manual locate (`coordinator/locate.py`); the synchronous `api.py` wrappers and the
+CLI serve callers outside Home Assistant and are not send sites of the integration.
+`test_location_requests_leave_only_through_two_send_sites` pins the set of integration modules outside
+`api.py` that call `async_get_device_location`, not the number of calls in them: a third send site inside `polling.py` or `locate.py` keeps it
+green, so review the call sites when adding one. Each site
 passes `counts=self._locate_request_counts` and its `kind` (`"auto"` for the poll cycle, `"manual"` for the manual
 locate) to `stamp_on_dispatch`, so the per-tracker request counters see every POST. An automatic send site checks
 `is_automatic_polling_enabled(dev_id)` at the device's turn, not only when the cycle is planned, and skips a
