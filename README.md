@@ -783,37 +783,68 @@ from Google.
 
 #### Controlled comparison: automatic location polling off for one tracker (#242)
 
-Some users report that their trackers enter unwanted tracking protection mode more
-often while the integration is running. It is an open hypothesis that location
-requests contribute to this. No remedy is known. The switch *Automatic location
-polling* lets you compare two trackers under the same conditions:
+Some users report that their trackers ring, or enter unwanted tracking
+protection mode, more often while the integration is running. It is an open
+hypothesis that location requests contribute to this. No remedy is known. The
+switch *Automatic location polling* lets you compare two trackers under the
+same conditions:
 
-1. Pick two trackers of the same account and carry them together, so that the
-   owner's phone is near both of them or near neither.
+1. Pick two trackers of the same account and leave them together in a place
+   where the problem has occurred before and where other people's phones pass
+   by, with no Android phone signed in to that Google account nearby (for
+   example at home with a household member who has no Android phone signed in
+   to that account). According to published research (Böttger et al., PoPETs
+   2025(4), section 7.1.2, measured in early 2025), the protection mode is
+   never switched on while an Android phone of the owner reports the tracker
+   at least every 30 minutes. With such a phone near both trackers, neither of
+   them is expected to change, and the comparison would show nothing. Periods
+   with nobody there to hear a ringing count only for the second measure.
 2. Turn *Automatic location polling* off for tracker A and leave it on for
    tracker B. During the comparison, do not locate either tracker by hand or by
    an automation, or note every time you do.
 3. After a few days, swap the roles: A on, B off. Several days per role are
-   needed; with only a handful of protection mode changes, no conclusion is
-   possible either way.
-4. Evaluate only the `FMDN_UWT_TRANSITION` lines (or the `uwt_transitions` block
-   of the diagnostics) and the rows in `coordinator.devices` of the diagnostics.
+   needed; with only a handful of events, no conclusion is possible either
+   way.
+4. The main measure is the ringing. The integration cannot detect that a
+   tracker rings, so only your notes count. For each ringing, write down the
+   date and time, the place in general terms (such as "home" or "office"),
+   which tracker it was (A or B, not its name), and whether an Android phone
+   of the account was nearby (yes, no, or iPhone only). Ringing can only be
+   noted while someone is there to hear it; note roughly when that was the
+   case.
+5. The second measure is the protection mode; a tracker can be in that mode
+   without ringing. Evaluate only the `FMDN_UWT_TRANSITION` lines (or the
+   `uwt_transitions` block of the diagnostics, which keeps the last 200 events
+   of the account even when more than 12 lines per device and hour fall back
+   to debug level) and the rows in `coordinator.devices` of the diagnostics.
    Do not use the history of the protection mode binary sensor: it is written
    with the next coordinator update, so its time stamps do not show when the
    mode changed.
-5. The log line `AUTOMATIC_POLLING_CHANGE canonical=<id> new=off changed=<UTC>`
+6. The log line
+   `AUTOMATIC_POLLING_CHANGE canonical=<id> new=<on or off> changed=<UTC>`
    (logger `custom_components.googlefindmy.coordinator.main` at `info`) and
    `automatic_polling_changed_at` date each swap. `locate_requests_auto` and
    `locate_requests_manual` count the requests that were actually sent since
    `locate_requests_counted_since`; a restart or reload resets them, and a retry
    after a server error counts again. `uwt_device_index` tells which events
    belong to which row.
-6. Limits: changes are only seen while Home Assistant receives the tracker over
-   Bluetooth; the device list is still fetched for the whole account; requests
-   from the Find Hub app or other tools are not visible here.
-7. What to post: for each role the period, the number of `new=on` events per
-   tracker, the counters and your integration version. No device names, keys or
-   coordinates.
+7. Limits: changes of the mode are only seen while Home Assistant receives the
+   tracker over Bluetooth; requests from the Find Hub app or other tools are
+   not visible here. The switch only stops automatic location requests;
+   locating by hand or by an automation still sends them. The device list is
+   still fetched for the whole account about every five minutes, for both
+   trackers alike. A result without a difference between A and B therefore
+   says something about the location requests only, not about the device list
+   or the integration as a whole. To cover those as well, you can add a period
+   with the integration disabled and note the ringing in the same way; no log
+   lines or counters are written during that period.
+8. What to post: whether an Android phone of the account was near the
+   trackers during the comparison (yes, no, or iPhone only); for each role,
+   and for a period with the integration disabled if you had one: the period,
+   your ringing notes from step 4, the number of `FMDN_UWT_TRANSITION` lines
+   with `new=on` per tracker (or of `uwt_transitions` events with `new` `on`),
+   the counters and your integration version. No device names, keys, EIDs,
+   coordinates or e-mail addresses.
 
 ## Privacy and Security
 
