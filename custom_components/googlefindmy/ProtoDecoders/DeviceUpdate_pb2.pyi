@@ -530,11 +530,15 @@ class IdentitfierInformation(Message, _MessageProto):
     ) -> None: ...
 
 class PhoneInformation(Message, _MessageProto):
-    __slots__ = ("canonicIds",)
+    __slots__ = ("canonicIds", "phoneInformationField1")
     CANONICIDS_FIELD_NUMBER: _ClassVar[int]
+    PHONEINFORMATIONFIELD1_FIELD_NUMBER: _ClassVar[int]
     canonicIds: CanonicIds
+    phoneInformationField1: int
     def __init__(
-        self, canonicIds: CanonicIds | _Mapping[str, _Any] | None = ...
+        self,
+        canonicIds: CanonicIds | _Mapping[str, _Any] | None = ...,
+        phoneInformationField1: int | None = ...,
     ) -> None: ...
 
 class CanonicIds(Message, _MessageProto):
@@ -824,6 +828,7 @@ class RecentLocationAndNetworkLocations(Message, _MessageProto):
         "minLocationsNeededForAggregation",
         "recentField8",
         "recentField11",
+        "recentField7",
     )
     RECENTLOCATION_FIELD_NUMBER: _ClassVar[int]
     RECENTLOCATIONTIMESTAMP_FIELD_NUMBER: _ClassVar[int]
@@ -832,6 +837,7 @@ class RecentLocationAndNetworkLocations(Message, _MessageProto):
     MINLOCATIONSNEEDEDFORAGGREGATION_FIELD_NUMBER: _ClassVar[int]
     RECENTFIELD8_FIELD_NUMBER: _ClassVar[int]
     RECENTFIELD11_FIELD_NUMBER: _ClassVar[int]
+    RECENTFIELD7_FIELD_NUMBER: _ClassVar[int]
     recentLocation: _Common_pb2.LocationReport
     recentLocationTimestamp: _Common_pb2.Time
     networkLocations: _containers.RepeatedCompositeFieldContainer[
@@ -843,6 +849,7 @@ class RecentLocationAndNetworkLocations(Message, _MessageProto):
     minLocationsNeededForAggregation: int
     recentField8: _containers.RepeatedScalarFieldContainer[int]
     recentField11: _containers.RepeatedScalarFieldContainer[int]
+    recentField7: int
     def __init__(
         self,
         recentLocation: _Common_pb2.LocationReport | _Mapping[str, _Any] | None = ...,
@@ -854,6 +861,7 @@ class RecentLocationAndNetworkLocations(Message, _MessageProto):
         minLocationsNeededForAggregation: int | None = ...,
         recentField8: _Iterable[int] | None = ...,
         recentField11: _Iterable[int] | None = ...,
+        recentField7: int | None = ...,
     ) -> None: ...
 
 class AccessInformation(Message, _MessageProto):

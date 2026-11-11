@@ -268,6 +268,8 @@ _SECRET_PROTO_FIELDS: frozenset[str] = frozenset(
         "metadataField10",
         "metadataField11",
         "metadataField13",
+        # Observed on 2026-11-11, meaning unknown: a varint above 255 on a phone's identifier message.
+        "phoneInformationField1",
         "phoneInformation",
         "phoneNumber",
         "privateKey",

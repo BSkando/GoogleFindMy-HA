@@ -189,6 +189,7 @@ enum IdentifierInformationType {
 
 message PhoneInformation {
   CanonicIds canonicIds = 2;
+  uint64 phoneInformationField1 = 1; // Meaning unknown, observed 2026-11-11: varint above 255, once per account on a phone (Spot@55f87f62 names the message PhoneIdentifierInformation)
 }
 
 message CanonicIds {
@@ -296,6 +297,7 @@ message RecentLocationAndNetworkLocations {
   // follow the charge state shown in the app (three measurements).
   repeated uint64 recentField8 = 8;
   repeated uint64 recentField11 = 11;
+  uint64 recentField7 = 7; // Meaning unknown, observed 2026-11-11: varint, value 4, seen only on aggregated reports (2 cases)
 }
 
 enum SpotDeviceType {
