@@ -327,7 +327,7 @@ Fields seen on the wire that Spot does not name are declared under neutral names
 | `DeviceMetadata.metadataField11` (11) | length-delimited | text, 19 or 44 characters | device list | 2026-11-10 |
 | `DeviceMetadata.metadataField12` (12) | length-delimited | `Time` form | device list | 2026-11-10 |
 | `DeviceMetadata.metadataField13` (13) | length-delimited | text, 32 characters | device list | 2026-11-10 |
-| `DeviceMetadata.SupportedActions.supportedActionsField2` (2) | varint | 1, 2 (Spot: `bool isSupported`) | every device | 2026-11-10 |
+| `DeviceMetadata.SupportedActions.supportedActionsField2` (2) | varint | 1, 2 | device list | 2026-11-10 |
 | `DeviceRegistration.registrationField15` (15) | length-delimited | text, 36 characters | device list | 2026-11-10 |
 | `DeviceRegistration.registrationField22` (22) | varint | 1 | device list | 2026-11-10 |
 | `DeviceRegistration.registrationField38` (38) | length-delimited | text, 7 or 11 characters | device list | 2026-11-10 |

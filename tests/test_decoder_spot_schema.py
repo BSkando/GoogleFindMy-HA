@@ -843,3 +843,28 @@ def test_form_comments_are_qualified() -> None:
     ]
     assert len(detail_lines) == 1
     assert "form: DeviceComponentDetail" in detail_lines[0]
+
+
+def test_fmdn_s8_5_lists_every_neutral_field() -> None:
+    """Every field declared under a neutral name has a row in FMDN S8.5, and no other."""
+    declared = set(
+        re.findall(
+            r"\b([a-z][A-Za-z]*Field[0-9]+) = ",
+            _PROTO_PATH.read_text(encoding="utf-8"),
+        )
+    )
+    section = re.search(
+        r"^### S8\.5 .*?(?=^### |^---$)",
+        _FMDN_DOC.read_text(encoding="utf-8"),
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    assert section is not None
+    listed = set(
+        re.findall(
+            r"^\| `[A-Za-z0-9.]*\.([a-z][A-Za-z]*Field[0-9]+)`",
+            section.group(0),
+            flags=re.MULTILINE,
+        )
+    )
+    assert declared
+    assert listed == declared
