@@ -194,8 +194,9 @@ async def async_get_eid_info(
         )
         raise
 
-    # Account-wide response: the kind alone keys the comparison.
-    log_unknown_fields("eid_response", "", "account", [eid_info])
+    # Account-wide response: the config entry keys the comparison slot.
+    entry_slot = getattr(cache, "entry_id", None) or ""
+    log_unknown_fields("eid_response", entry_slot, "account", [eid_info])
     return eid_info
 
 

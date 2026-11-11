@@ -63,8 +63,9 @@ Format decisions (where the plan left a choice, decided once for all cases):
   values and order do not count.
 * Kinds used by the four call sites: ``device_list`` (per device, label
   ``userDefinedDeviceName``), ``device_update`` (label ditto), ``location``
-  (label the device name of the ``DeviceUpdate``), ``eid_response`` (label
-  ``account``, key only the kind).
+  (label the device name of the ``DeviceUpdate``, keyed by the first canonical
+  ID, phone branch first), ``eid_response`` (label ``account``, keyed by the
+  config entry ID).
 """
 
 from __future__ import annotations
@@ -76,6 +77,7 @@ import struct
 from collections.abc import Iterable, Sequence
 from importlib import import_module
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -1269,8 +1271,18 @@ def test_device_update_fail_safe(
     _assert_fail_safe_record(caplog, word)
 
 
-async def _decrypt_one_location(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
-    """Run the decryption path once; the decrypted Location carries ``#9``."""
+async def _decrypt_one_location(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    branch: str = "tracker",
+    device_id: str | None = None,
+    field: int = 9,
+) -> list[Any]:
+    """Run the decryption path once; the decrypted Location carries ``#<field>``.
+
+    ``branch`` places the canonical ID in the tracker branch, the phone branch
+    or nowhere (``"none"``).
+    """
     base_now = 1_700_000_000.0
     monkeypatch.setattr(decrypt_locations.time, "time", lambda: base_now)
     location = DeviceUpdate_pb2.Location()
@@ -1278,7 +1290,7 @@ async def _decrypt_one_location(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     location.longitude = int(2.0 * 1e7)
     location.altitude = 3
     location_bytes = location.SerializeToString() + _vf(
-        _free(DeviceUpdate_pb2.Location, 9), 4
+        _free(DeviceUpdate_pb2.Location, field), 4
     )
     identity_key = secrets.token_bytes(32)
 
@@ -1293,9 +1305,13 @@ async def _decrypt_one_location(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
 
     update = DeviceUpdate_pb2.DeviceUpdate()
     update.deviceMetadata.userDefinedDeviceName = _NAME
-    update.deviceMetadata.identifierInformation.canonicIds.canonicId.add().id = (
-        secrets.token_hex(16)
-    )
+    ident = update.deviceMetadata.identifierInformation
+    if branch == "tracker":
+        ident.canonicIds.canonicId.add().id = device_id or secrets.token_hex(16)
+    elif branch == "phone":
+        ident.phoneInformation.canonicIds.canonicId.add().id = (
+            device_id or secrets.token_hex(16)
+        )
     update.deviceMetadata.information.deviceRegistration.SetInParent()
     recent = update.deviceMetadata.information.locationInformation.reports.recentLocationAndNetworkLocations
     recent.recentLocationTimestamp.seconds = int(base_now - 60)
@@ -1351,8 +1367,14 @@ def _eid_response_bytes() -> bytes:
     )
 
 
-def _patch_spot(monkeypatch: pytest.MonkeyPatch, body: bytes) -> None:
-    async def _spot(*_args: object, **_kwargs: object) -> bytes:
+def _patch_spot(
+    monkeypatch: pytest.MonkeyPatch, body: bytes | dict[str, bytes]
+) -> None:
+    """Serve ``body``; a mapping answers per ``cache.entry_id``."""
+
+    async def _spot(*_args: object, cache: object, **_kwargs: object) -> bytes:
+        if isinstance(body, dict):
+            return body[cast(str, getattr(cache, "entry_id"))]
         return body
 
     monkeypatch.setattr(get_eid_info_request, "_spot_call_async", _spot)
@@ -1387,6 +1409,94 @@ async def test_eid_response_fail_safe(
 
     assert result.SerializeToString() == body
     _assert_fail_safe_record(caplog, word)
+
+
+def _spy_device_refs(monkeypatch: pytest.MonkeyPatch, module: Any) -> list[str]:
+    """Record the comparison slot each call site hands to the helper."""
+    refs: list[str] = []
+    original = module.log_unknown_fields
+
+    def _spy(kind: str, device_ref: str, *args: Any, **kwargs: Any) -> None:
+        refs.append(device_ref)
+        original(kind, device_ref, *args, **kwargs)
+
+    monkeypatch.setattr(module, "log_unknown_fields", _spy)
+    return refs
+
+
+@pytest.mark.asyncio
+async def test_location_keys_phones_by_phone_branch(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _debug(caplog)
+    phone_a, phone_b = secrets.token_hex(16), secrets.token_hex(16)
+
+    for device_id, field in ((phone_a, 9), (phone_b, 10)) * 2:
+        await _decrypt_one_location(
+            monkeypatch, branch="phone", device_id=device_id, field=field
+        )
+
+    assert _lines(caplog) == [
+        f"Unknown protobuf fields (location) for {_NAME}: Location.#9=varint:4",
+        f"Unknown protobuf fields (location) for {_NAME}: Location.#10=varint:4",
+    ]
+    assert phone_a not in caplog.text
+    assert phone_b not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_location_without_any_id_keeps_the_empty_slot(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _debug(caplog)
+    refs = _spy_device_refs(monkeypatch, decrypt_locations)
+
+    await _decrypt_one_location(monkeypatch, branch="none")
+
+    assert refs == [""]
+
+
+@pytest.mark.asyncio
+async def test_eid_response_keys_by_config_entry(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _debug(caplog)
+    entry_a, entry_b = secrets.token_hex(16), secrets.token_hex(16)
+    response = DeviceUpdate_pb2.GetEidInfoForE2eeDevicesResponse
+    _patch_spot(
+        monkeypatch,
+        {
+            entry_a: response().SerializeToString() + _vf(_free(response, 7), 3),
+            entry_b: response().SerializeToString() + _vf(_free(response, 8), 3),
+        },
+    )
+
+    for entry_id in (entry_a, entry_b) * 2:
+        await get_eid_info_request.async_get_eid_info(
+            cache=cast(Any, SimpleNamespace(entry_id=entry_id))
+        )
+
+    assert _lines(caplog) == [
+        "Unknown protobuf fields (eid_response) for account: "
+        "GetEidInfoForE2eeDevicesResponse.#7=varint:3",
+        "Unknown protobuf fields (eid_response) for account: "
+        "GetEidInfoForE2eeDevicesResponse.#8=varint:3",
+    ]
+    assert entry_a not in caplog.text
+    assert entry_b not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_eid_response_without_entry_id_keeps_the_empty_slot(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _debug(caplog)
+    refs = _spy_device_refs(monkeypatch, get_eid_info_request)
+    _patch_spot(monkeypatch, _eid_response_bytes())
+
+    await get_eid_info_request.async_get_eid_info(cache=cast(Any, object()))
+
+    assert refs == [""]
 
 
 def test_helper_fail_safe(

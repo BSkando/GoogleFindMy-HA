@@ -62,6 +62,7 @@ from custom_components.googlefindmy.NovaApi.ExecuteAction.LocateTracker.foreign_
     foreign_device_key,
 )
 from custom_components.googlefindmy.ProtoDecoders.decoder import (
+    _first_canonic_id,
     parse_device_update_protobuf,
     trackable_components_of,
 )
@@ -2152,7 +2153,7 @@ async def async_decrypt_location_response_locations(  # noqa: PLR0912, PLR0915
     if parsed_locations:
         log_unknown_fields(
             "location",
-            canonic_id or "",
+            _first_canonic_id(getattr(device_update_protobuf, "deviceMetadata", None)),
             getattr(
                 getattr(device_update_protobuf, "deviceMetadata", None),
                 "userDefinedDeviceName",
