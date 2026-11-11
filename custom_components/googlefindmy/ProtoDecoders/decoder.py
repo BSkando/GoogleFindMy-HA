@@ -501,15 +501,19 @@ def _first_canonic_id(device: object) -> str:
     """First usable canonical ID of a device message, else ``""``.
 
     Only the comparison slot of `log_unknown_fields` uses it; it is never
-    logged. The phone branch is read first, as in `get_canonic_ids`.
+    logged. The phone branch is read first, as in `get_canonic_ids`. Never
+    raises an Exception: call sites evaluate it before the helper's own guard.
     """
-    info = getattr(device, "identifierInformation", None)
-    for holder in (getattr(info, "phoneInformation", None), info):
-        entries = getattr(getattr(holder, "canonicIds", None), "canonicId", None)
-        for entry in entries if entries is not None else ():
-            value = getattr(entry, "id", None)
-            if isinstance(value, str) and value:
-                return value
+    try:
+        info = getattr(device, "identifierInformation", None)
+        for holder in (getattr(info, "phoneInformation", None), info):
+            entries = getattr(getattr(holder, "canonicIds", None), "canonicId", None)
+            for entry in entries if entries is not None else ():
+                value = getattr(entry, "id", None)
+                if isinstance(value, str) and value:
+                    return value
+    except Exception:  # noqa: BLE001 - a foreign object must not break decoding
+        return ""
     return ""
 
 

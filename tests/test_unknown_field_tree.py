@@ -79,6 +79,7 @@ from importlib import import_module
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import Mock
 
 import pytest
 
@@ -1409,6 +1410,20 @@ async def test_eid_response_fail_safe(
 
     assert result.SerializeToString() == body
     _assert_fail_safe_record(caplog, word)
+
+
+class _RaisingIdentifiers:
+    """Device-like object whose identifier lookup raises."""
+
+    @property
+    def identifierInformation(self) -> object:  # noqa: N802 - protobuf field name
+        raise RuntimeError("identifier lookup failed")
+
+
+@pytest.mark.parametrize("device", [Mock(), _RaisingIdentifiers()])
+def test_first_canonic_id_never_raises(device: object) -> None:
+    # Call sites evaluate the slot before the helper's own guard.
+    assert decoder._first_canonic_id(device) == ""
 
 
 def _spy_device_refs(monkeypatch: pytest.MonkeyPatch, module: Any) -> list[str]:
