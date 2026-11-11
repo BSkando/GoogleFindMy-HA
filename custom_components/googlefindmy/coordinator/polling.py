@@ -1987,6 +1987,11 @@ class PollingOperations(_MixinBase):
                 # kept apart so whoever reads the log can tell a configuration
                 # change from an outage.
                 cycle_unaccepted_devices = 0
+                # Trackers skipped at their turn because their automatic
+                # switch went off after the cycle was planned (#242). They were
+                # never asked, so the post-loop guards judge the cycle on the
+                # trackers that were: ``len(devices)`` minus these.
+                cycle_skipped_devices = 0
                 # True once ANY device in this cycle booked a transient auth
                 # failure. A cycle that books none zeroes
                 # `_consecutive_transient_auth_failures` after the loop: that is
@@ -2040,6 +2045,7 @@ class PollingOperations(_MixinBase):
                             idx + 1,
                             len(devices),
                         )
+                        cycle_skipped_devices += 1
                         continue
                     _LOGGER.debug(
                         "Sequential poll: requesting location for %s (%d/%d)",
@@ -2870,7 +2876,12 @@ class PollingOperations(_MixinBase):
                     if idx < len(devices) - 1 and self.device_poll_delay > 0:
                         await asyncio.sleep(self.device_poll_delay)
 
-                _LOGGER.debug("Completed polling cycle for %d devices", len(devices))
+                cycle_polled_devices = len(devices) - cycle_skipped_devices
+                _LOGGER.debug(
+                    "Completed polling cycle for %d devices (%d skipped)",
+                    cycle_polled_devices,
+                    cycle_skipped_devices,
+                )
                 if cycle_booked_transient_auth and not cycle_content_proofs:
                     # The cycle rejected and held no proof to the contrary, so the
                     # streak grows by exactly one and the threshold is judged once,
@@ -3098,7 +3109,7 @@ class PollingOperations(_MixinBase):
                 if (
                     cycle_unaccepted_devices
                     and (cycle_unaccepted_devices + cycle_rejected_devices)
-                    == len(devices)
+                    == cycle_polled_devices
                     and last_exception is None
                 ):
                     last_exception = UpdateFailed(
@@ -3120,7 +3131,7 @@ class PollingOperations(_MixinBase):
                 # unaccepted count to be zero for the equality to hold.
                 if (
                     cycle_rejected_devices
-                    and cycle_rejected_devices == len(devices)
+                    and cycle_rejected_devices == cycle_polled_devices
                     and last_exception is None
                 ):
                     last_exception = UpdateFailed(

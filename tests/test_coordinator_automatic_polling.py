@@ -44,6 +44,10 @@ from custom_components.googlefindmy.const import DOMAIN
 from custom_components.googlefindmy.coordinator import GoogleFindMyCoordinator
 from custom_components.googlefindmy.coordinator.helpers import locate_clock
 from custom_components.googlefindmy.NovaApi import nova_request as nova_request_module
+from custom_components.googlefindmy.NovaApi.ExecuteAction.LocateTracker.location_request import (
+    LocationRequestNotAcceptedError,
+)
+from custom_components.googlefindmy.NovaApi.nova_request import NovaAuthError
 from tests.helpers.config_entries_stub import make_config_entry
 from tests.helpers.locate_mixin_stub import LocateStub
 from tests.test_diagnostics_p1_per_device import (
@@ -347,6 +351,57 @@ async def test_counter_auto_zero_when_switched_off_during_cycle(
 
     assert _auto_count(coord, _DEV_ON["id"]) == 1
     assert _auto_count(coord, _DEV_OFF["id"]) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "key", "placeholders"),
+    [
+        (
+            LocationRequestNotAcceptedError(stage="server_error", status=503),
+            "locate_not_accepted",
+            {"not_accepted": "1", "rejected": "0"},
+        ),
+        (NovaAuthError(404, "gone"), "locate_all_rejected", {"rejected": "1"}),
+    ],
+    ids=["not_accepted", "all_rejected"],
+)
+async def test_switched_off_mid_cycle_does_not_hide_the_cycle_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+    key: str,
+    placeholders: dict[str, str],
+) -> None:
+    """(e2) A tracker skipped mid-cycle leaves the cycle's denominator (AP5-F1).
+
+    Both trackers were planned; the one that is on is refused, and the other
+    goes off at that moment and is skipped at its turn. Every tracker that was
+    asked was refused, so the cycle must report the same verdict as without the
+    skipped one, for both post-loop guards. Counting the skipped tracker in
+    ``len(devices)`` left each sum one short and the cycle read as success.
+    """
+    api = _DispatchingAPI()
+    coord = _make_coordinator(monkeypatch, options={}, api=api)
+    switch_off = _switch_off_later(coord)
+
+    async def _refuse(dev_id: str, _dev_name: str) -> Any:
+        api.calls.append(dev_id)
+        switch_off(dev_id)
+        raise error
+
+    api.async_get_device_location = _refuse  # type: ignore[method-assign]
+    coord._set_auth_state = lambda **_kwargs: None  # type: ignore[method-assign]
+    recorded: list[Exception] = []
+    coord.async_set_update_error = recorded.append  # type: ignore[method-assign]
+
+    await coord._async_start_poll_cycle([dict(d) for d in _DEVICES], force=True)
+    await _drain(coord)
+
+    # Reachability: the second tracker really was skipped, not polled.
+    assert api.calls == [_DEV_ON["id"]]
+    assert recorded, "the only asked tracker was refused and the cycle read as success"
+    assert getattr(recorded[-1], "translation_key", None) == key
+    assert recorded[-1].translation_placeholders == placeholders
 
 
 # ---------------------------------------------------------------------------

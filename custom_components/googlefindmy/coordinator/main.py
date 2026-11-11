@@ -2693,7 +2693,11 @@ class GoogleFindMyCoordinator(
         return (per_device.get("auto", 0), per_device.get("manual", 0))
 
     def locate_requests_counted_since(self) -> str | None:
-        """Return the UTC start of the request counter, ``None`` before any count."""
+        """Return the UTC start of the request counter.
+
+        The counter starts with the coordinator, so the stamp is set from then
+        on; ``None`` only when the coordinator was built without its counter.
+        """
         counts = getattr(self, "_locate_request_counts", None)
         if not isinstance(counts, LocateCounts):
             return None

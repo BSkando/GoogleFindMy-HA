@@ -261,6 +261,11 @@ Turning the switch on or off does not reload the integration. Each change
 writes one INFO line `AUTOMATIC_POLLING_CHANGE canonical=<id> new=<on|off>
 changed=<UTC>` without the device name.
 
+Both options store only the Google ids of your own trackers and the time of the
+last change, in the integration's options. Removing a tracker from Home
+Assistant does not remove its id from them: if the same tracker comes back, its
+switch is still off. The ids are deleted together with the integration entry.
+
 ### Map View link expiry (`map_view_token_expiration`)
 
 With this option **off** (the default), the Map View link on a device page is
