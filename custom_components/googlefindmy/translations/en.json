@@ -468,6 +468,11 @@
           "description": "Rotation windows of 1024 s to search on each side of the tracker's clock, trying other key and block forms against the target EIDs. 0 turns it off. It runs after the connection has closed, adds up to 5 minutes and loads the CPU meanwhile."
         }
       }
+    },
+    "trigger_device_refresh": {
+      "name": "Trigger device refresh",
+      "description": "Request an immediate data refresh for the Google account of the selected Google Find My button.",
+      "fields": {}
     }
   },
   "entity": {
@@ -575,9 +580,6 @@
           "semantic_name": {
             "name": "Semantic label"
           },
-          "battery_level": {
-            "name": "Battery level"
-          },
           "last_seen": {
             "name": "Last seen (reported)"
           },
@@ -636,9 +638,6 @@
           },
           "semantic_name": {
             "name": "Semantic label"
-          },
-          "battery_level": {
-            "name": "Battery level"
           },
           "last_seen": {
             "name": "Last seen (reported)"
@@ -733,9 +732,6 @@
           },
           "semantic_name": {
             "name": "Semantic label"
-          },
-          "battery_level": {
-            "name": "Battery level"
           },
           "last_seen": {
             "name": "Last seen (reported)"

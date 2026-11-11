@@ -1498,6 +1498,13 @@ class PollingOperations(_MixinBase):
                     slot = self._device_caps.setdefault(dev_id, {})
                     slot["can_ring"] = can_ring
 
+                # Google's product image (``get_device_image_url``). Only an
+                # allowed address is stored, and a list without one keeps the
+                # stored address instead of erasing it.
+                image_url = dev.get("image_url")
+                if decoder.is_allowed_image_url(image_url):
+                    self._device_caps.setdefault(dev_id, {})["image_url"] = image_url
+
             # 2.2) Seed the location cache with list-provided coordinates when available
             for dev in filtered_devices:
                 dev_id = dev["id"]

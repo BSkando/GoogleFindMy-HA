@@ -1,7 +1,10 @@
 # custom_components/googlefindmy/services.yaml
 # Purpose: Service descriptions aligned 1:1 with integration handlers in __init__.py
+#          and, for the entity service `trigger_device_refresh`, in button.py.
 # Notes:
-# - We keep a REQUIRED `device_id` field so handlers have a stable input.
+# - Services with a device picker keep a REQUIRED `device_id` field so handlers have
+#   a stable input. Entity services (registered per platform) have no `fields`;
+#   their target is the selected entity.
 # - Target uses **entity filter only** (domain + integration) for HA 2025.5+.
 #   Do not add `target.device` or `target.area`; entity filters are applied across UI.
 # - Error strings are translated by handlers via ServiceValidationError.
@@ -248,3 +251,13 @@ read_beacon_state:
           min: 0
           max: 256
           mode: box
+
+trigger_device_refresh:
+  name: Trigger device refresh
+  description: >-
+    Request an immediate data refresh for the Google account of the selected
+    Google Find My button.
+  target:
+    entity:
+      domain: button
+      integration: googlefindmy

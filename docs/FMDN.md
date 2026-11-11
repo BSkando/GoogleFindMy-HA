@@ -300,7 +300,7 @@ encryptedUserSecrets.encryptedIdentityKey:
 
 | Message | Field (number) | Declared | Spot shape |
 |---|---|---|---|
-| `DeviceMetadata` | `supportedActions` (2), `phoneInformation` (3) | `bytes` | `SupportedActions`, `DeviceMetadata.PhoneInformation` |
+| `DeviceMetadata` | `supportedActions` (2), `phoneInformation` (3) | `bytes` | `DeviceMetadata.SupportedActions`, `DeviceMetadata.PhoneInformation` |
 | `DeviceRegistration` | `canonicId` (1), `capabilities` (11) | `bytes` | `CanonicId`, `DeviceCapabilities` |
 | `DeviceRegistration` | `ringKey` (25), `recoveryKey` (26), `unwantedTrackingKey` (31) | `bytes`, key material | |
 | `DeviceRegistration` | `keyRotationInformation` (29), `lostModeInformation` (32), `firstSecretsCreationDate` (33) | `bytes` | nested messages, `Time` |
@@ -310,8 +310,45 @@ encryptedUserSecrets.encryptedIdentityKey:
 | `AccessInformation` | `sharingKeys` (7) | `bytes` | `SharingKeys` |
 | `EncryptedUserSecrets` | `sharingKeys` (6), `previousEikDate` (9) | `bytes` | `SharingKeys`, `Time` |
 | `SemanticLocation` | `semanticLocationIdentifier` (7) | `bytes` | nested message |
+| `DeviceMetadata` | `metadataField10` (10), `metadataField11` (11), `metadataField12` (12), `metadataField13` (13) | `bytes` | not in Spot; observed 2026-11-10: nested blob, text, `Time`, text |
+| `DeviceRegistration` | `registrationField15` (15), `registrationField38` (38), `registrationField40` (40) | `bytes` | not in Spot; observed 2026-11-10: text, text, `Time` |
+| `IdentitfierInformation` | `identifierField5` (5) | `bytes` | not in Spot; observed 2026-11-10: nested message |
 
-`ProtoDecoders/decoder.py` hides key material and personal data from developer output (`_SECRET_PROTO_FIELDS`, scalar fields by name). `DeviceRegistration` fields 15, 38, 40 and the `DeviceMetadata` root fields 11, 12, 13 stay undeclared: they are not in Spot, their meaning is unknown, and at least one text could have the form of a key. They remain visible as numbers only.
+`ProtoDecoders/decoder.py` hides key material and personal data from developer output (`_SECRET_PROTO_FIELDS`, scalar fields by name). Fields observed on 2026-11-10 that are not in Spot are declared under neutral names (`metadataField<N>`, `registrationField<N>`, `typeInformationField14`, `identifierField5`, `reportsField5`, `recentField8`/`recentField11`, `eidResponseField3`/`eidResponseField5`); their meaning is unknown. The text, identifier-like and blob fields among them are in `_SECRET_PROTO_FIELDS`. S8.5 lists every field declared under a neutral name. `DeviceMetadata.SupportedActions` keeps the Spot form: `type` is an `ExecuteActionType` whose set field number names the action (30, 31, 32 on trackers; 1, 2, 4, 5, 6, 7, 13, 14 on phones, declared as empty `ExecuteActionPhoneAction` messages), and field 2 is `supportedActionsField2` (`uint32`), because the wire carried 1 and 2. Unknown fields that remain are reported at DEBUG as `AGENTS.md` describes under **Schema-drift diagnostics**.
+
+### S8.5 Observed fields, meaning unknown
+
+Fields seen on the wire that Spot does not name are declared under neutral names. Nothing here states a meaning. Text and identifier-like values are never shown, only their shape.
+
+| Path (number) | Wire type | Observed values | Circumstance | First seen |
+|---|---|---|---|---|
+| `DeviceMetadata.metadataField8` (8) | varint | 6, 7, 11 | device list | 2026-11-10 |
+| `DeviceMetadata.metadataField10` (10) | length-delimited | nested message, about 800 bytes, key-like shape, never opened | device list | 2026-11-10 |
+| `DeviceMetadata.metadataField11` (11) | length-delimited | text, 19 or 44 characters | device list | 2026-11-10 |
+| `DeviceMetadata.metadataField12` (12) | length-delimited | `Time` form | device list | 2026-11-10 |
+| `DeviceMetadata.metadataField13` (13) | length-delimited | text, 32 characters | device list | 2026-11-10 |
+| `DeviceMetadata.SupportedActions.supportedActionsField2` (2) | varint | 1, 2 | device list | 2026-11-10 |
+| `DeviceRegistration.registrationField15` (15) | length-delimited | text, 36 characters | device list | 2026-11-10 |
+| `DeviceRegistration.registrationField22` (22) | varint | 1 | device list | 2026-11-10 |
+| `DeviceRegistration.registrationField38` (38) | length-delimited | text, 7 or 11 characters | device list | 2026-11-10 |
+| `DeviceRegistration.registrationField40` (40) | length-delimited | `Time` form | device list | 2026-11-10 |
+| `DeviceTypeInformation.typeInformationField14` (14) | varint | 2 | device list | 2026-11-10 |
+| `IdentitfierInformation.identifierField5` (5) | length-delimited | nested message, 42 bytes | device list | 2026-11-10 |
+| `LocationsAndTimestampsWrapper.reportsField5` (5) | varint | 1 | location reports | 2026-11-10 |
+| `RecentLocationAndNetworkLocations.recentField7` (7) | varint | 4 | only on aggregated reports (2 cases) | 2026-11-11 |
+| `RecentLocationAndNetworkLocations.recentField8` (8) | repeated varint | 1, 2, 3 (one per component on earbuds) | location reports | 2026-11-10 |
+| `RecentLocationAndNetworkLocations.recentField11` (11) | repeated varint | 2, 3, 4, 8, paired with `recentField8` | does not follow the charge state shown in the app (three measurements) | 2026-11-10 |
+| `GetEidInfoForE2eeDevicesResponse.eidResponseField3` (3) | length-delimited | 1 byte | account-wide EID response | 2026-11-10 |
+| `GetEidInfoForE2eeDevicesResponse.eidResponseField5` (5) | length-delimited | 4 bytes | account-wide EID response | 2026-11-10 |
+| `ExecuteActionType.phoneActionField1` (1) | length-delimited | empty message | phones only, inside `supportedActions` | 2026-11-10 |
+| `ExecuteActionType.phoneActionField2` (2) | length-delimited | empty message | phones only, inside `supportedActions` | 2026-11-10 |
+| `ExecuteActionType.phoneActionField4` (4) | length-delimited | empty message | phones only, inside `supportedActions` | 2026-11-10 |
+| `ExecuteActionType.phoneActionField5` (5) | length-delimited | empty message | phones only, inside `supportedActions` | 2026-11-10 |
+| `ExecuteActionType.phoneActionField6` (6) | length-delimited | empty message | phones only, inside `supportedActions` | 2026-11-10 |
+| `ExecuteActionType.phoneActionField7` (7) | length-delimited | empty message | phones only, inside `supportedActions` | 2026-11-10 |
+| `ExecuteActionType.phoneActionField13` (13) | length-delimited | empty message | phones only, inside `supportedActions` | 2026-11-10 |
+| `ExecuteActionType.phoneActionField14` (14) | length-delimited | empty message | phones only, inside `supportedActions` | 2026-11-10 |
+| `PhoneInformation.phoneInformationField1` (1) | varint | above 255 (value not logged) | phones, once per account | 2026-11-11 |
 
 ---
 

@@ -468,6 +468,11 @@
           "description": "Rotatievensters van 1024 s om aan elke kant van de klok van de tracker te doorzoeken, waarbij andere sleutel- en blokvormen tegen de gezochte EID's worden geprobeerd. 0 schakelt het uit. Het draait nadat de verbinding is gesloten, duurt tot 5 minuten langer en belast intussen de CPU."
         }
       }
+    },
+    "trigger_device_refresh": {
+      "name": "Apparaatvernieuwing starten",
+      "description": "Vraagt direct een gegevensvernieuwing aan voor het Google-account van de geselecteerde Google Find My-knop.",
+      "fields": {}
     }
   },
   "entity": {
@@ -575,9 +580,6 @@
           "semantic_name": {
             "name": "Semantisch label"
           },
-          "battery_level": {
-            "name": "Batterijniveau"
-          },
           "last_seen": {
             "name": "Laatst gezien (gerapporteerd)"
           },
@@ -636,9 +638,6 @@
           },
           "semantic_name": {
             "name": "Semantisch label"
-          },
-          "battery_level": {
-            "name": "Batterijniveau"
           },
           "last_seen": {
             "name": "Laatst gezien (gerapporteerd)"
@@ -733,9 +732,6 @@
           },
           "semantic_name": {
             "name": "Semantisch label"
-          },
-          "battery_level": {
-            "name": "Batterijniveau"
           },
           "last_seen": {
             "name": "Laatst gezien (gerapporteerd)"

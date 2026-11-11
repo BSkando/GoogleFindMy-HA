@@ -468,6 +468,11 @@
           "description": "Finestre di rotazione da 1024 s da cercare su ciascun lato dell'orologio del tracker, provando altre forme di chiave e di blocco sugli EID cercati. 0 la disattiva. Viene eseguita dopo la chiusura della connessione, aggiunge fino a 5 minuti e nel frattempo carica la CPU."
         }
       }
+    },
+    "trigger_device_refresh": {
+      "name": "Avvia aggiornamento dispositivi",
+      "description": "Richiede un aggiornamento immediato dei dati per l'account Google del pulsante Google Find My selezionato.",
+      "fields": {}
     }
   },
   "entity": {
@@ -575,9 +580,6 @@
           "semantic_name": {
             "name": "Etichetta semantica"
           },
-          "battery_level": {
-            "name": "Livello batteria"
-          },
           "last_seen": {
             "name": "Ultima volta visto (segnalato)"
           },
@@ -636,9 +638,6 @@
           },
           "semantic_name": {
             "name": "Etichetta semantica"
-          },
-          "battery_level": {
-            "name": "Livello batteria"
           },
           "last_seen": {
             "name": "Ultima volta visto (riportato)"
@@ -733,9 +732,6 @@
           },
           "semantic_name": {
             "name": "Etichetta semantica"
-          },
-          "battery_level": {
-            "name": "Livello batteria"
           },
           "last_seen": {
             "name": "Ultima volta visto (segnalato)"

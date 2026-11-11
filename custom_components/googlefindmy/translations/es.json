@@ -468,6 +468,11 @@
           "description": "Ventanas de rotación de 1024 s que se buscan a cada lado del reloj del rastreador, probando otras formas de clave y de bloque contra los EID buscados. 0 la desactiva. Se ejecuta después de cerrar la conexión, añade hasta 5 minutos y carga la CPU mientras tanto."
         }
       }
+    },
+    "trigger_device_refresh": {
+      "name": "Forzar actualización de dispositivos",
+      "description": "Solicita una actualización inmediata de datos para la cuenta de Google del botón de Google Find My seleccionado.",
+      "fields": {}
     }
   },
   "entity": {
@@ -575,9 +580,6 @@
           "semantic_name": {
             "name": "Etiqueta semántica"
           },
-          "battery_level": {
-            "name": "Nivel de batería"
-          },
           "last_seen": {
             "name": "Visto por última vez (informado)"
           },
@@ -636,9 +638,6 @@
           },
           "semantic_name": {
             "name": "Etiqueta semántica"
-          },
-          "battery_level": {
-            "name": "Nivel de batería"
           },
           "last_seen": {
             "name": "Visto por última vez (reportado)"
@@ -733,9 +732,6 @@
           },
           "semantic_name": {
             "name": "Etiqueta semántica"
-          },
-          "battery_level": {
-            "name": "Nivel de batería"
           },
           "last_seen": {
             "name": "Visto por última vez (informado)"

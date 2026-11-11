@@ -62,6 +62,7 @@ from custom_components.googlefindmy.NovaApi.ExecuteAction.LocateTracker.foreign_
     foreign_device_key,
 )
 from custom_components.googlefindmy.ProtoDecoders.decoder import (
+    _first_canonic_id,
     parse_device_update_protobuf,
     trackable_components_of,
 )
@@ -74,6 +75,7 @@ from custom_components.googlefindmy.SpotApi.GetEidInfoForE2eeDevices.get_owner_k
     async_get_owner_key,
 )
 from custom_components.googlefindmy.SpotApi.spot_request import SpotError
+from custom_components.googlefindmy.unknown_field_tree import log_unknown_fields
 from google.protobuf.message import DecodeError
 
 if TYPE_CHECKING:
@@ -2003,6 +2005,9 @@ async def async_decrypt_location_response_locations(  # noqa: PLR0912, PLR0915
     # decision can use the SAME validated real-coordinate predicate the callers use
     # (`is_real_location_record`), instead of a premature "decrypted to bytes" flag.
     structured: list[dict[str, Any]] = []
+    # Decrypted Location messages of this device and response, handed to the
+    # schema-drift diagnostic once after the loop (one signature per response).
+    parsed_locations: list[Any] = []
     for loc in wrapped:
         try:
             report_hint = _infer_report_hint(loc.status)  # may be None (conservative)
@@ -2051,6 +2056,7 @@ async def async_decrypt_location_response_locations(  # noqa: PLR0912, PLR0915
                         "Failed to parse Location protobuf; dropping one report: %s", de
                     )
                     continue
+                parsed_locations.append(proto_loc)
 
                 # --- Fail-fast coordinate validation (POPETS'25 §4) -----------------
                 # The protocol uses integer-scaled lat/lon (1e7). We validate *after* scaling.
@@ -2143,6 +2149,18 @@ async def async_decrypt_location_response_locations(  # noqa: PLR0912, PLR0915
                 "Failed to convert one WrappedLocation to structured payload: %s",
                 one_exc,
             )
+
+    if parsed_locations:
+        log_unknown_fields(
+            "location",
+            _first_canonic_id(getattr(device_update_protobuf, "deviceMetadata", None)),
+            getattr(
+                getattr(device_update_protobuf, "deviceMetadata", None),
+                "userDefinedDeviceName",
+                "",
+            ),
+            parsed_locations,
+        )
 
     # Diff-Review #1 / Codex (PR #1153): the device HAS its own encrypted reports
     # and EVERY one failed authentication (no own-report success), so THIS

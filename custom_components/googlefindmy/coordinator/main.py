@@ -260,7 +260,6 @@ _STATS_LOAD_SHUTDOWN_WAIT_S = 5.0
 
 # Fields consumed by get_active_device_identities from cached payloads/anchors.
 _PERSISTED_METADATA_KEYS: tuple[str, ...] = (
-    "battery_level",
     "device_type",
     "pair_date",
     "encrypted_account_key",
@@ -452,7 +451,6 @@ def _as_ha_attributes(row: dict[str, Any] | None) -> dict[str, Any] | None:
         "device_id": r.get("device_id") or r.get("id"),
         "status": r.get("status"),
         "semantic_name": r.get("semantic_name"),
-        "battery_level": r.get("battery_level"),
         "last_seen": last_seen_iso,
         "last_seen_utc": last_seen_utc,
         "source_label": r.get("source_label"),
@@ -2519,6 +2517,24 @@ class GoogleFindMyCoordinator(
             The display name as a string, or None.
         """
         return self._ensure_device_name_cache().get(device_id)
+
+    def get_device_image_url(self, device_id: str) -> str | None:
+        """Return Google's product image address of a device, if known.
+
+        Written by the poll cycle from the device list into
+        ``_device_caps[device_id]["image_url"]``; a list without an address keeps
+        the stored one. The address is a property of the device model, not a
+        location field, so it is kept outside the location cache: a cache row
+        holding only the address would count as a first observation for the
+        tracker (bootstrap of the last-good row) and make it available without
+        any position.
+        """
+        caps = getattr(self, "_device_caps", None) or {}
+        slot = caps.get(device_id)
+        if not isinstance(slot, Mapping):
+            return None
+        value = slot.get("image_url")
+        return value if decoder.is_allowed_image_url(value) else None
 
     def get_device_name_map(self) -> dict[str, str]:
         """Return a shallow copy of the internal device-id -> name mapping.

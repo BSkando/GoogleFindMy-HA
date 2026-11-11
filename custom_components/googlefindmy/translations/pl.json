@@ -468,6 +468,11 @@
           "description": "Okna rotacji po 1024 s przeszukiwane po obu stronach zegara trackera, z próbą innych form klucza i bloku względem szukanych EID. 0 wyłącza. Działa po zamknięciu połączenia, dodaje do 5 minut i w tym czasie obciąża procesor."
         }
       }
+    },
+    "trigger_device_refresh": {
+      "name": "Wymuś odświeżenie urządzeń",
+      "description": "Żąda natychmiastowego odświeżenia danych dla konta Google wybranego przycisku Google Find My.",
+      "fields": {}
     }
   },
   "entity": {
@@ -575,9 +580,6 @@
           "semantic_name": {
             "name": "Etykieta semantyczna"
           },
-          "battery_level": {
-            "name": "Poziom baterii"
-          },
           "last_seen": {
             "name": "Ostatnio widziano (zgłoszone)"
           },
@@ -636,9 +638,6 @@
           },
           "semantic_name": {
             "name": "Etykieta semantyczna"
-          },
-          "battery_level": {
-            "name": "Poziom baterii"
           },
           "last_seen": {
             "name": "Ostatnio widziany (zgłoszone)"
@@ -733,9 +732,6 @@
           },
           "semantic_name": {
             "name": "Etykieta semantyczna"
-          },
-          "battery_level": {
-            "name": "Poziom baterii"
           },
           "last_seen": {
             "name": "Ostatnio widziano (zgłoszone)"

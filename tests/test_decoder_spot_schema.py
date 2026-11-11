@@ -9,10 +9,13 @@ length-delimited fields on this path are therefore ``bytes``.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from google.protobuf.unknown_fields import UnknownFieldSet
 
 from custom_components.googlefindmy.ProtoDecoders import (
     Common_pb2,
@@ -75,7 +78,15 @@ _PARSE_PATH_DECLARED_BEFORE = frozenset(
 )
 
 _NEW_BYTES_FIELDS: dict[str, tuple[str, ...]] = {
-    "DeviceMetadata": ("supportedActions", "phoneInformation"),
+    "DeviceMetadata": (
+        "supportedActions",
+        "phoneInformation",
+        # Observed on 2026-11-10, meaning unknown.
+        "metadataField10",
+        "metadataField11",
+        "metadataField12",
+        "metadataField13",
+    ),
     "ImageInformation": ("componentImages",),
     "AccessInformation": ("sharingKeys",),
     "DeviceRegistration": (
@@ -87,6 +98,10 @@ _NEW_BYTES_FIELDS: dict[str, tuple[str, ...]] = {
         "unwantedTrackingKey",
         "lostModeInformation",
         "firstSecretsCreationDate",
+        # Observed on 2026-11-10, meaning unknown.
+        "registrationField15",
+        "registrationField38",
+        "registrationField40",
     ),
     "DeviceTypeInformation": (
         "userDefinedName",
@@ -96,6 +111,8 @@ _NEW_BYTES_FIELDS: dict[str, tuple[str, ...]] = {
     ),
     "EncryptedUserSecrets": ("sharingKeys", "previousEikDate"),
     "SemanticLocation": ("semanticLocationIdentifier",),
+    # Observed on 2026-11-10, meaning unknown.
+    "IdentitfierInformation": ("identifierField5",),
 }
 
 # Foreign content: invalid UTF-8, then a truncated length-delimited field.
@@ -268,6 +285,16 @@ _NOT_SECRET_NAMES = frozenset(
         "publicKeyId",
         # No personal data of their own.
         "thisAccount",
+        # Empty action messages of `ExecuteActionType` on phones (2026-11-10):
+        # the field number names the action, there is no content to hide.
+        "phoneActionField1",
+        "phoneActionField2",
+        "phoneActionField4",
+        "phoneActionField5",
+        "phoneActionField6",
+        "phoneActionField7",
+        "phoneActionField13",
+        "phoneActionField14",
         # Containers: their leaves are checked one by one.
         "accessInformation",
         "phoneIdentifierInformation",
@@ -587,3 +614,257 @@ def test_device_row_survives_garbage_capabilities() -> None:
     device.information.deviceRegistration.capabilities = _GARBAGE[1]
     rows = decoder.get_devices_with_location(device_list)
     assert rows[0]["trackable_components"] is None
+
+
+# --- Fields observed on 2026-11-10 ------------------------------------------
+#
+# Expected values come from the live wire types measured on 2026-11-10, not from
+# the schema: varint fields carried small numbers, length-delimited fields text,
+# a nested message or the `Time` shape `{#1 varint, #2 varint}`. The payloads
+# below are synthetic and carry no identifier.
+
+_PROTO_PATH = Path(DeviceUpdate_pb2.__file__).with_name("DeviceUpdate.proto")
+_FMDN_DOC = Path(__file__).resolve().parents[1] / "docs" / "FMDN.md"
+_PHONE_ACTION_NUMBERS = (1, 2, 4, 5, 6, 7, 13, 14)
+
+
+def _varint(value: int) -> bytes:
+    out = bytearray()
+    while value > 0x7F:
+        out.append(value & 0x7F | 0x80)
+        value >>= 7
+    out.append(value)
+    return bytes(out)
+
+
+def _varint_field(number: int, value: int) -> bytes:
+    return _varint(number << 3) + _varint(value)
+
+
+def _len_field(number: int, payload: bytes) -> bytes:
+    return _varint(number << 3 | 2) + _varint(len(payload)) + payload
+
+
+_TIME_SHAPE = _varint_field(1, 1_700_000_000) + _varint_field(2, 5)
+_NESTED_SHAPE = _len_field(19, _varint_field(3, 1))
+
+# (message, field number, wire bytes, declared field, expected value)
+_OBSERVED: tuple[tuple[str, int, bytes, str, object], ...] = (
+    ("DeviceMetadata", 8, _varint_field(8, 7), "metadataField8", 7),
+    (
+        "DeviceMetadata",
+        10,
+        _len_field(10, _NESTED_SHAPE),
+        "metadataField10",
+        _NESTED_SHAPE,
+    ),
+    (
+        "DeviceMetadata",
+        11,
+        _len_field(11, b"synthetic-text"),
+        "metadataField11",
+        b"synthetic-text",
+    ),
+    ("DeviceMetadata", 12, _len_field(12, _TIME_SHAPE), "metadataField12", _TIME_SHAPE),
+    ("DeviceMetadata", 13, _len_field(13, b"t" * 32), "metadataField13", b"t" * 32),
+    (
+        "DeviceRegistration",
+        15,
+        _len_field(15, b"u" * 36),
+        "registrationField15",
+        b"u" * 36,
+    ),
+    ("DeviceRegistration", 22, _varint_field(22, 1), "registrationField22", 1),
+    (
+        "DeviceRegistration",
+        38,
+        _len_field(38, b"v" * 7),
+        "registrationField38",
+        b"v" * 7,
+    ),
+    (
+        "DeviceRegistration",
+        40,
+        _len_field(40, _TIME_SHAPE),
+        "registrationField40",
+        _TIME_SHAPE,
+    ),
+    ("DeviceTypeInformation", 14, _varint_field(14, 11), "typeInformationField14", 11),
+    (
+        "IdentitfierInformation",
+        5,
+        _len_field(5, _NESTED_SHAPE),
+        "identifierField5",
+        _NESTED_SHAPE,
+    ),
+    ("LocationsAndTimestampsWrapper", 5, _varint_field(5, 2), "reportsField5", 2),
+    (
+        "RecentLocationAndNetworkLocations",
+        8,
+        b"".join(_varint_field(8, v) for v in (1, 2, 3)),
+        "recentField8",
+        [1, 2, 3],
+    ),
+    (
+        "RecentLocationAndNetworkLocations",
+        11,
+        b"".join(_varint_field(11, v) for v in (3, 3, 3)),
+        "recentField11",
+        [3, 3, 3],
+    ),
+    (
+        "GetEidInfoForE2eeDevicesResponse",
+        3,
+        _len_field(3, b"\x01"),
+        "eidResponseField3",
+        b"\x01",
+    ),
+    (
+        "GetEidInfoForE2eeDevicesResponse",
+        5,
+        _len_field(5, b"\x02" * 4),
+        "eidResponseField5",
+        b"\x02" * 4,
+    ),
+    ("RecentLocationAndNetworkLocations", 7, _varint_field(7, 4), "recentField7", 4),
+    (
+        "PhoneInformation",
+        1,
+        _varint_field(1, 2**40 + 7),
+        "phoneInformationField1",
+        2**40 + 7,
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("message_name", "number", "wire", "field_name", "expected"),
+    _OBSERVED,
+    ids=[f"{row[0]}.{row[1]}" for row in _OBSERVED],
+)
+def test_observed_fields_parse_with_live_wire_types(
+    message_name: str, number: int, wire: bytes, field_name: str, expected: object
+) -> None:
+    message_cls = getattr(DeviceUpdate_pb2, message_name)
+    parsed = message_cls.FromString(wire)
+    assert message_cls.DESCRIPTOR.fields_by_name[field_name].number == number
+    value = getattr(parsed, field_name)
+    assert (list(value) if isinstance(expected, list) else value) == expected
+
+
+@pytest.mark.parametrize(
+    ("message_name", "number", "wire", "field_name", "expected"),
+    _OBSERVED,
+    ids=[f"{row[0]}.{row[1]}" for row in _OBSERVED],
+)
+def test_observed_fields_leave_no_unknown_field(
+    message_name: str, number: int, wire: bytes, field_name: str, expected: object
+) -> None:
+    del field_name, expected
+    parsed = getattr(DeviceUpdate_pb2, message_name).FromString(wire)
+    assert [f.field_number for f in UnknownFieldSet(parsed)] == [], number
+
+
+def _supported_action_wire(action_number: int, flag: int) -> bytes:
+    return _len_field(1, _len_field(action_number, b"")) + _varint_field(2, flag)
+
+
+@pytest.mark.parametrize(
+    ("action_number", "field_name"),
+    [(30, "locateTracker"), (31, "startSound"), (32, "stopSound")]
+    + [(n, f"phoneActionField{n}") for n in _PHONE_ACTION_NUMBERS],
+)
+def test_supported_actions_form_matches_the_wire(
+    action_number: int, field_name: str
+) -> None:
+    """The action is the set field number inside `type`; `#2` carried 1 and 2."""
+    wire = _supported_action_wire(action_number, 2)
+    parsed = DeviceUpdate_pb2.DeviceMetadata.SupportedActions.FromString(wire)
+    assert parsed.type.HasField(field_name)
+    assert parsed.supportedActionsField2 == 2
+    assert list(UnknownFieldSet(parsed)) == []
+    assert list(UnknownFieldSet(parsed.type)) == []
+    assert parsed.SerializeToString() == wire
+
+
+def test_component_detail_carries_component_information() -> None:
+    """`detail` has the shape of `DeviceComponentInformation` (measured)."""
+    detail = _len_field(1, b"https://example.invalid/x.png") + _varint_field(2, 1)
+    info = DeviceUpdate_pb2.DeviceComponentInformation.FromString(detail)
+    assert info.imageUrl == "https://example.invalid/x.png"
+    assert info.deviceComponent == 1
+    assert list(UnknownFieldSet(info)) == []
+    lines = [
+        line
+        for line in _PROTO_PATH.read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith("bytes detail = 2;")
+    ]
+    assert len(lines) == 1
+    assert "form: DeviceComponentInformation" in lines[0]
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "metadataField10",
+        "metadataField11",
+        "metadataField13",
+        "registrationField15",
+        "registrationField38",
+        "identifierField5",
+        "eidResponseField3",
+        "eidResponseField5",
+        "phoneInformationField1",
+    ],
+)
+def test_observed_text_fields_are_redacted(field_name: str) -> None:
+    """Text, identifier-like and blob fields of unknown meaning stay hidden."""
+    assert field_name in decoder._SECRET_PROTO_FIELDS
+
+
+def test_no_battery_wording_in_schema() -> None:
+    """No observed field is a cloud battery level (three measurements)."""
+    assert "batter" not in _PROTO_PATH.read_text(encoding="utf-8").lower()
+
+
+def test_form_comments_are_qualified() -> None:
+    """`form:` names are qualified, so the form table can be checked against them."""
+    proto = _PROTO_PATH.read_text(encoding="utf-8")
+    assert re.search(r"form: SupportedActions\b", proto) is None
+    rows = [
+        line
+        for line in _FMDN_DOC.read_text(encoding="utf-8").splitlines()
+        if "`supportedActions` (2)" in line
+    ]
+    assert len(rows) == 1
+    assert "`DeviceMetadata.SupportedActions`" in rows[0]
+    detail_lines = [
+        line for line in proto.splitlines() if "componentDetails = 15;" in line
+    ]
+    assert len(detail_lines) == 1
+    assert "form: DeviceComponentDetail" in detail_lines[0]
+
+
+def test_fmdn_s8_5_lists_every_neutral_field() -> None:
+    """Every field declared under a neutral name has a row in FMDN S8.5, and no other."""
+    declared = set(
+        re.findall(
+            r"\b([a-z][A-Za-z]*Field[0-9]+) = ",
+            _PROTO_PATH.read_text(encoding="utf-8"),
+        )
+    )
+    section = re.search(
+        r"^### S8\.5 .*?(?=^### |^---$)",
+        _FMDN_DOC.read_text(encoding="utf-8"),
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    assert section is not None
+    listed = set(
+        re.findall(
+            r"^\| `[A-Za-z0-9.]*\.([a-z][A-Za-z]*Field[0-9]+)`",
+            section.group(0),
+            flags=re.MULTILINE,
+        )
+    )
+    assert declared
+    assert listed == declared

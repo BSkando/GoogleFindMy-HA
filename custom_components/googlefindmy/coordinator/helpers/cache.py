@@ -88,7 +88,6 @@ DEFAULT_SNAPSHOT_FIELDS = (
     "status",
     "is_own_report",
     "semantic_name",
-    "battery_level",
 )
 
 # Status strings for location data freshness
@@ -162,7 +161,6 @@ def build_base_snapshot_entry(device_dict: dict[str, Any]) -> dict[str, Any]:
         "status": STATUS_WAITING,
         "is_own_report": None,
         "semantic_name": None,
-        "battery_level": None,
     }
 
 

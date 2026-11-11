@@ -468,6 +468,11 @@
           "description": "Janelas de rotação de 1024 s a pesquisar de cada lado do relógio do localizador, experimentando outras formas de chave e de bloco contra os EID procurados. 0 desativa. Corre depois de fechar a ligação, acrescenta até 5 minutos e entretanto carrega a CPU."
         }
       }
+    },
+    "trigger_device_refresh": {
+      "name": "Acionar atualização de dispositivos",
+      "description": "Solicita uma atualização imediata dos dados da conta Google do botão do Google Find My selecionado.",
+      "fields": {}
     }
   },
   "entity": {
@@ -575,9 +580,6 @@
           "semantic_name": {
             "name": "Rótulo semântico"
           },
-          "battery_level": {
-            "name": "Nível da bateria"
-          },
           "last_seen": {
             "name": "Visto pela última vez (relatado)"
           },
@@ -636,9 +638,6 @@
           },
           "semantic_name": {
             "name": "Etiqueta semântica"
-          },
-          "battery_level": {
-            "name": "Nível de bateria"
           },
           "last_seen": {
             "name": "Visto pela última vez (reportado)"
@@ -733,9 +732,6 @@
           },
           "semantic_name": {
             "name": "Rótulo semântico"
-          },
-          "battery_level": {
-            "name": "Nível da bateria"
           },
           "last_seen": {
             "name": "Visto pela última vez (relatado)"

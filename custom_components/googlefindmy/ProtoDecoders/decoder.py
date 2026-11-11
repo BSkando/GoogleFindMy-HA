@@ -15,11 +15,7 @@ import subprocess
 from collections.abc import Iterable
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, Protocol
-
-# Imported at module load (integration setup runs in the executor): the probe
-# runs on the event loop, where a lazy ``import_module`` would be blocking
-# filesystem work (AGENTS.md 11.3).
-from google.protobuf.unknown_fields import UnknownFieldSet
+from urllib.parse import urlsplit
 
 from google.protobuf.message import DecodeError, Message
 
@@ -39,6 +35,7 @@ from custom_components.googlefindmy.ProtoDecoders import (
     DeviceUpdate_pb2,
     LocationReportsUpload_pb2,
 )
+from custom_components.googlefindmy.unknown_field_tree import log_unknown_fields
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -170,40 +167,6 @@ def _get_text_format() -> Any:
     return _text_format_module
 
 
-def _unknown_field_numbers(message: Message) -> list[int]:
-    """Field numbers of the unknown fields a decoded message carries.
-
-    Read from the runtime's unknown-field set of the message and of every
-    known sub-message it holds (``str(message)`` omits unknown fields on
-    current protobuf runtimes, so the old probe never fired). The numbers are
-    schema drift diagnostics, the values behind them are wire content and are
-    not returned. No text serialisation: this runs on the event loop inside
-    the DEBUG branch of the device-list walk, twice per poll, and a
-    ``text_format`` pass over every device message would stall the loop for
-    large lists (``AGENTS.md`` 11.3, async-first).
-    """
-    if not isinstance(message, Message):
-        # Test doubles stand in for the message in the debug branch.
-        return []
-    numbers: set[int] = set()
-    pending: list[Message] = [message]
-    while pending:
-        current = pending.pop()
-        numbers.update(field.field_number for field in UnknownFieldSet(current))
-        for descriptor, value in current.ListFields():
-            # `message_type` is set for message-typed fields on every runtime;
-            # the upb descriptor has no `label`, so repeated is read from the
-            # value (map fields yield message values via `.values()`).
-            if descriptor.message_type is None:
-                continue
-            if isinstance(value, Message):
-                pending.append(value)
-            else:
-                items = value.values() if hasattr(value, "values") else value
-                pending.extend(item for item in items if isinstance(item, Message))
-    return sorted(numbers)
-
-
 def _usable_id_count(entries: Iterable[object] | None) -> int:
     """Count the entries with a non-empty string ``id``, the row loop's entry test.
 
@@ -289,18 +252,30 @@ _SECRET_PROTO_FIELDS: frozenset[str] = frozenset(
         "contactInfo",
         "cookieValue",
         "droidGuardResults",
+        # Observed on 2026-11-10, meaning unknown: text, an identifier-like
+        # string or a nested blob of unknown content.
+        "eidResponseField3",
+        "eidResponseField5",
         "email",
         "encryptedEIK",
         "infoMessage",
         "encryptedPrivateKeyWrapper",
+        "identifierField5",
         "imei",
         "inviteeKey",
         "inviterKey",
         "keyRotationInformation",
+        "metadataField10",
+        "metadataField11",
+        "metadataField13",
+        # Observed on 2026-11-11, meaning unknown: a varint above 255 on a phone's identifier message.
+        "phoneInformationField1",
         "phoneInformation",
         "phoneNumber",
         "privateKey",
         "recoveryKey",
+        "registrationField15",
+        "registrationField38",
         "reportsEncryptedWithServerKey",
         "ringKey",
         "sharingKeys",
@@ -383,7 +358,7 @@ def custom_message_formatter(
                 lines.append(f'{indent}{field.name}: "{hex_value}"')
         elif field.type == field.TYPE_MESSAGE:
             # The upb descriptor of current runtimes has no `label`, so repeated
-            # is read from the value (see `_unknown_field_numbers`).
+            # is read from the value (as in `unknown_field_tree`).
             if not isinstance(value, Message):
                 for sub_message in value:
                     if field.message_type.name == "Time":
@@ -485,6 +460,13 @@ def parse_device_update_protobuf(
             exc,
         )
         raise NovaProtobufDecodeError(f"DeviceUpdate decode failed: {exc}") from exc
+    device = device_update.deviceMetadata
+    log_unknown_fields(
+        "device_update",
+        _first_canonic_id(device),
+        device.userDefinedDeviceName,
+        [device_update],
+    )
     return device_update
 
 
@@ -505,7 +487,36 @@ def parse_device_list_protobuf(
             exc,
         )
         raise NovaProtobufDecodeError(f"DevicesList decode failed: {exc}") from exc
+    for index, device in enumerate(device_list.deviceMetadata):
+        # One comparison slot per device; a device without a canonical ID is
+        # keyed by its position so that two such devices do not share a slot.
+        log_unknown_fields(
+            "device_list",
+            _first_canonic_id(device) or f"#{index}",
+            device.userDefinedDeviceName,
+            [device],
+        )
     return device_list
+
+
+def _first_canonic_id(device: object) -> str:
+    """First usable canonical ID of a device message, else ``""``.
+
+    Only the comparison slot of `log_unknown_fields` uses it; it is never
+    logged. The phone branch is read first, as in `get_canonic_ids`. Never
+    raises an Exception: call sites evaluate it before the helper's own guard.
+    """
+    try:
+        info = getattr(device, "identifierInformation", None)
+        for holder in (getattr(info, "phoneInformation", None), info):
+            entries = getattr(getattr(holder, "canonicIds", None), "canonicId", None)
+            for entry in entries if entries is not None else ():
+                value = getattr(entry, "id", None)
+                if isinstance(value, str) and value:
+                    return value
+    except Exception:  # noqa: BLE001 - a foreign object must not break decoding
+        return ""
+    return ""
 
 
 # --------------------------------------------------------------------------------------
@@ -530,6 +541,85 @@ def trackable_components_of(registration: object) -> int | None:
         return None
     count = capabilities.trackableComponents
     return count if count > 0 else None
+
+
+# Hosts of Google's device images. Only this one was measured (2026-11-10): https,
+# ``200 image/png`` without sign-in, no identifier of the account or the device in
+# the address, the same address for every device of one model. A host is added only
+# after the same measurement; ``tests/test_device_tracker_entity_picture.py`` pins it.
+_IMAGE_HOSTS: frozenset[str] = frozenset({"lh3.googleusercontent.com"})
+
+
+def is_allowed_image_url(value: object) -> bool:
+    """Return True if ``value`` is an ``https`` address on one of ``_IMAGE_HOSTS``.
+
+    The host is compared exactly (no suffix match); an address with userinfo, an
+    explicit port, whitespace or control characters is refused.
+    """
+    if not isinstance(value, str) or not value:
+        return False
+    if any(ch.isspace() or not ch.isprintable() for ch in value):
+        return False
+    try:
+        parts = urlsplit(value)
+        port = parts.port
+    except ValueError:
+        return False
+    if parts.scheme != "https" or port is not None:
+        return False
+    if parts.username is not None or parts.password is not None:
+        return False
+    return parts.hostname in _IMAGE_HOSTS
+
+
+def _image_url_candidates(device: Any) -> Iterable[str]:
+    """Yield the image addresses of a device in order of precedence.
+
+    ``imageInformation.imageUrl``, then the ``componentImages`` entries, then the
+    ``deviceComponentsInformation`` entries of the registration. The two repeated
+    fields are ``bytes`` (see ``ProtoDecoders/AGENTS.md``); an entry that does not
+    parse into its form is skipped.
+    """
+    if device.HasField("imageInformation"):
+        image_information = device.imageInformation
+        yield image_information.imageUrl
+        for raw in image_information.componentImages:
+            component = DeviceUpdate_pb2.ImageInformation.ComponentImage()
+            try:
+                component.ParseFromString(raw)
+            except DecodeError:
+                continue
+            yield component.imageUrl
+    if not (
+        device.HasField("information")
+        and device.information.HasField("deviceRegistration")
+        and device.information.deviceRegistration.HasField("deviceTypeInformation")
+    ):
+        return
+    type_information = device.information.deviceRegistration.deviceTypeInformation
+    for raw in type_information.deviceComponentsInformation:
+        component_information = DeviceUpdate_pb2.DeviceComponentInformation()
+        try:
+            component_information.ParseFromString(raw)
+        except DecodeError:
+            continue
+        yield component_information.imageUrl
+
+
+def image_url_of(device: Any) -> str | None:
+    """Return the first allowed image address of a ``DeviceMetadata``, else None.
+
+    The address is returned unchanged (no size suffix added or removed). Nothing
+    here logs the address.
+    """
+    try:
+        for candidate in _image_url_candidates(device):
+            if is_allowed_image_url(candidate):
+                return candidate
+    except (AttributeError, TypeError, ValueError):
+        # A test double or a message without these fields: no image.
+        return None
+    return None
 
 
 def get_canonic_ids(
@@ -609,6 +699,7 @@ _DEVICE_STUB_KEYS: tuple[str, ...] = (
     "manufacturer",
     "model",
     "trackable_components",
+    "image_url",
     "latitude",
     "longitude",
     "altitude",
@@ -619,7 +710,6 @@ _DEVICE_STUB_KEYS: tuple[str, ...] = (
     "_report_hint",
     "is_own_report",
     "semantic_name",
-    "battery_level",
     *_ANCHOR_METADATA_KEYS,
 )
 
@@ -643,6 +733,7 @@ def _build_device_stub(device_name: str, canonic_id: str) -> dict[str, Any]:
         "manufacturer": None,
         "model": None,
         "trackable_components": None,
+        "image_url": None,
         "latitude": None,
         "longitude": None,
         "altitude": None,
@@ -653,7 +744,6 @@ def _build_device_stub(device_name: str, canonic_id: str) -> dict[str, Any]:
         "_report_hint": None,
         "is_own_report": None,
         "semantic_name": None,
-        "battery_level": None,
         "pair_date": None,
         "secrets_creation_date": None,
         "device_registration": None,
@@ -1238,17 +1328,9 @@ def get_devices_with_location(
                     ]
                     _LOGGER.debug("    -> locationInformation fields: %s", loc_fields)
 
-            unknown_numbers = _unknown_field_numbers(device)
-            if unknown_numbers:
-                # Field numbers only: the text-format lines carry the
-                # server-supplied values of those fields, which are raw API
-                # payload and never reach the log (AGENTS.md section 5).
-                _LOGGER.debug(
-                    "Device '%s' has UNKNOWN FIELDS: numbers=%s, count=%d",
-                    device_name,
-                    unknown_numbers,
-                    len(unknown_numbers),
-                )
+            # Unknown fields are reported by `parse_device_list_protobuf`
+            # through `log_unknown_fields` (AGENTS.md section 5, Schema-drift
+            # diagnostics), not here.
 
             if emit_canonicless_diagnostics and not _usable_id_count(canonic_ids):
                 # Structure only, never ID values; the device name stays at
@@ -1280,6 +1362,7 @@ def get_devices_with_location(
         manufacturer: str | None = None
         model: str | None = None
         trackable_components: int | None = None
+        image_url = image_url_of(device)
         pair_date: int | None = None
         secrets_creation_date: int | None = None
         encrypted_account_key: str | None = None
@@ -1542,6 +1625,7 @@ def get_devices_with_location(
             row["manufacturer"] = manufacturer
             row["model"] = model
             row["trackable_components"] = trackable_components
+            row["image_url"] = image_url
             row["pair_date"] = pair_date
             row["secrets_creation_date"] = secrets_creation_date
             row["encrypted_account_key"] = encrypted_account_key

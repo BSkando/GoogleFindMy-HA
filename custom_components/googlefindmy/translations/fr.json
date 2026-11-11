@@ -468,6 +468,11 @@
           "description": "Fenêtres de rotation de 1024 s à parcourir de chaque côté de l'horloge du traceur, en essayant d'autres formes de clé et de bloc sur les EID recherchés. 0 la désactive. Elle s'exécute après la fermeture de la connexion, ajoute jusqu'à 5 minutes et sollicite le processeur pendant ce temps."
         }
       }
+    },
+    "trigger_device_refresh": {
+      "name": "Déclencher l’actualisation des appareils",
+      "description": "Demande une actualisation immédiate des données pour le compte Google du bouton Google Find My sélectionné.",
+      "fields": {}
     }
   },
   "entity": {
@@ -575,9 +580,6 @@
           "semantic_name": {
             "name": "Libellé sémantique"
           },
-          "battery_level": {
-            "name": "Niveau de batterie"
-          },
           "last_seen": {
             "name": "Vu pour la dernière fois (signalé)"
           },
@@ -636,9 +638,6 @@
           },
           "semantic_name": {
             "name": "Étiquette sémantique"
-          },
-          "battery_level": {
-            "name": "Niveau de batterie"
           },
           "last_seen": {
             "name": "Vu pour la dernière fois (rapporté)"
@@ -733,9 +732,6 @@
           },
           "semantic_name": {
             "name": "Libellé sémantique"
-          },
-          "battery_level": {
-            "name": "Niveau de batterie"
           },
           "last_seen": {
             "name": "Vu pour la dernière fois (signalé)"
