@@ -648,6 +648,21 @@ async def test_legacy_entry_scoped_ids_are_normalized(
     assert is_enabled("dev-on") is True
 
 
+@pytest.mark.parametrize("namespaced_first", [True, False])
+def test_collapsing_keys_keep_the_later_change_time(namespaced_first: bool) -> None:
+    """(k) Two keys for one tracker keep the later stamp, whatever their order."""
+    early, late = "2026-11-09T08:00:00Z", "2026-11-10T20:00:00Z"
+    pairs = [(f"{_ENTRY_ID}:dev-off", late), ("dev-off", early)]
+    if not namespaced_first:
+        pairs = [(f"{_ENTRY_ID}:dev-off", early), ("dev-off", late)]
+    options: dict[str, Any] = {_OPT_CHANGED_AT: dict(pairs)}
+
+    changed = integration._normalize_automatic_polling_options(_ENTRY_ID, options)
+
+    assert changed is True
+    assert options[_OPT_CHANGED_AT] == {"dev-off": late}
+
+
 # ---------------------------------------------------------------------------
 # (l) the choke point: two send sites, no more
 # ---------------------------------------------------------------------------

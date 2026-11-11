@@ -1744,8 +1744,12 @@ class GoogleFindMyCoordinator(
                         entry.options.get(OPT_AUTOMATIC_POLLING_DISABLED)
                     )
                 )
-        except Exception:  # defensive: a corrupt option must not stop a refresh
-            pass
+        except Exception as err:  # defensive: a corrupt option must not stop a refresh
+            _LOGGER.debug(
+                "Reading the automatic-polling switch option failed; "
+                "treating every tracker as on: %s",
+                err,
+            )
         return set()
 
     def _get_automatic_polling_changed_at(self) -> dict[str, str]:
@@ -1756,8 +1760,12 @@ class GoogleFindMyCoordinator(
                 return coerce_changed_at_map(
                     entry.options.get(OPT_AUTOMATIC_POLLING_CHANGED_AT)
                 )
-        except Exception:  # defensive
-            pass
+        except Exception as err:  # defensive
+            _LOGGER.debug(
+                "Reading the automatic-polling change times failed; "
+                "treating them as unknown: %s",
+                err,
+            )
         return {}
 
     def is_automatic_polling_enabled(self, device_id: str) -> bool:

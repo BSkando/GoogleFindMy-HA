@@ -1082,10 +1082,11 @@ class PollingOperations(_MixinBase):
     def _get_predicted_poll_time(self) -> float | None:
         """Predict the earliest next update time based on device histories.
 
-        Only trackers that are polled automatically steer the prediction: the
-        histories of ignored trackers and of trackers whose automatic location
-        requests are switched off (#242) are skipped. Both sets are read here
-        because this runs before the refresh reads the ignore list.
+        The histories of ignored trackers and of trackers whose automatic
+        location requests are switched off (#242) are skipped. Both sets are read
+        here because this runs before the refresh reads the ignore list. Other
+        trackers the cycle does not poll, such as one disabled in Home
+        Assistant's device registry, still count with their stored history.
         """
 
         history_store = getattr(self, "_device_update_history", None)

@@ -987,7 +987,9 @@ def coerce_device_id_list(raw: object) -> list[str]:
 
     Anything that is not a list or tuple (``None``, a number, a bare string)
     yields an empty list; elements that are not non-empty strings are dropped.
-    Never raises, so a corrupt stored option cannot break a refresh.
+    For values loaded from stored options (JSON types) it never raises, so a
+    corrupt stored option cannot break a refresh. A subclass of ``list``,
+    ``tuple`` or ``str`` whose overridden methods raise is not covered.
     """
     if not isinstance(raw, (list, tuple)):
         return []
@@ -1013,7 +1015,8 @@ def coerce_changed_at_map(raw: object) -> dict[str, str]:
 
     Values must have the form ``YYYY-MM-DDTHH:MM:SSZ``; every other key or
     value is dropped. Anything that is not a mapping yields an empty dict.
-    Never raises.
+    For values loaded from stored options (JSON types) it never raises; a
+    custom mapping or ``str`` subclass whose methods raise is not covered.
     """
     if not isinstance(raw, Mapping):
         return {}
