@@ -363,16 +363,17 @@ class _DummyCache:
         self._store[key] = value
 
 
-class _DummyEntry:
-    def __init__(self) -> None:
-        self.entry_id = "entry-picture"
-        self.data: dict[str, Any] = {}
+def _poll_entry() -> Any:
+    """Config entry for the poll path, with the two methods the coordinator calls."""
 
-    def async_start_reauth(self, hass: Any) -> None:
-        return None
-
-    def async_create_background_task(self, hass: Any, coro: Any, *, name: str) -> Any:
-        return hass.async_create_task(coro, name=name)
+    return make_config_entry(
+        entry_id="entry-picture",
+        options={},
+        async_start_reauth=lambda _hass: None,
+        async_create_background_task=lambda hass, coro, *, name: hass.async_create_task(
+            coro, name=name
+        ),
+    )
 
 
 class _DummyConfigEntries:
@@ -418,7 +419,7 @@ def _coordinator() -> Any:
     coord = GoogleFindMyCoordinator(
         _DummyHass(asyncio.get_running_loop()), cache=_DummyCache()
     )
-    coord.config_entry = _DummyEntry()
+    coord.config_entry = _poll_entry()
     coord.async_set_updated_data = Mock()
     coord._async_build_device_snapshot_with_fallbacks = AsyncMock(return_value=[])
     coord._async_start_poll_cycle = AsyncMock()
