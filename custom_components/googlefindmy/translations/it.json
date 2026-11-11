@@ -799,6 +799,11 @@
       "stat_fused_updates": {
         "name": "Aggiornamenti di posizione fusi"
       }
+    },
+    "switch": {
+      "automatic_location_polling": {
+        "name": "Polling automatico della posizione"
+      }
     }
   },
   "issues": {

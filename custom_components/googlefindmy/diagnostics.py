@@ -49,6 +49,8 @@ from .const import (
     DEFAULT_MAP_VIEW_TOKEN_EXPIRATION,
     DEFAULT_MIN_POLL_INTERVAL,
     DOMAIN,
+    OPT_AUTOMATIC_POLLING_CHANGED_AT,
+    OPT_AUTOMATIC_POLLING_DISABLED,
     OPT_DEVICE_POLL_DELAY,
     OPT_ENABLE_STATS_ENTITIES,
     OPT_GOOGLE_HOME_FILTER_ENABLED,
@@ -58,6 +60,8 @@ from .const import (
     OPT_LOCATION_POLL_INTERVAL,
     OPT_MAP_VIEW_TOKEN_EXPIRATION,
     OPT_MIN_POLL_INTERVAL,
+    coerce_changed_at_map,
+    coerce_device_id_list,
 )
 from .redaction import REDACTED, async_redact_data
 from .shared_helpers import normalize_fcm_entry_snapshot, safe_fcm_health_snapshots
@@ -583,13 +587,56 @@ def _component_flags_block(hass: HomeAssistant, entry_id: str) -> list[dict[str,
         return []
 
 
-def _uwt_transitions_block(hass: HomeAssistant, entry_id: str) -> dict[str, Any]:
+def _read_uwt_snapshot(hass: HomeAssistant, entry_id: str) -> Any | None:
+    """Read the resolver's protection-mode snapshot for ``entry_id`` once.
+
+    The dump reads it exactly once, so the ``uwt_transitions`` block and the
+    ``uwt_device_index`` of the device rows describe the same ring state.
+    ``None`` without a resolver or if reading it fails.
+    """
+    try:
+        bucket = hass.data.get(DOMAIN) or {}
+        resolver = bucket.get(DATA_EID_RESOLVER) if isinstance(bucket, dict) else None
+        reader = getattr(resolver, "uwt_transition_snapshot", None)
+        if not callable(reader):
+            return None
+        return reader(entry_id)
+    except Exception as err:  # noqa: BLE001 - diagnostics must not fail on this block
+        # Only the type: the message of an error raised while reading the
+        # resolver could carry an identifier (AGENTS.md section 5).
+        _LOGGER.debug("uwt_transitions_block_failed error=%s", type(err).__name__)
+        return None
+
+
+def _uwt_device_order(snapshot: Any | None) -> dict[str, int]:
+    """Return canonical id -> ``device_index`` for the events of ``snapshot``.
+
+    The index is the position of the canonical id in the sorted set of devices
+    in the snapshot's events. Empty without a snapshot or if it is unreadable.
+    """
+    if snapshot is None:
+        return {}
+    try:
+        return {
+            canonical_id: index
+            for index, canonical_id in enumerate(
+                sorted({event.canonical_id for event in snapshot.events})
+            )
+        }
+    except Exception:  # noqa: BLE001 - the block below reports the failure
+        return {}
+
+
+def _uwt_transitions_block(
+    snapshot: Any | None, order: Mapping[str, int]
+) -> dict[str, Any]:
     """Return the protection-mode changes the EID resolver recorded for an entry.
 
     Each event names its device by ``device_index``, the position of the
     device's canonical id in the sorted set of devices in this entry's
-    events; the canonical id itself is left out. Only events of ``entry_id``
-    are included. Without a resolver, or if reading it fails, the block is
+    events (``order``, from ``_uwt_device_order``); the canonical id itself is
+    left out. Only events of the entry the snapshot was read for are
+    included. Without a snapshot, or if building the block fails, it is
     empty.
     """
     empty: dict[str, Any] = {
@@ -598,19 +645,9 @@ def _uwt_transitions_block(hass: HomeAssistant, entry_id: str) -> dict[str, Any]
         "info_lines_per_device_hour": None,
         "events": [],
     }
+    if snapshot is None:
+        return empty
     try:
-        bucket = hass.data.get(DOMAIN) or {}
-        resolver = bucket.get(DATA_EID_RESOLVER) if isinstance(bucket, dict) else None
-        reader = getattr(resolver, "uwt_transition_snapshot", None)
-        if not callable(reader):
-            return empty
-        snapshot = reader(entry_id)
-        order = {
-            canonical_id: index
-            for index, canonical_id in enumerate(
-                sorted({event.canonical_id for event in snapshot.events})
-            )
-        }
         return {
             "capacity": snapshot.capacity,
             "dropped": snapshot.dropped,
@@ -691,6 +728,12 @@ async def async_get_config_entry_diagnostics(
     )
 
     ignored_raw = effective_config.get(OPT_IGNORED_DEVICES) or {}
+    automatic_off = coerce_device_id_list(
+        effective_config.get(OPT_AUTOMATIC_POLLING_DISABLED)
+    )
+    automatic_changed_at = coerce_changed_at_map(
+        effective_config.get(OPT_AUTOMATIC_POLLING_CHANGED_AT)
+    )
 
     effective_config_for_diag = dict(effective_config)
     effective_config_for_diag.pop("min_accuracy_threshold", None)
@@ -707,6 +750,16 @@ async def async_get_config_entry_diagnostics(
         effective_config_for_diag[OPT_IGNORED_DEVICES] = [REDACTED] * ignored_count
     elif OPT_IGNORED_DEVICES in effective_config_for_diag:
         effective_config_for_diag[OPT_IGNORED_DEVICES] = []
+
+    # Both carry canonical device ids: counts only, like the ignore list.
+    if OPT_AUTOMATIC_POLLING_DISABLED in effective_config_for_diag:
+        effective_config_for_diag[OPT_AUTOMATIC_POLLING_DISABLED] = [REDACTED] * len(
+            automatic_off
+        )
+    if OPT_AUTOMATIC_POLLING_CHANGED_AT in effective_config_for_diag:
+        effective_config_for_diag[OPT_AUTOMATIC_POLLING_CHANGED_AT] = [REDACTED] * len(
+            automatic_changed_at
+        )
 
     if keywords_count:
         effective_config_for_diag[OPT_GOOGLE_HOME_FILTER_KEYWORDS] = [
@@ -758,6 +811,7 @@ async def async_get_config_entry_diagnostics(
         # Counts only (never expose strings/IDs)
         "google_home_filter_keywords_count": keywords_count,
         "ignored_devices_count": ignored_count,
+        "automatic_polling_disabled_count": len(automatic_off),
     }
 
     # --- Device & entity registry counts (anonymized) ---
@@ -799,6 +853,11 @@ async def async_get_config_entry_diagnostics(
         entity_registry_counts["entities_count"] = len(entities_for_entry)
     except Exception:
         entity_registry_counts["entities_count"] = None
+
+    # Recorded protection-mode changes of this entry (FMDN_UWT_TRANSITION),
+    # read once: the device rows link to the same events by ``uwt_device_index``.
+    uwt_snapshot = _read_uwt_snapshot(hass, entry.entry_id)
+    uwt_order = _uwt_device_order(uwt_snapshot)
 
     # --- Coordinator-derived info (all anonymized/counted) ---
     coordinator_block: dict[str, Any] = {}
@@ -885,9 +944,20 @@ async def async_get_config_entry_diagnostics(
         # Resilient: [] on any failure.
         try:
             builder = getattr(coordinator, "build_per_device_diagnostics", None)
-            coordinator_block["devices"] = builder() if callable(builder) else []
+            coordinator_block["devices"] = (
+                builder(uwt_order=uwt_order) if callable(builder) else []
+            )
         except Exception:
             coordinator_block["devices"] = []
+
+        # Start of the in-memory request counters behind ``locate_requests_*``.
+        try:
+            since_reader = getattr(coordinator, "locate_requests_counted_since", None)
+            coordinator_block["locate_requests_counted_since"] = (
+                since_reader() if callable(since_reader) else None
+            )
+        except Exception:
+            coordinator_block["locate_requests_counted_since"] = None
 
         diag_buffer = getattr(coordinator, "_diag", None)
         if diag_buffer is not None and hasattr(diag_buffer, "to_dict"):
@@ -930,7 +1000,7 @@ async def async_get_config_entry_diagnostics(
     # Recorded protection-mode changes of this entry (FMDN_UWT_TRANSITION).
     # Like the block above it carries no ID value, only a positional index,
     # and it can be posted to an issue on its own.
-    uwt_transitions = _uwt_transitions_block(hass, entry.entry_id)
+    uwt_transitions = _uwt_transitions_block(uwt_snapshot, uwt_order)
 
     # --- Assemble payload (without secrets) ---
     payload: dict[str, Any] = {

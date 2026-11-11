@@ -41,6 +41,7 @@ if TYPE_CHECKING:
 
     from .._reauth_reason import ReauthReason, ReauthReasonCode
     from ..api import GoogleFindMyAPI
+    from .helpers.locate_clock import LocateCounts
     from .subentry import SubentryMetadata
 
 
@@ -86,6 +87,7 @@ class _MixinBase:
     _locate_inflight: set[str]
     _locate_cooldown_until: dict[str, float]
     _locate_requested_mono: dict[str, float]
+    _locate_request_counts: LocateCounts
     _device_action_locks: dict[str, asyncio.Lock]
     _sound_request_uuids: dict[str, str]
     _sound_play_accepted_at: dict[str, tuple[str, float]]
@@ -205,6 +207,15 @@ class _MixinBase:
         raise NotImplementedError
 
     def _get_ignored_set(self) -> set[str]:
+        raise NotImplementedError
+
+    def _get_automatic_polling_disabled_set(self) -> set[str]:
+        raise NotImplementedError
+
+    def is_automatic_polling_enabled(self, device_id: str) -> bool:
+        raise NotImplementedError
+
+    def locate_request_counts(self, device_id: str) -> tuple[int, int]:
         raise NotImplementedError
 
     def _get_google_home_filter(self) -> Any:

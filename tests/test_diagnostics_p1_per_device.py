@@ -50,6 +50,15 @@ _EXPECTED_DEVICE_KEYS = {
     # diagnostics dump is routinely pasted into a public issue.
     "coarse_fix_accuracy_bucket",
     "coarse_fix_age_s",
+    # Automatic polling switch (#242): state, time of the last change, sent
+    # requests split by origin, age of the last request, and the position the
+    # device has in the ``uwt_transitions`` events of the same dump.
+    "automatic_polling",
+    "automatic_polling_changed_at",
+    "locate_requests_auto",
+    "locate_requests_manual",
+    "last_locate_request_age_s",
+    "uwt_device_index",
 }
 
 

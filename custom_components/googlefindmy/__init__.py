@@ -185,6 +185,8 @@ from .const import (
     NON_DEVICE_SUBENTRY_KEYS,
     NON_DEVICE_SUBENTRY_TYPES,
     OPT_ALLOW_HISTORY_FALLBACK,
+    OPT_AUTOMATIC_POLLING_CHANGED_AT,
+    OPT_AUTOMATIC_POLLING_DISABLED,
     OPT_CONTRIBUTOR_MODE,
     OPT_DELETE_CACHES_ON_REMOVE,
     OPT_DEVICE_POLL_DELAY,
@@ -211,6 +213,8 @@ from .const import (
     TRANSLATION_KEY_DUPLICATE_ACCOUNT,
     TRANSLATION_KEY_RESTART_REQUIRED,
     TRANSLATION_KEY_UNIQUE_ID_COLLISION,
+    coerce_changed_at_map,
+    coerce_device_id_list,
     coerce_ignored_mapping,
     frozen_attributes_issue_id,
     map_token_hex_digest,
@@ -1163,6 +1167,7 @@ PLATFORMS: list[Platform] = [
     Platform.BUTTON,
     Platform.SENSOR,
     Platform.BINARY_SENSOR,
+    Platform.SWITCH,
 ]
 
 
@@ -4384,6 +4389,26 @@ class EntityRecoveryManager:
             ),
         )
 
+    def register_switch_platform(
+        self,
+        *,
+        expected_unique_ids: Callable[[], set[str]],
+        entity_factory: Callable[[set[str]], Sequence[Entity]],
+        add_entities: AddEntitiesCallback,
+        update_before_add: bool = True,
+    ) -> None:
+        """Register recovery handlers for the switch platform."""
+
+        self._register_platform(
+            Platform.SWITCH,
+            _RecoveryRegistration(
+                expected_unique_ids=expected_unique_ids,
+                entity_factory=entity_factory,
+                add_entities=add_entities,
+                update_before_add=update_before_add,
+            ),
+        )
+
     def register_sensor_platform(
         self,
         *,
@@ -5491,10 +5516,51 @@ def _normalize_visible_device_ids(
     return normalized, changed
 
 
+def _normalize_automatic_polling_options(
+    entry_id: str, options: dict[str, Any]
+) -> bool:
+    """Strip entry namespaces from the automatic-polling switch options (#242).
+
+    Rewrites ``options`` in place (it is the caller's copy, never the stored
+    object) and returns whether anything changed. In the mapping of change
+    times, two keys that collapse to the same id keep the later stamp.
+    """
+    changed = False
+    if OPT_AUTOMATIC_POLLING_DISABLED in options:
+        raw_list = options[OPT_AUTOMATIC_POLLING_DISABLED]
+        stripped = [
+            _strip_entry_namespace(entry_id, candidate)
+            for candidate in coerce_device_id_list(raw_list)
+        ]
+        normalized_list = coerce_device_id_list(stripped)
+        if normalized_list != raw_list:
+            options[OPT_AUTOMATIC_POLLING_DISABLED] = normalized_list
+            changed = True
+    if OPT_AUTOMATIC_POLLING_CHANGED_AT in options:
+        raw_map = options[OPT_AUTOMATIC_POLLING_CHANGED_AT]
+        normalized_map: dict[str, str] = {}
+        for raw_id, stamp in coerce_changed_at_map(raw_map).items():
+            canonical = _strip_entry_namespace(entry_id, raw_id)
+            if not canonical:
+                continue
+            previous = normalized_map.get(canonical)
+            # ISO-8601 UTC stamps of one fixed form order as strings.
+            if previous is None or stamp > previous:
+                normalized_map[canonical] = stamp
+        if normalized_map != raw_map:
+            options[OPT_AUTOMATIC_POLLING_CHANGED_AT] = normalized_map
+            changed = True
+    return changed
+
+
 def _migrate_entry_identifier_namespaces(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> None:
-    """Strip entry namespaces from ignored/visible device identifiers."""
+    """Strip entry namespaces from ignored/visible device identifiers.
+
+    The same applies to the ids of the automatic-polling switch (#242), so a
+    tracker switched off under its legacy entry-scoped id stays off.
+    """
 
     options = dict(entry.options)
     current_raw = options.get(
@@ -5507,6 +5573,8 @@ def _migrate_entry_identifier_namespaces(
     if options_changed:
         options[OPT_IGNORED_DEVICES] = normalized_map
         options[OPT_OPTIONS_SCHEMA_VERSION] = 2
+    if _normalize_automatic_polling_options(entry.entry_id, options):
+        options_changed = True
     if options_changed and options != entry.options:
         hass.config_entries.async_update_entry(entry, options=options)
 

@@ -483,6 +483,7 @@ async def test_async_setup_new_subentries_aggregates_platforms_and_dispatches(
         "button",
         "device_tracker",
         "sensor",
+        "switch",
     }
 
     expected_signal = f"googlefindmy_subentry_setup_{parent_entry.entry_id}"
@@ -540,6 +541,7 @@ async def test_async_setup_new_subentries_ignores_value_error(
                 "button",
                 "device_tracker",
                 "sensor",
+                "switch",
             ),
         )
     ]
@@ -729,7 +731,7 @@ async def test_async_setup_new_subentries_forwards_placeholder_with_skip_registe
     )
 
     assert config_entries.forward_setup_calls == [
-        (parent_entry, ("button", "device_tracker", "sensor")),
+        (parent_entry, ("button", "device_tracker", "sensor", "switch")),
     ]
     assert hass.dispatcher_signals == [
         (

@@ -59,7 +59,7 @@ def test_duplicate_devices_seed_only_once(
         ) -> Any:
             if key is not None:
                 resolved = key
-            elif feature in {"button", "device_tracker", "sensor"}:
+            elif feature in {"button", "device_tracker", "sensor", "switch"}:
                 resolved = TRACKER_SUBENTRY_KEY
             elif feature == "binary_sensor":
                 resolved = SERVICE_SUBENTRY_KEY

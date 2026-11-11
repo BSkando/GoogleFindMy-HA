@@ -799,6 +799,11 @@
       "stat_fused_updates": {
         "name": "Fused location updates"
       }
+    },
+    "switch": {
+      "automatic_location_polling": {
+        "name": "Automatic location polling"
+      }
     }
   },
   "issues": {

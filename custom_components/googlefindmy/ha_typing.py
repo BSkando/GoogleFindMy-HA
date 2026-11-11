@@ -121,6 +121,16 @@ if TYPE_CHECKING:
     class ButtonEntity(_EntityBase):
         """Structural type for button platform entities."""
 
+    class SwitchEntity(_EntityBase):
+        """Structural type for switch platform entities."""
+
+        @property
+        def is_on(self) -> bool | None: ...
+
+        async def async_turn_on(self, **kwargs: Any) -> None: ...
+
+        async def async_turn_off(self, **kwargs: Any) -> None: ...
+
     class BinarySensorEntity(_EntityBase):
         """Structural type for binary_sensor platform entities."""
 
@@ -166,6 +176,7 @@ else:
     from homeassistant.components.binary_sensor import BinarySensorEntity  # noqa: F401
     from homeassistant.components.button import ButtonEntity  # noqa: F401
     from homeassistant.components.device_tracker import TrackerEntity  # noqa: F401
+    from homeassistant.components.switch import SwitchEntity  # noqa: F401
 
     try:
         from homeassistant.helpers.http import HomeAssistantView  # noqa: F401

@@ -968,6 +968,7 @@ def _stub_homeassistant() -> None:
         BUTTON = "button"
         SENSOR = "sensor"
         BINARY_SENSOR = "binary_sensor"
+        SWITCH = "switch"
 
     const_module.EVENT_HOMEASSISTANT_STARTED = "start"
     const_module.EVENT_HOMEASSISTANT_STOP = "stop"
@@ -2146,6 +2147,21 @@ def _stub_homeassistant() -> None:
     button_module.ButtonEntityDescription = ButtonEntityDescription
     sys.modules["homeassistant.components.button"] = button_module
     setattr(components_pkg, "button", button_module)
+
+    switch_module = ModuleType("homeassistant.components.switch")
+
+    class SwitchEntity(_entity_base()):  # pragma: no cover - stub
+        pass
+
+    class SwitchEntityDescription:  # pragma: no cover - stub
+        def __init__(self, **kwargs) -> None:
+            for key, value in kwargs.items():
+                setattr(self, key, value)
+
+    switch_module.SwitchEntity = SwitchEntity
+    switch_module.SwitchEntityDescription = SwitchEntityDescription
+    sys.modules["homeassistant.components.switch"] = switch_module
+    setattr(components_pkg, "switch", switch_module)
 
     binary_sensor_module = ModuleType("homeassistant.components.binary_sensor")
 

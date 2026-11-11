@@ -247,7 +247,7 @@ async def test_blank_device_name_populates_buttons(
         ) -> Any:
             if key is not None:
                 resolved = key
-            elif feature in {"button", "device_tracker", "sensor"}:
+            elif feature in {"button", "device_tracker", "sensor", "switch"}:
                 resolved = button_module.TRACKER_SUBENTRY_KEY
             elif feature == "binary_sensor":
                 resolved = button_module.SERVICE_SUBENTRY_KEY

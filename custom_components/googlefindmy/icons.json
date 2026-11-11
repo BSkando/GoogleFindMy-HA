@@ -106,6 +106,14 @@
       "last_location": {
         "default": "mdi:map-marker-path"
       }
+    },
+    "switch": {
+      "automatic_location_polling": {
+        "default": "mdi:radar",
+        "state": {
+          "off": "mdi:radar-off"
+        }
+      }
     }
   }
 }

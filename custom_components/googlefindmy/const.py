@@ -574,6 +574,7 @@ TRACKER_FEATURE_PLATFORMS: tuple[str, ...] = (
     "button",
     "device_tracker",
     "sensor",
+    "switch",
 )
 SERVICE_FEATURE_PLATFORMS: tuple[str, ...] = (
     "binary_sensor",
@@ -634,6 +635,12 @@ OPT_SHOW_LOCATION_AGE: str = "show_location_age"
 OPT_SPEED_GATE_ENABLED: str = "speed_gate_enabled"
 OPT_ROUNDTRIP_CONFIRM: str = "roundtrip_confirm_enabled"
 OPT_ACCURACY_GATE_ENABLED: str = "accuracy_gate_enabled"
+# Canonical device ids whose automatic location requests are switched off (#242).
+# Manual locate requests stay allowed; the device list is still fetched per account.
+OPT_AUTOMATIC_POLLING_DISABLED: str = "automatic_polling_disabled"
+# Canonical device id -> UTC time of the last change of that switch
+# (``YYYY-MM-DDTHH:MM:SSZ``), kept so a comparison window survives a restart.
+OPT_AUTOMATIC_POLLING_CHANGED_AT: str = "automatic_polling_changed_at"
 # Legacy option key - kept for reading old configurations, no longer used
 OPT_STALE_THRESHOLD_ENABLED: str = "stale_threshold_enabled"
 
@@ -657,6 +664,8 @@ OPTION_KEYS: tuple[str, ...] = (
     OPT_SPEED_GATE_ENABLED,
     OPT_ROUNDTRIP_CONFIRM,
     OPT_ACCURACY_GATE_ENABLED,
+    OPT_AUTOMATIC_POLLING_DISABLED,
+    OPT_AUTOMATIC_POLLING_CHANGED_AT,
 )
 
 # Keys which may exist historically in entry.data and should be soft-copied to entry.options
@@ -846,6 +855,9 @@ DEFAULT_OPTIONS: dict[str, object] = {
     OPT_SPEED_GATE_ENABLED: DEFAULT_SPEED_GATE_ENABLED,
     OPT_ROUNDTRIP_CONFIRM: DEFAULT_ROUNDTRIP_CONFIRM,
     OPT_ACCURACY_GATE_ENABLED: DEFAULT_ACCURACY_GATE_ENABLED,
+    # Writers build a new list/mapping (copy-on-write); never mutate these.
+    OPT_AUTOMATIC_POLLING_DISABLED: [],
+    OPT_AUTOMATIC_POLLING_CHANGED_AT: {},
 }
 
 # -------------------- Options schema versioning (lightweight) --------------------
@@ -968,6 +980,48 @@ def coerce_ignored_mapping(raw: object) -> tuple[IgnoredMapping, bool]:
     else:
         out = {}
     return out, changed
+
+
+def coerce_device_id_list(raw: object) -> list[str]:
+    """Return the non-empty string ids of ``raw``, deduplicated and sorted.
+
+    Anything that is not a list or tuple (``None``, a number, a bare string)
+    yields an empty list; elements that are not non-empty strings are dropped.
+    Never raises, so a corrupt stored option cannot break a refresh.
+    """
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return sorted({item for item in raw if isinstance(item, str) and item})
+
+
+_UTC_STAMP_LENGTH = len("YYYY-MM-DDTHH:MM:SSZ")
+
+
+def _is_utc_stamp(value: object) -> bool:
+    """Return True for a string of the exact form ``YYYY-MM-DDTHH:MM:SSZ``."""
+    if not isinstance(value, str) or len(value) != _UTC_STAMP_LENGTH:
+        return False
+    digits = (0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18)
+    separators = {4: "-", 7: "-", 10: "T", 13: ":", 16: ":", 19: "Z"}
+    return all(value[i] in "0123456789" for i in digits) and all(
+        value[i] == sep for i, sep in separators.items()
+    )
+
+
+def coerce_changed_at_map(raw: object) -> dict[str, str]:
+    """Return the entries of ``raw`` with a non-empty string key and a UTC stamp.
+
+    Values must have the form ``YYYY-MM-DDTHH:MM:SSZ``; every other key or
+    value is dropped. Anything that is not a mapping yields an empty dict.
+    Never raises.
+    """
+    if not isinstance(raw, Mapping):
+        return {}
+    return {
+        key: value
+        for key, value in raw.items()
+        if isinstance(key, str) and key and _is_utc_stamp(value)
+    }
 
 
 def ignored_choices_for_ui(
@@ -1323,6 +1377,8 @@ __all__ = [
     "OPT_SPEED_GATE_ENABLED",
     "OPT_ROUNDTRIP_CONFIRM",
     "OPT_ACCURACY_GATE_ENABLED",
+    "OPT_AUTOMATIC_POLLING_DISABLED",
+    "OPT_AUTOMATIC_POLLING_CHANGED_AT",
     "OPT_STALE_THRESHOLD_ENABLED",
     "MIGRATE_DATA_KEYS_TO_OPTIONS",
     "UPDATE_INTERVAL",
@@ -1397,6 +1453,8 @@ __all__ = [
     "STORAGE_KEY",
     "STORAGE_VERSION",
     "coerce_ignored_mapping",
+    "coerce_device_id_list",
+    "coerce_changed_at_map",
     "ignored_choices_for_ui",
     "WEEK_SECONDS",
     "map_token_secret_seed",

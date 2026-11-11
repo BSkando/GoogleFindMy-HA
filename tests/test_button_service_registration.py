@@ -89,7 +89,7 @@ def test_button_setup_skips_service_registration_when_platform_missing(
         ) -> Any:
             if key is not None:
                 resolved = key
-            elif feature in {"button", "device_tracker", "sensor"}:
+            elif feature in {"button", "device_tracker", "sensor", "switch"}:
                 resolved = TRACKER_SUBENTRY_KEY
             elif feature == "binary_sensor":
                 resolved = SERVICE_SUBENTRY_KEY

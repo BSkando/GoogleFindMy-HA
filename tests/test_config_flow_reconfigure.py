@@ -166,7 +166,13 @@ async def test_reconfigure_reload_recreates_subentries_and_platforms() -> None:
     assert setup_calls_first, "Subentry setup should record config_subentry_id"
     assert setup_calls_first == created_ids
 
-    expected_platforms = ("binary_sensor", "button", "device_tracker", "sensor")
+    expected_platforms = (
+        "binary_sensor",
+        "button",
+        "device_tracker",
+        "sensor",
+        "switch",
+    )
     assert hass.config_entries.forward_setup_calls == [(entry, expected_platforms)]
 
     hass.config_entries.forward_setup_calls.clear()

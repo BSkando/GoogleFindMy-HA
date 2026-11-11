@@ -62,7 +62,7 @@ import time
 from collections import deque
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
@@ -91,6 +91,7 @@ from .helpers.geo import (
 from .helpers.geo import (
     coerce_float as _coerce_float_impl,
 )
+from .helpers.locate_clock import LocateCounts, ensure_locate_counts
 from .helpers.stats import (
     ApiStatus,
     CryptoStatus,
@@ -154,12 +155,16 @@ from ..const import (
     # Required symbols provided by const.py (5.1-A)
     EVENT_AUTH_ERROR,
     EVENT_AUTH_OK,
+    OPT_AUTOMATIC_POLLING_CHANGED_AT,
+    OPT_AUTOMATIC_POLLING_DISABLED,
     OPT_IGNORED_DEVICES,
     OPT_SEMANTIC_LOCATIONS,
     UPDATE_INTERVAL,
+    coerce_changed_at_map,
+    coerce_device_id_list,
     coerce_ignored_mapping,
 )
-from ..ha_typing import DataUpdateCoordinator
+from ..ha_typing import DataUpdateCoordinator, callback
 from ..ProtoDecoders import decoder
 
 _LOGGER = logging.getLogger(__name__)
@@ -857,6 +862,11 @@ class GoogleFindMyCoordinator(
         # Read by the EID resolver for the ``poll_age_s`` field of
         # ``FMDN_UWT_TRANSITION`` through ``locate_requested_mono``.
         self._locate_requested_mono: dict[str, float] = {}
+        # Location requests sent per device, split into automatic (poll cycle)
+        # and manual (locate service/button), counted by the same observer at
+        # the same POST (#242). In memory only; ``since`` marks the start, so a
+        # restart shows as a new start. Read through ``locate_request_counts``.
+        self._locate_request_counts: LocateCounts = ensure_locate_counts(None)
 
         # Per-device action locks to prevent race conditions on concurrent requests
         self._device_action_locks: dict[str, asyncio.Lock] = {}
@@ -1719,6 +1729,82 @@ class GoogleFindMyCoordinator(
         """Return True if the device is currently ignored by user choice."""
         return device_id in self._get_ignored_set()
 
+    def _get_automatic_polling_disabled_set(self) -> set[str]:
+        """Return the device IDs whose automatic location requests are off (#242).
+
+        Read live from ``config_entry.options`` on every call, like
+        ``_get_ignored_set``, so a switch flipped during a running cycle is seen
+        at the next device. A coordinator without an entry has nothing off.
+        """
+        try:
+            entry = getattr(self, "config_entry", None)
+            if entry is not None:
+                return set(
+                    coerce_device_id_list(
+                        entry.options.get(OPT_AUTOMATIC_POLLING_DISABLED)
+                    )
+                )
+        except Exception:  # defensive: a corrupt option must not stop a refresh
+            pass
+        return set()
+
+    def _get_automatic_polling_changed_at(self) -> dict[str, str]:
+        """Return device id -> UTC time of the last switch change (options-first)."""
+        try:
+            entry = getattr(self, "config_entry", None)
+            if entry is not None:
+                return coerce_changed_at_map(
+                    entry.options.get(OPT_AUTOMATIC_POLLING_CHANGED_AT)
+                )
+        except Exception:  # defensive
+            pass
+        return {}
+
+    def is_automatic_polling_enabled(self, device_id: str) -> bool:
+        """Return True unless automatic location requests are off for the device."""
+        return device_id not in self._get_automatic_polling_disabled_set()
+
+    @callback
+    def async_set_automatic_polling(self, device_id: str, enabled: bool) -> None:
+        """Switch automatic location requests for ``device_id`` on or off.
+
+        Copy-on-write: the stored list and mapping are never changed in place.
+        ``async_update_entry`` compares old and new options with ``!=``, so an
+        in-place change would compare equal, not be stored, and be lost at the
+        next restart. Read and write run without an ``await`` in between, so two
+        switches cannot interleave. Without a change of state nothing is written
+        and nothing is logged. A stored change writes one INFO line with the
+        canonical id (the same id as ``canonical=`` in ``FMDN_UWT_TRANSITION``)
+        and never the device name.
+        """
+        entry = getattr(self, "config_entry", None)
+        if entry is None or not isinstance(device_id, str) or not device_id:
+            return
+        disabled = coerce_device_id_list(
+            entry.options.get(OPT_AUTOMATIC_POLLING_DISABLED)
+        )
+        if (device_id not in disabled) == bool(enabled):
+            return
+        if enabled:
+            new_disabled = [dev for dev in disabled if dev != device_id]
+        else:
+            new_disabled = sorted({*disabled, device_id})
+        changed = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        changed_at = coerce_changed_at_map(
+            entry.options.get(OPT_AUTOMATIC_POLLING_CHANGED_AT)
+        )
+        changed_at[device_id] = changed
+        new_options = dict(entry.options)
+        new_options[OPT_AUTOMATIC_POLLING_DISABLED] = new_disabled
+        new_options[OPT_AUTOMATIC_POLLING_CHANGED_AT] = changed_at
+        if self.hass.config_entries.async_update_entry(entry, options=new_options):
+            _LOGGER.info(
+                "AUTOMATIC_POLLING_CHANGE canonical=%s new=%s changed=%s",
+                device_id,
+                "on" if enabled else "off",
+                changed,
+            )
+
     # ---------------------------- Metrics & errors helpers ------------------
     def safe_update_metric(self, key: str, value: float) -> None:
         """Safely set a numeric performance metric (float-coerced)."""
@@ -2414,7 +2500,9 @@ class GoogleFindMyCoordinator(
         self.stats["canonicless_drop_warn"] = counts["warn"]
         self._schedule_stats_persist()
 
-    def build_per_device_diagnostics(self) -> list[dict[str, Any]]:
+    def build_per_device_diagnostics(
+        self, uwt_order: Mapping[str, int] | None = None
+    ) -> list[dict[str, Any]]:
         """Build the anonymized per-device telemetry list for diagnostics (P1-3).
 
         Each entry carries an opaque position ``index`` over ``sorted(device_ids)``
@@ -2434,6 +2522,14 @@ class GoogleFindMyCoordinator(
         public issue, and a raw radius or position would be re-identifying
         (P1-3). The coordinates of the discarded fix stay on the entity, where
         the user - and only the user - can see roughly which city it named.
+
+        The switch for automatic location requests (#242) adds
+        ``automatic_polling``, ``automatic_polling_changed_at`` (UTC, ``None``
+        when never switched), the sent requests ``locate_requests_auto`` and
+        ``locate_requests_manual``, ``last_locate_request_age_s`` and
+        ``uwt_device_index``: the position the device has in the
+        ``uwt_transitions`` events of the same dump, taken from ``uwt_order``
+        (canonical id -> event index), ``None`` without an event.
         """
         try:
             rows = self.data or []
@@ -2447,6 +2543,9 @@ class GoogleFindMyCoordinator(
 
             now_epoch = time.time()
             now_mono = time.monotonic()
+            disabled = self._get_automatic_polling_disabled_set()
+            changed_at = self._get_automatic_polling_changed_at()
+            order = uwt_order or {}
 
             entries: list[dict[str, Any]] = []
             for index, dev_id in enumerate(sorted(by_id)):
@@ -2481,6 +2580,16 @@ class GoogleFindMyCoordinator(
                     coarse_bucket = _accuracy_bucket(coarse.get("accuracy"))
                     coarse_age_s = _wall_clock_age(now_epoch, coarse.get("last_seen"))
 
+                auto_count, manual_count = self.locate_request_counts(dev_id)
+                requested_mono = self.locate_requested_mono(dev_id)
+                request_age_s: int | None = None
+                if isinstance(requested_mono, (int, float)) and not isinstance(
+                    requested_mono, bool
+                ):
+                    request_age_s = _round_age(
+                        max(0.0, now_mono - float(requested_mono))
+                    )
+
                 entries.append(
                     {
                         "index": index,
@@ -2492,6 +2601,12 @@ class GoogleFindMyCoordinator(
                         "has_key": bool(slot.get("encrypted_identity_key")),
                         "coarse_fix_accuracy_bucket": coarse_bucket,
                         "coarse_fix_age_s": coarse_age_s,
+                        "automatic_polling": dev_id not in disabled,
+                        "automatic_polling_changed_at": changed_at.get(dev_id),
+                        "locate_requests_auto": auto_count,
+                        "locate_requests_manual": manual_count,
+                        "last_locate_request_age_s": request_age_s,
+                        "uwt_device_index": order.get(dev_id),
                     }
                 )
             return entries
@@ -2563,6 +2678,26 @@ class GoogleFindMyCoordinator(
         """
         stamps: dict[str, float] = getattr(self, "_locate_requested_mono", {})
         return stamps.get(device_id)
+
+    def locate_request_counts(self, device_id: str) -> tuple[int, int]:
+        """Return the sent location requests for ``device_id`` as ``(auto, manual)``.
+
+        Counted at the POST like ``locate_requested_mono``; ``(0, 0)`` for a
+        device without a request and for a coordinator built without
+        ``__init__``.
+        """
+        counts = getattr(self, "_locate_request_counts", None)
+        if not isinstance(counts, LocateCounts):
+            return (0, 0)
+        per_device = counts.by_device.get(device_id) or {}
+        return (per_device.get("auto", 0), per_device.get("manual", 0))
+
+    def locate_requests_counted_since(self) -> str | None:
+        """Return the UTC start of the request counter, ``None`` before any count."""
+        counts = getattr(self, "_locate_request_counts", None)
+        if not isinstance(counts, LocateCounts):
+            return None
+        return counts.since
 
     def purge_device(self, device_id: str) -> None:
         """Remove all cached data and cooldown state for a device (thread-safe publish).
@@ -2644,6 +2779,9 @@ class GoogleFindMyCoordinator(
         request_stamps = getattr(self, "_locate_requested_mono", None)
         if request_stamps is not None:
             request_stamps.pop(device_id, None)
+        request_counts = getattr(self, "_locate_request_counts", None)
+        if isinstance(request_counts, LocateCounts):
+            request_counts.by_device.pop(device_id, None)
         removed_uuid = self._sound_request_uuids.pop(device_id, None)
         self._sound_request_timestamps.pop(device_id, None)
         accepted_stamps = getattr(self, "_sound_play_accepted_at", None)

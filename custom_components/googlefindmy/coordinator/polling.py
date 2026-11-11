@@ -82,7 +82,11 @@ from .helpers.cache import (
     substitute_zone_accuracy,
 )
 from .helpers.cache import sanitize_decoder_row as _sanitize_decoder_row
-from .helpers.locate_clock import ensure_locate_stamps, stamp_on_dispatch
+from .helpers.locate_clock import (
+    ensure_locate_counts,
+    ensure_locate_stamps,
+    stamp_on_dispatch,
+)
 from .helpers.stats import ApiStatus, CryptoStatus, FcmStatus, StatusSnapshot
 from .helpers.subentry import normalize_epoch_seconds as _normalize_epoch_seconds
 from .helpers.update import (
@@ -1076,15 +1080,24 @@ class PollingOperations(_MixinBase):
 
     # -------------------- Poll timing prediction --------------------
     def _get_predicted_poll_time(self) -> float | None:
-        """Predict the earliest next update time based on device histories."""
+        """Predict the earliest next update time based on device histories.
+
+        Only trackers that are polled automatically steer the prediction: the
+        histories of ignored trackers and of trackers whose automatic location
+        requests are switched off (#242) are skipped. Both sets are read here
+        because this runs before the refresh reads the ignore list.
+        """
 
         history_store = getattr(self, "_device_update_history", None)
         if not history_store:
             return None
 
+        excluded = self._get_ignored_set() | self._get_automatic_polling_disabled_set()
         predictions: list[float] = []
 
-        for history in history_store.values():
+        for dev_id, history in history_store.items():
+            if dev_id in excluded:
+                continue
             if len(history) < 2:
                 continue
 
@@ -1582,10 +1595,15 @@ class PollingOperations(_MixinBase):
             # Build list of devices to POLL:
             # Poll devices that have at least one enabled DR entry for this config entry;
             # if a device has no DR entry yet, include it to allow initial discovery.
+            # Trackers whose automatic location requests are switched off
+            # (#242) stay out of every automatic path; read once per refresh.
+            automatic_off = self._get_automatic_polling_disabled_set()
             devices_to_poll: list[dict[str, Any]] = []
             for dev in filtered_devices:
                 dev_id = dev["id"]
                 if dev_id in ignored:
+                    continue
+                if dev_id in automatic_off:
                     continue
                 if (
                     dev_id in self._enabled_poll_device_ids
@@ -2012,6 +2030,17 @@ class PollingOperations(_MixinBase):
                 for idx, dev in enumerate(devices):
                     dev_id = dev["id"]
                     dev_name = dev.get("name", dev_id)
+                    # The switch is read live: a tracker switched off after
+                    # the cycle was planned is skipped at its turn (#242).
+                    if not self.is_automatic_polling_enabled(dev_id):
+                        _LOGGER.debug(
+                            "Sequential poll: skipping %s (%d/%d), automatic "
+                            "location requests are switched off",
+                            dev_name,
+                            idx + 1,
+                            len(devices),
+                        )
+                        continue
                     _LOGGER.debug(
                         "Sequential poll: requesting location for %s (%d/%d)",
                         dev_name,
@@ -2037,7 +2066,16 @@ class PollingOperations(_MixinBase):
                         self._locate_requested_mono = ensure_locate_stamps(
                             getattr(self, "_locate_requested_mono", None)
                         )
-                        with stamp_on_dispatch(self._locate_requested_mono, dev_id):
+                        # The same POST counts the request as automatic (#242).
+                        self._locate_request_counts = ensure_locate_counts(
+                            getattr(self, "_locate_request_counts", None)
+                        )
+                        with stamp_on_dispatch(
+                            self._locate_requested_mono,
+                            dev_id,
+                            counts=self._locate_request_counts,
+                            kind="auto",
+                        ):
                             location = await asyncio.wait_for(
                                 self.api.async_get_device_location(dev_id, dev_name),
                                 timeout=POLL_DEVICE_OUTER_TIMEOUT_S,

@@ -58,7 +58,11 @@ from .helpers.cache import (
     substitute_zone_accuracy,
 )
 from .helpers.geo import MIN_PHYSICAL_ACCURACY_M
-from .helpers.locate_clock import ensure_locate_stamps, stamp_on_dispatch
+from .helpers.locate_clock import (
+    ensure_locate_counts,
+    ensure_locate_stamps,
+    stamp_on_dispatch,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -382,7 +386,16 @@ class LocateOperations(_MixinBase):
                 self._locate_requested_mono = ensure_locate_stamps(
                     getattr(self, "_locate_requested_mono", None)
                 )
-                with stamp_on_dispatch(self._locate_requested_mono, device_id):
+                # The same POST counts the request as manual (#242).
+                self._locate_request_counts = ensure_locate_counts(
+                    getattr(self, "_locate_request_counts", None)
+                )
+                with stamp_on_dispatch(
+                    self._locate_requested_mono,
+                    device_id,
+                    counts=self._locate_request_counts,
+                    kind="manual",
+                ):
                     location_data = await self.api.async_get_device_location(
                         device_id, name
                     )

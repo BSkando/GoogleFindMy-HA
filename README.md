@@ -240,6 +240,26 @@ Accessible via the ⚙️ cogwheel button on the main Google Find My Device Inte
 | `speed_gate_enabled` | true | toggle | Discards a far jump that would require an implausible speed, so a single stray crowd report cannot teleport a tracker. |
 | `roundtrip_confirm_enabled` | true | toggle | Requires a second, independent report before a device that returned to a previous position is moved back there. |
 | `accuracy_gate_enabled` | true | toggle | Discards a coarse fix (200 m or more, and at least 4x worse than the cached one) when a better, still-fresh position is already known. The coarse position is shown live by the per-device "Discarded coarse fix" diagnostic sensor (the time of the coarse fix as its state, `coarse_accuracy`, `coarse_latitude` and `coarse_longitude` as attributes, no map marker); that sensor shows `unknown` most of the time, see [Supported devices and functions](#supported-devices-and-functions). The main tracker holds the `coarse_*` attributes of its last observation; the Last Location tracker has none. Turning the gate off restores the previous behaviour. |
+| `automatic_polling_disabled` | none | - | Trackers whose *Automatic location polling* switch is off. Written by that per-tracker switch, not edited here; see [Automatic location polling per tracker](#automatic-location-polling-per-tracker-automatic_polling_disabled) below. |
+| `automatic_polling_changed_at` | none | - | UTC time of the last change of the *Automatic location polling* switch, per tracker. Written by the switch together with `automatic_polling_disabled`, not by the user; it dates the periods of a comparison and survives a restart. |
+
+### Automatic location polling per tracker (`automatic_polling_disabled`)
+
+Each tracker has a configuration switch **Automatic location polling** (on by
+default). While it is off, the integration sends no automatic location request
+for that tracker: not on the regular poll cycle, not at startup, not on a
+requested refresh. Everything else stays as it is:
+
+- A manual locate still works: the **Locate now** button and the
+  `googlefindmy.locate_device` action. Automations that call this action or
+  press the button count as manual locates and are not stopped by the switch.
+- The device list is still fetched for the whole account; it cannot be turned
+  off per tracker.
+- Bluetooth sensors and the protection mode sensor keep working.
+
+Turning the switch on or off does not reload the integration. Each change
+writes one INFO line `AUTOMATIC_POLLING_CHANGE canonical=<id> new=<on|off>
+changed=<UTC>` without the device name.
 
 ### Map View link expiry (`map_view_token_expiration`)
 
@@ -760,6 +780,40 @@ from Google.
 5. **Never post keys, EIDs, coordinates, device names or e-mail addresses.**
    The line and the block are built to contain none of these.
 6. **Where:** <https://github.com/BSkando/GoogleFindMy-HA/issues/210>
+
+#### Controlled comparison: automatic location polling off for one tracker (#242)
+
+Some users report that their trackers enter unwanted tracking protection mode more
+often while the integration is running. It is an open hypothesis that location
+requests contribute to this. No remedy is known. The switch *Automatic location
+polling* lets you compare two trackers under the same conditions:
+
+1. Pick two trackers of the same account and carry them together, so that the
+   owner's phone is near both of them or near neither.
+2. Turn *Automatic location polling* off for tracker A and leave it on for
+   tracker B. During the comparison, do not locate either tracker by hand or by
+   an automation, or note every time you do.
+3. After a few days, swap the roles: A on, B off. Several days per role are
+   needed; with only a handful of protection mode changes, no conclusion is
+   possible either way.
+4. Evaluate only the `FMDN_UWT_TRANSITION` lines (or the `uwt_transitions` block
+   of the diagnostics) and the rows in `coordinator.devices` of the diagnostics.
+   Do not use the history of the protection mode binary sensor: it is written
+   with the next coordinator update, so its time stamps do not show when the
+   mode changed.
+5. The log line `AUTOMATIC_POLLING_CHANGE canonical=<id> new=off changed=<UTC>`
+   (logger `custom_components.googlefindmy.coordinator.main` at `info`) and
+   `automatic_polling_changed_at` date each swap. `locate_requests_auto` and
+   `locate_requests_manual` count the requests that were actually sent since
+   `locate_requests_counted_since`; a restart or reload resets them, and a retry
+   after a server error counts again. `uwt_device_index` tells which events
+   belong to which row.
+6. Limits: changes are only seen while Home Assistant receives the tracker over
+   Bluetooth; the device list is still fetched for the whole account; requests
+   from the Find Hub app or other tools are not visible here.
+7. What to post: for each role the period, the number of `new=on` events per
+   tracker, the counters and your integration version. No device names, keys or
+   coordinates.
 
 ## Privacy and Security
 
