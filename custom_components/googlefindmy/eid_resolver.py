@@ -286,6 +286,14 @@ LOCK_TTL_SECONDS = 7 * 24 * 60 * 60
 LOCK_CONFIRMATION_TTL_SECONDS = 90 * 60
 TRUNCATED_FRAME_LOG_WINDOW_SECONDS = 60
 VALID_ANCHOR_BASES: set[str] = {"unix", "pair_date", "secrets_creation_date"}
+
+# MCU_STATIC_TIME_BASIS: Window label for the fixed counter-0 EID of DIY
+# microcontroller trackers (``is_mcu_tracker``). The GoogleFindMyTools ESP32 and
+# Zephyr firmwares compute their EID once at counter 0 and advertise it
+# unchanged, so no time-anchored window ever reaches it. Like
+# ``lock_tracking`` it is not an anchor basis and never enters
+# ``_known_offsets``.
+MCU_STATIC_TIME_BASIS = "mcu_static"
 KNOWN_OFFSET_KEY_LENGTH = 2
 
 # LOCK_TRACKING_WINDOW_STEPS: Number of rotation periods to scan around the
@@ -2074,11 +2082,48 @@ class GoogleFindMyEIDResolver:
             min_relative_window=min_relative_window,
             allow_unix_basis=not fallback_discovery,
         )
+        static_windows = self._compute_mcu_static_windows(work_item)
         if lock_windows:
             lock_windows.extend(relative_windows)
+            lock_windows.extend(static_windows)
             return self._dedupe_windows(lock_windows), invalid_hint
 
+        relative_windows.extend(static_windows)
         return self._dedupe_windows(relative_windows), invalid_hint
+
+    @staticmethod
+    def _compute_mcu_static_windows(work_item: WorkItem) -> list[WindowSpec]:
+        """Return the counter-0 window for DIY microcontroller trackers.
+
+        Trackers registered with GoogleFindMyTools (``is_mcu_tracker``) run
+        firmware that derives one EID at counter 0 and advertises it forever.
+        The time-anchored and lock windows move with the wall clock and never
+        contain counter 0, so without this window such a tracker never
+        resolves over BLE. The window is independent of the lock: a lock
+        created by a hit at counter 0 still walks forward in time.
+        """
+
+        identity = work_item.identity
+        # getattr: test doubles stand in for the identity.
+        if not is_mcu_tracker(
+            device_type=getattr(identity, "device_type", None),
+            fast_pair_model_id=getattr(identity, "fast_pair_model_id", None),
+        ):
+            return []
+        return [
+            WindowSpec(
+                time_basis=MCU_STATIC_TIME_BASIS,
+                candidate_value=0,
+                windows=(
+                    WindowCandidate(
+                        timestamp=0,
+                        semantic_offset=0,
+                        time_basis=MCU_STATIC_TIME_BASIS,
+                        candidate_value=0,
+                    ),
+                ),
+            )
+        ]
 
     def _compute_lock_windows(
         self,
