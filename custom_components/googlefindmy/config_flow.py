@@ -632,7 +632,6 @@ try:  # pragma: no cover - compatibility shim for stripped environments
         ConfigSubentryFlow,
         SubentryFlowResult,
     )
-    from homeassistant.helpers.typing import UNDEFINED, UndefinedType
 except ImportError:
     try:  # pragma: no cover - best-effort partial import
         from homeassistant.config_entries import ConfigSubentry as _ConfigSubentry
